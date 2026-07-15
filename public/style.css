@@ -772,10 +772,10 @@ body {
   opacity: 0.85;
 }
 
-/* Sold (booked via our system) — blue */
+/* Sold (booked via our system) — yellow, same as taken */
 .booth-sold {
-  fill: #3b82f6 !important;
-  filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.5));
+  fill: #fcdf6d !important;
+  filter: drop-shadow(0 0 4px rgba(252, 223, 109, 0.6));
 }
 
 /* Held / On hold — amber/orange */
