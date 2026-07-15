@@ -90,7 +90,7 @@ function showTooltip(e, id) {
   const b = booths[id];
   document.getElementById('tt-label').textContent  = `Stand ${id.replace('booth-','')}`;
   document.getElementById('tt-status').textContent = cap(b.status);
-  document.getElementById('tt-price').textContent  = b.status === 'available' ? `€${b.price.toLocaleString()}` : '';
+  document.getElementById('tt-price').textContent  = b.status === 'available' ? `${b.sqm} m²` : '';
   tooltip.classList.remove('hidden');
   moveTooltip(e);
 }
@@ -148,10 +148,9 @@ function renderPanel(id) {
     </div>
     <div class="stand-stats">
       <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm} m²</span></div>
-      <div class="stand-stat"><span class="stand-stat-lbl">Price</span><span class="stand-stat-val">€${b.price.toLocaleString()}</span></div>
-      <div class="stand-stat"><span class="stand-stat-lbl">Rate</span><span class="stand-stat-val">€600/m²</span></div>
-      <div class="stand-stat"><span class="stand-stat-lbl">Viewers</span><span class="stand-stat-val" id="live-viewers-${id}">${b.viewers}</span></div>
-    </div>`;
+      <div class="stand-stat"><span class="stand-stat-lbl">Live Viewers</span><span class="stand-stat-val" id="live-viewers-${id}">${b.viewers}</span></div>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:4px">Fill in your details below and our team will contact you with pricing and availability.</p>`;
   lucide.createIcons();
 
   // Wire form
