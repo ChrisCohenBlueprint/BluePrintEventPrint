@@ -42,6 +42,7 @@ function initBoothState() {
       company:  null,
       viewers:  0,
       clicks:   0,
+      clickHistory: [],
       x: b.x, y: b.y, w: b.w, h: b.h
     };
   });
@@ -113,8 +114,20 @@ io.on('connection', (socket) => {
   // ── Viewer presence ─────────────────────────────────────────────────────────
   socket.on('booth:view', ({ boothId }) => {
     activeViewers[socket.id] = boothId;
-    if (boothState[boothId]) boothState[boothId].clicks++;
     broadcastState();
+  });
+
+  // ── Track Clicks ────────────────────────────────────────────────────────────
+  socket.on('booth:click', ({ boothId, location }) => {
+    const b = boothState[boothId];
+    if (b) {
+      b.clicks++;
+      b.clickHistory = b.clickHistory || [];
+      b.clickHistory.unshift({ time: new Date().toISOString(), location: location || 'Unknown' });
+      // Keep only last 20 clicks to prevent unbound array growth
+      if (b.clickHistory.length > 20) b.clickHistory.pop();
+      broadcastState();
+    }
   });
 
   // ── Book a booth ─────────────────────────────────────────────────────────────

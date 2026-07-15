@@ -137,6 +137,14 @@ function renderAdminBoothAction(id) {
   document.getElementById('aba-price').textContent   = `€${b.price?.toLocaleString()}`;
   document.getElementById('aba-company').textContent = b.company || '—';
   document.getElementById('aba-viewers').textContent = b.viewers || 0;
+  document.getElementById('aba-clicks').textContent  = b.clicks || 0;
+
+  const clickList = document.getElementById('aba-click-list');
+  if (b.clickHistory && b.clickHistory.length > 0) {
+    clickList.innerHTML = b.clickHistory.map(c => `<div>${new Date(c.time).toLocaleTimeString('en-GB')} — ${c.location}</div>`).join('');
+  } else {
+    clickList.innerHTML = '<div>No clicks yet.</div>';
+  }
 
   document.getElementById('aba-book').onclick    = () => socket.emit('booth:book',    { boothId: id, company: prompt('Company name:') || 'Admin' });
   document.getElementById('aba-hold').onclick    = () => socket.emit('booth:hold',    { boothId: id, company: prompt('Company name:') || 'Pending' });

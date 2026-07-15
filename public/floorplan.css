@@ -139,7 +139,7 @@ body {
 .fp-tooltip.hidden { opacity: 0; }
 .tt-label  { font-weight: 700; font-size: 13px; margin-bottom: 3px; }
 .tt-status { font-size: 11px; color: var(--yellow); margin-bottom: 2px; }
-.tt-price  { font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 3px; }
+.tt-price  { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 3px; }
 .tt-hint   { font-size: 10px; color: var(--muted); }
 
 /* ─── Side Panel ─────────────────────────────────────────────────────────────── */
