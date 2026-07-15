@@ -35,12 +35,21 @@ document.addEventListener('mouseup', () => { isPanning = false; container.style.
 document.addEventListener('mousemove', e => { if (!isPanning) return; panX = e.clientX - startX; panY = e.clientY - startY; applyTransform(); });
 container.addEventListener('wheel', e => { e.preventDefault(); const delta = e.deltaY > 0 ? 0.9 : 1.1; scale = Math.min(Math.max(scale * delta, 0.3), 8); applyTransform(); }, { passive: false });
 
-// ─── Load Real SVG ────────────────────────────────────────────────────────────
+// ─── Load Real SVG + Booth Data ───────────────────────────────────────────────
+let boothDataFromServer = {}; // loaded from booth_data.json (server-extracted)
+
 async function loadFloorplan() {
   const mount = document.getElementById('svg-mount');
   try {
-    const res = await fetch('/LEX26_Floorplan_Web-Format_57.svg');
-    const svgText = await res.text();
+    // Load booth data JSON and SVG in parallel
+    const [boothDataRes, svgRes] = await Promise.all([
+      fetch('/booth_data.json'),
+      fetch('/LEX26_Floorplan_Web-Format_57.svg')
+    ]);
+
+    boothDataFromServer = await boothDataRes.json();
+    const svgText = await svgRes.text();
+
     mount.innerHTML = svgText;
     svgDoc = mount.querySelector('svg');
     svgDoc.setAttribute('width', '100%');
@@ -50,10 +59,10 @@ async function loadFloorplan() {
     svgDoc.style.maxHeight = '100%';
 
     tagBooths();
-    lucide.createIcons(); // re-run after DOM change
+    lucide.createIcons();
   } catch (err) {
     mount.innerHTML = '<div style="color:#f87171;padding:20px;text-align:center;">Failed to load floorplan SVG.</div>';
-    console.error('SVG load error:', err);
+    console.error('Load error:', err);
   }
 }
 
@@ -72,8 +81,10 @@ function tagBooths() {
   // Process available (white) booths first
   availableEls.forEach(el => {
     const boothId = `booth-${String(idx).padStart(3, '0')}`;
-    const sqm = estimateSqm(el);
-    const price = sqm * PRICE_PER_SQM;
+    // Use server-extracted data if available, fall back to bbox estimate
+    const serverData = boothDataFromServer[boothId];
+    const sqm   = serverData ? serverData.sqm   : estimateSqm(el);
+    const price  = serverData ? serverData.price : sqm * PRICE_PER_SQM;
 
     el.setAttribute('data-booth-id', boothId);
     el.classList.add('booth-interactive');
