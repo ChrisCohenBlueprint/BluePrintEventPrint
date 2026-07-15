@@ -734,3 +734,163 @@ body {
 .animate-pulse {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* ─── Real SVG Floorplan Booth Styles ────────────────────────────────────── */
+#svg-mount svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Interactive booth base */
+.booth-interactive {
+  cursor: pointer;
+  transition: fill 0.25s ease, opacity 0.25s ease, filter 0.25s ease;
+}
+
+.booth-interactive:hover {
+  filter: brightness(1.3) drop-shadow(0 0 6px rgba(255, 255, 255, 0.5));
+  opacity: 0.9;
+}
+
+/* Available — keep original yellow, add subtle glow on hover */
+.booth-available {
+  fill: #fcdf6d !important;
+}
+
+/* Sold — blue */
+.booth-sold {
+  fill: #3b82f6 !important;
+  filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.5));
+}
+
+/* Held / On hold — amber/orange */
+.booth-held {
+  fill: #f97316 !important;
+  filter: drop-shadow(0 0 4px rgba(249, 115, 22, 0.5));
+  animation: holdPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes holdPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.7; }
+}
+
+/* Selected — bright white outline */
+.booth-selected {
+  stroke: #ffffff !important;
+  stroke-width: 8px !important;
+  filter: drop-shadow(0 0 10px rgba(255,255,255,0.7)) !important;
+}
+
+/* Active viewers indicator */
+.booth-has-viewers {
+  animation: viewerPulse 2s ease-in-out infinite;
+}
+
+@keyframes viewerPulse {
+  0%, 100% { filter: drop-shadow(0 0 3px rgba(99, 102, 241, 0.4)); }
+  50%       { filter: drop-shadow(0 0 10px rgba(99, 102, 241, 0.9)); }
+}
+
+/* ─── Tooltip ─────────────────────────────────────────────────────────────── */
+.booth-tooltip {
+  position: absolute;
+  background: rgba(10, 14, 23, 0.95);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 8px;
+  padding: 8px 12px;
+  pointer-events: none;
+  z-index: 999;
+  backdrop-filter: blur(12px);
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 12px;
+  min-width: 110px;
+  transition: opacity 0.15s;
+}
+.booth-tooltip.hidden { opacity: 0; pointer-events: none; }
+.tooltip-booth-id {
+  font-weight: 700;
+  color: #f3f4f6;
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+.tooltip-status { color: #fcdf6d; font-size: 11px; margin-bottom: 2px; }
+.tooltip-hint   { color: #6b7280; font-size: 10px; }
+
+/* ─── Loading Spinner ─────────────────────────────────────────────────────── */
+.loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+}
+.loading-spinner .spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ─── Booth Detail Card ───────────────────────────────────────────────────── */
+.booth-detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.booth-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.booth-detail-id {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-main);
+  font-family: 'Space Grotesk', sans-serif;
+}
+.booth-status-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.status-available { background: rgba(252, 223, 109, 0.15); color: #fcdf6d; border: 1px solid rgba(252,223,109,0.3); }
+.status-sold      { background: rgba(59, 130, 246, 0.15);  color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+.status-held      { background: rgba(249, 115, 22, 0.15);  color: #fb923c; border: 1px solid rgba(249,115,22,0.3); }
+
+.booth-detail-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.detail-stat { display: flex; flex-direction: column; gap: 2px; }
+.detail-stat.full-width { grid-column: 1 / -1; }
+.detail-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); }
+.detail-stat-value { font-size: 16px; font-weight: 700; color: var(--text-main); }
+
+.booked-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #60a5fa;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.btn-warning {
+  background: linear-gradient(135deg, #f97316, #ea580c);
+  color: #fff;
+  border: none;
+}
+.btn-warning:hover { opacity: 0.88; }
+
+/* ─── Legend update ───────────────────────────────────────────────────────── */
+.legend-dot.held { background: #f97316; }

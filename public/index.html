@@ -3,20 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Real-Time Floorplan Engine | Interactive Expo Console</title>
-  <!-- Modern Premium Typography -->
+  <title>BluePrint EventPrint | Real-Time Expo Floorplan</title>
+  <meta name="description" content="Real-time interactive expo floorplan — live booth booking, status tracking, and space consolidation.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-  <!-- Lucide Icons via CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
-  <!-- Socket.io client -->
   <script src="/socket.io/socket.io.js"></script>
-  <!-- Custom Styles -->
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Ambient background glow effects -->
   <div class="glow-sphere glow-1"></div>
   <div class="glow-sphere glow-2"></div>
 
@@ -24,104 +20,75 @@
     <!-- Header -->
     <header class="app-header">
       <div class="logo-area">
-        <div class="logo-icon">
-          <i data-lucide="layers"></i>
-        </div>
         <div class="logo-text">
-          <h1>FLOORPLAN<span class="gradient-text">ENGINE</span></h1>
-          <p>Real-Time Dynamic Expo Space Planner</p>
+          <h1>BLUEPRINT <span class="gradient-text">EVENTPRINT</span></h1>
+          <p>Real-Time Expo &amp; Conference Space Manager</p>
         </div>
       </div>
-      
       <div class="header-controls">
         <div class="status-badge connected" id="connection-status">
           <span class="status-dotIndicator animate-pulse"></span>
-          <span class="status-label">Synchronized</span>
+          <span class="status-label">Live</span>
         </div>
-        <button id="reset-demo-btn" class="btn btn-secondary flex-btn" title="Reset all booths to default">
-          <i data-lucide="rotate-ccw"></i> Reset Demo
+        <button id="reset-demo-btn" class="btn btn-secondary flex-btn" title="Reset all booths">
+          <i data-lucide="rotate-ccw"></i> Reset
         </button>
       </div>
     </header>
 
     <!-- Main Workspace -->
     <main class="workspace-layout">
-      <!-- Left: Dynamic Interactive Floorplan -->
+      <!-- Left: Real SVG Floorplan -->
       <section class="floorplan-card glass-panel">
         <div class="panel-header">
           <div class="panel-title-group">
             <i data-lucide="map" class="icon-accent"></i>
-            <h2>Interactive Floorplan</h2>
+            <h2>Live Floorplan — LEX 2026</h2>
           </div>
           <div class="view-controls">
             <button id="zoom-in" class="btn-icon" title="Zoom In"><i data-lucide="zoom-in"></i></button>
             <button id="zoom-out" class="btn-icon" title="Zoom Out"><i data-lucide="zoom-out"></i></button>
-            <button id="zoom-reset" class="btn-icon" title="Reset Pan/Zoom"><i data-lucide="maximize"></i></button>
-          </div>
-        </div>
-        
-        <!-- Floorplan Frame -->
-        <div class="floorplan-frame" id="floorplan-container">
-          <div class="floorplan-pan-zoom-container" id="pan-zoom-target">
-            <svg id="floorplan-svg" viewBox="0 0 680 430" width="100%" height="100%">
-              <!-- Grid background pattern -->
-              <defs>
-                <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                  <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255, 255, 255, 0.03)" stroke-width="1"/>
-                </pattern>
-                
-                <linearGradient id="boothGradAvailable" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="var(--booth-avail-start)"/>
-                  <stop offset="100%" stop-color="var(--booth-avail-end)"/>
-                </linearGradient>
-                <linearGradient id="boothGradSold" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="var(--booth-sold-start)"/>
-                  <stop offset="100%" stop-color="var(--booth-sold-end)"/>
-                </linearGradient>
-                <linearGradient id="boothGradAmenity" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="var(--booth-amenity-start)"/>
-                  <stop offset="100%" stop-color="var(--booth-amenity-end)"/>
-                </linearGradient>
-              </defs>
-              
-              <!-- Draw Grid -->
-              <rect width="100%" height="100%" fill="url(#grid)" />
-              
-              <!-- Map Boundaries -->
-              <rect x="10" y="10" width="660" height="410" rx="12" fill="none" stroke="rgba(255, 255, 255, 0.08)" stroke-width="2" />
-              
-              <!-- Group for dynamic booths populated by JS -->
-              <g id="booths-layer"></g>
-              
-              <!-- Overlay Features -->
-              <g id="annotations-layer">
-                <!-- Entrance Indicator -->
-                <g transform="translate(340, 420)">
-                  <path d="M -15,-5 L 0,-15 L 15,-5 M 0,-15 L 0,5" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                  <text y="18" font-family="'Space Grotesk', sans-serif" font-size="10" fill="var(--text-muted)" text-anchor="middle" letter-spacing="1.5">MAIN ENTRANCE</text>
-                </g>
-              </g>
-            </svg>
+            <button id="zoom-reset" class="btn-icon" title="Fit to screen"><i data-lucide="maximize"></i></button>
           </div>
         </div>
 
+        <!-- Floorplan Container — real SVG injected here by app.js -->
+        <div class="floorplan-frame" id="floorplan-container">
+          <div class="floorplan-pan-zoom-container" id="pan-zoom-target">
+            <div id="svg-mount" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;">
+              <div class="loading-spinner">
+                <i data-lucide="loader-2" class="spin"></i>
+                <span>Loading floorplan…</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tooltip shown on hover -->
+        <div id="booth-tooltip" class="booth-tooltip hidden">
+          <div class="tooltip-booth-id" id="tt-id">Booth #101</div>
+          <div class="tooltip-status" id="tt-status">Available</div>
+          <div class="tooltip-hint">Click to view details</div>
+        </div>
+
+        <!-- Legend -->
         <div class="floorplan-legend">
-          <div class="legend-item"><span class="legend-dot avail"></span> Available Space</div>
+          <div class="legend-item"><span class="legend-dot avail"></span> Available</div>
           <div class="legend-item"><span class="legend-dot sold"></span> Reserved / Sold</div>
-          <div class="legend-item"><span class="legend-dot amenity"></span> Facilities</div>
-          <div class="legend-item"><span class="legend-dot pulse-active"></span> Hot Booth (Active Viewers)</div>
+          <div class="legend-item"><span class="legend-dot held"></span> On Hold</div>
+          <div class="legend-item"><span class="legend-dot pulse-active"></span> Active Viewers</div>
         </div>
       </section>
 
-      <!-- Right: Real-time Analytics & Control Panels -->
+      <!-- Right: Controls & Analytics -->
       <section class="sidebar-layout">
-        <!-- Dashboard Live Analytics Widget -->
+        <!-- Live Stats -->
         <div class="glass-panel analytics-widget">
           <div class="stat-card">
             <span class="stat-title">Total Revenue</span>
             <span class="stat-value" id="stat-revenue">$0</span>
             <div class="stat-trend positive">
-              <i data-lucide="trending-up"></i> Live Booking Stream
+              <i data-lucide="trending-up"></i> Live Stream
             </div>
           </div>
           <div class="stat-card">
@@ -132,53 +99,53 @@
             </div>
           </div>
           <div class="stat-card">
-            <span class="stat-title">Live Browsers</span>
+            <span class="stat-title">Live Viewers</span>
             <span class="stat-value" id="stat-browsers">1</span>
             <div class="stat-trend neutrality">
-              <span class="status-dotIndicator animate-pulse"></span> Presence Active
+              <span class="status-dotIndicator animate-pulse"></span> On Site Now
             </div>
           </div>
         </div>
 
-        <!-- Interactive Control Console (Tabs) -->
+        <!-- Control Console -->
         <div class="glass-panel control-console">
           <div class="tabs-header">
             <button class="tab-btn active" data-tab="buyer">
-              <i data-lucide="shopping-bag"></i> Buyer Terminal
+              <i data-lucide="shopping-bag"></i> Buyer
             </button>
             <button class="tab-btn" data-tab="admin">
-              <i data-lucide="sliders"></i> Admin Control
+              <i data-lucide="sliders"></i> Admin
             </button>
           </div>
 
+          <!-- Buyer Tab -->
           <div class="tab-content active" id="tab-buyer">
-            <!-- Details of Selected Booth -->
             <div class="booth-details-display" id="selected-booth-display">
               <div class="empty-state">
                 <i data-lucide="mouse-pointer-click"></i>
                 <h3>Select a Booth</h3>
-                <p>Click any space on the floorplan to inspect live status, pricing, views, and reserve it instantly.</p>
+                <p>Click any yellow space on the floorplan to see live status, pricing, and reserve it instantly.</p>
               </div>
             </div>
           </div>
 
+          <!-- Admin Tab -->
           <div class="tab-content" id="tab-admin">
             <div class="admin-panel-layout">
-              <h3>Booth Consolidation Engine</h3>
-              <p class="section-desc">Expo floorplan updates often involve combining spaces. Select two adjacent booths to consolidate them dynamically.</p>
-              
+              <h3>Booth Consolidation</h3>
+              <p class="section-desc">Merge two adjacent spaces into a single larger booth in real time.</p>
               <form id="consolidation-form" class="console-form">
                 <div class="form-row">
                   <div class="form-group">
                     <label for="merge-booth-1">Primary Space</label>
                     <select id="merge-booth-1" class="form-select">
-                      <option value="">Select space...</option>
+                      <option value="">Select space…</option>
                     </select>
                   </div>
                   <div class="form-group">
-                    <label for="merge-booth-2">Space to Merge</label>
+                    <label for="merge-booth-2">Merge With</label>
                     <select id="merge-booth-2" class="form-select">
-                      <option value="">Select space...</option>
+                      <option value="">Select space…</option>
                     </select>
                   </div>
                 </div>
@@ -189,9 +156,9 @@
 
               <hr class="divider">
 
-              <h3>Live Event Activity</h3>
+              <h3>Live Activity Log</h3>
               <div class="event-logger" id="event-log">
-                <div class="log-entry system"><span class="log-time">Now</span> Real-time console initialized.</div>
+                <div class="log-entry system"><span class="log-time">Now</span> Console ready.</div>
               </div>
             </div>
           </div>
@@ -200,10 +167,7 @@
     </main>
   </div>
 
-  <!-- Custom Scripts -->
   <script src="app.js"></script>
-  <script>
-    lucide.createIcons();
-  </script>
+  <script>lucide.createIcons();</script>
 </body>
 </html>
