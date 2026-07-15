@@ -753,12 +753,26 @@ body {
   opacity: 0.9;
 }
 
-/* Available — keep original yellow, add subtle glow on hover */
+/* Available — WHITE booths (cls-13) — the real available stands */
 .booth-available {
-  fill: #fcdf6d !important;
+  fill: #ffffff !important;
+  stroke: #aaaaaa !important;
 }
 
-/* Sold — blue */
+.booth-available:hover {
+  fill: #e8f4fd !important;
+  filter: brightness(1.05) drop-shadow(0 0 8px rgba(99, 102, 241, 0.6)) !important;
+  stroke: #6366f1 !important;
+}
+
+/* Taken — YELLOW booths keep their original yellow fill */
+.booth-taken-original {
+  /* keep original yellow — no override needed */
+  cursor: default !important;
+  opacity: 0.85;
+}
+
+/* Sold (booked via our system) — blue */
 .booth-sold {
   fill: #3b82f6 !important;
   filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.5));
@@ -893,4 +907,6 @@ body {
 .btn-warning:hover { opacity: 0.88; }
 
 /* ─── Legend update ───────────────────────────────────────────────────────── */
-.legend-dot.held { background: #f97316; }
+.legend-dot.avail  { background: #ffffff; border: 1px solid #888; }
+.legend-dot.sold   { background: #fcdf6d; border: 1px solid #c8a800; }
+.legend-dot.held   { background: #f97316; }
