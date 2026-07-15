@@ -1,11 +1,18 @@
 // ─── BluePrint EventPrint — Real-Time Floorplan Client ───────────────────────
 // Loads the real SVG floorplan, tags every booth element, and connects
 // everything to the Socket.io backend for live status updates.
+//
+// Colour convention from the actual floorplan:
+//   cls-11 / cls-14 = YELLOW  → TAKEN (already booked)
+//   cls-13          = WHITE   → AVAILABLE (for sale)
+//
+// Pricing: sqm × €600 per square meter
 
 const socket = io();
+const PRICE_PER_SQM = 600; // euros
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let booths = {};          // { boothId: { status, company, price, viewers } }
+let booths = {};          // { boothId: { status, company, sqm, price, viewers } }
 let selectedBoothId = null;
 let svgDoc = null;        // the live SVG DOM
 
@@ -50,47 +57,95 @@ async function loadFloorplan() {
   }
 }
 
-// ─── Tag Every Yellow Booth in the SVG ───────────────────────────────────────
-// Yellow booths use class cls-11 or cls-14 in the SVG.
-// We assign each one a unique booth ID using its LWPOLYLINE group index.
+// ─── Tag Every Booth in the SVG ───────────────────────────────────────────────
+// White booths (cls-13) = AVAILABLE for sale
+// Yellow booths (cls-11, cls-14) = TAKEN (already booked)
+// We use the bounding box area to estimate sqm size and calculate price.
 function tagBooths() {
-  const boothEls = svgDoc.querySelectorAll('.cls-11, .cls-14');
+  // Get white (available) booths
+  const availableEls = svgDoc.querySelectorAll('.cls-13');
+  // Get yellow (taken) booths
+  const takenEls = svgDoc.querySelectorAll('.cls-11, .cls-14');
+
   let idx = 1;
 
-  boothEls.forEach(el => {
+  // Process available (white) booths first
+  availableEls.forEach(el => {
     const boothId = `booth-${String(idx).padStart(3, '0')}`;
+    const sqm = estimateSqm(el);
+    const price = sqm * PRICE_PER_SQM;
+
     el.setAttribute('data-booth-id', boothId);
     el.classList.add('booth-interactive');
     el.style.cursor = 'pointer';
-    el.style.transition = 'fill 0.3s, opacity 0.3s, filter 0.3s';
 
-    // Register in local state
     booths[boothId] = {
       id: boothId,
       status: 'available',
       company: null,
-      price: Math.floor(Math.random() * 5 + 2) * 1000,  // £2k–£7k placeholder
-      viewers: 0,
-      originalFill: el.getAttribute('fill') || '#fcdf6d'
+      sqm,
+      price,
+      viewers: 0
     };
 
-    // Hover tooltip
     el.addEventListener('mouseenter', (e) => showTooltip(e, boothId));
     el.addEventListener('mousemove', (e) => moveTooltip(e));
     el.addEventListener('mouseleave', () => hideTooltip());
-
-    // Click to select
-    el.addEventListener('click', (e) => {
-      e.stopPropagation();
-      selectBooth(boothId);
-    });
+    el.addEventListener('click', (e) => { e.stopPropagation(); selectBooth(boothId); });
 
     idx++;
   });
 
-  console.log(`Tagged ${idx - 1} booth elements`);
+  // Process taken (yellow) booths — not clickable for booking but visible
+  takenEls.forEach(el => {
+    const boothId = `booth-${String(idx).padStart(3, '0')}`;
+    const sqm = estimateSqm(el);
+    const price = sqm * PRICE_PER_SQM;
+
+    el.setAttribute('data-booth-id', boothId);
+    el.classList.add('booth-interactive', 'booth-taken-original');
+    el.style.cursor = 'default';
+
+    booths[boothId] = {
+      id: boothId,
+      status: 'sold',  // yellow = already taken
+      company: 'Reserved',
+      sqm,
+      price,
+      viewers: 0
+    };
+
+    // Still allow hover tooltip to show it's taken
+    el.addEventListener('mouseenter', (e) => showTooltip(e, boothId));
+    el.addEventListener('mousemove', (e) => moveTooltip(e));
+    el.addEventListener('mouseleave', () => hideTooltip());
+
+    idx++;
+  });
+
+  console.log(`Tagged ${availableEls.length} available + ${takenEls.length} taken booths`);
   populateDropdowns();
   renderAllBoothStatuses();
+  updateStats();
+}
+
+// Estimate sqm from bounding box (SVG units → approximate m²)
+// The SVG viewBox is 2594 × 2402 units representing a real expo floor.
+// We use the rectangle area in SVG units, scaled appropriately.
+// The numbers shown (9, 18, 21, etc.) are the actual m² from the designer.
+// Without extractable text, we approximate from bbox area.
+function estimateSqm(el) {
+  try {
+    const bbox = el.getBBox();
+    const areaSvgUnits = bbox.width * bbox.height;
+    // Calibration: a 50×50 SVG unit booth ≈ 9 sqm (smallest booth size)
+    // 50*50 = 2500 SVG units² → 9 sqm → 1 sqm ≈ 277 SVG units²
+    const sqm = Math.round(areaSvgUnits / 277);
+    // Clamp to sensible expo booth sizes (min 9, max 200)
+    return Math.max(9, Math.min(200, sqm));
+  } catch (e) {
+    return 18; // default
+  }
 }
 
 // ─── Tooltip ──────────────────────────────────────────────────────────────────
@@ -145,22 +200,30 @@ function renderBoothDetails(boothId) {
   display.innerHTML = `
     <div class="booth-detail-card">
       <div class="booth-detail-header">
-        <div class="booth-detail-id">${boothId.replace('booth-', 'Stand ')}</div>
+        <div class="booth-detail-id">Stand ${boothId.replace('booth-', '')}</div>
         <div class="booth-status-badge status-${b.status}">${capitalise(b.status)}</div>
       </div>
 
       <div class="booth-detail-stats">
         <div class="detail-stat">
+          <span class="detail-stat-label">Size</span>
+          <span class="detail-stat-value">${b.sqm} m²</span>
+        </div>
+        <div class="detail-stat">
           <span class="detail-stat-label">Price</span>
-          <span class="detail-stat-value">£${b.price.toLocaleString()}</span>
+          <span class="detail-stat-value">€${b.price.toLocaleString()}</span>
+        </div>
+        <div class="detail-stat">
+          <span class="detail-stat-label">Rate</span>
+          <span class="detail-stat-value">€600/m²</span>
         </div>
         <div class="detail-stat">
           <span class="detail-stat-label">Active Viewers</span>
           <span class="detail-stat-value" id="detail-viewers-${boothId}">${b.viewers}</span>
         </div>
-        ${b.company ? `
+        ${b.company && b.company !== 'Reserved' ? `
         <div class="detail-stat full-width">
-          <span class="detail-stat-label">Reserved By</span>
+          <span class="detail-stat-label">Company</span>
           <span class="detail-stat-value">${b.company}</span>
         </div>` : ''}
       </div>
@@ -169,7 +232,7 @@ function renderBoothDetails(boothId) {
       <form id="booking-form" class="console-form">
         <div class="form-group">
           <label for="company-name">Company Name</label>
-          <input type="text" id="company-name" class="form-input" placeholder="e.g. Castrol UK Ltd" required>
+          <input type="text" id="company-name" class="form-input" placeholder="e.g. Shell UK Ltd" required>
         </div>
         <div class="form-row">
           <button type="button" id="hold-btn" class="btn btn-warning flex-btn">
@@ -193,7 +256,7 @@ function renderBoothDetails(boothId) {
 
       ${isSold ? `
       <div class="booked-notice">
-        <i data-lucide="lock"></i> This space has been booked.
+        <i data-lucide="lock"></i> This space is already booked.
       </div>` : ''}
     </div>
   `;
