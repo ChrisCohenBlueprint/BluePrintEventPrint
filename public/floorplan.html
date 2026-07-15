@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LEX 2026 Floorplan | Interactive Expo Map</title>
+  <meta name="description" content="Browse available exhibition stands at LEX 2026. Click any white space to view pricing and reserve your spot.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <link rel="stylesheet" href="floorplan.css">
+</head>
+<body>
+  <div class="bg-glow g1"></div>
+  <div class="bg-glow g2"></div>
+
+  <!-- Header -->
+  <header class="fp-header">
+    <div class="fp-header-inner">
+      <div class="fp-brand">
+        <h1>BLUEPRINT <span>EVENTPRINT</span></h1>
+        <p>LEX 2026 — Interactive Expo Floorplan</p>
+      </div>
+      <div class="fp-header-right">
+        <div class="live-badge" id="live-badge">
+          <span class="live-dot"></span>
+          <span id="viewer-count">1</span> live viewers
+        </div>
+        <div class="avail-summary">
+          <span id="avail-count">—</span> stands available
+          &nbsp;·&nbsp;
+          <span id="avail-sqm">—</span> m² remaining
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="fp-main">
+    <!-- Floorplan panel -->
+    <section class="fp-map-panel">
+      <div class="fp-map-toolbar">
+        <div class="fp-legend">
+          <div class="leg-item"><span class="leg-dot white"></span> Available</div>
+          <div class="leg-item"><span class="leg-dot yellow"></span> Taken</div>
+          <div class="leg-item"><span class="leg-dot orange"></span> On Hold</div>
+        </div>
+        <div class="fp-zoom-controls">
+          <button id="zoom-in"    class="zoom-btn" title="Zoom In"><i data-lucide="zoom-in"></i></button>
+          <button id="zoom-out"   class="zoom-btn" title="Zoom Out"><i data-lucide="zoom-out"></i></button>
+          <button id="zoom-reset" class="zoom-btn" title="Reset View"><i data-lucide="maximize-2"></i></button>
+        </div>
+      </div>
+
+      <div class="fp-map-frame" id="map-frame">
+        <div class="fp-map-inner" id="map-inner">
+          <div id="svg-mount">
+            <div class="loading-state">
+              <i data-lucide="loader-2" class="spin-icon"></i>
+              <span>Loading floorplan…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hover tooltip -->
+      <div id="fp-tooltip" class="fp-tooltip hidden">
+        <div class="tt-label" id="tt-label">Stand 001</div>
+        <div class="tt-status" id="tt-status">Available</div>
+        <div class="tt-price" id="tt-price">€0</div>
+        <div class="tt-hint">Click to view details</div>
+      </div>
+    </section>
+
+    <!-- Side panel -->
+    <aside class="fp-side">
+      <!-- Default empty state -->
+      <div class="fp-side-card" id="booth-panel">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon"><i data-lucide="mouse-pointer-click"></i></div>
+          <h3>Select a Stand</h3>
+          <p>Click any <strong>white space</strong> on the floorplan to view details, pricing, and make an enquiry.</p>
+        </div>
+      </div>
+
+      <!-- Enquiry form (hidden until a stand is clicked) -->
+      <div class="fp-side-card enquiry-card hidden" id="enquiry-card">
+        <div id="stand-details"></div>
+        <form id="enquiry-form" class="eq-form">
+          <div class="eq-field">
+            <label for="eq-company">Company Name</label>
+            <input type="text" id="eq-company" placeholder="e.g. Shell UK Ltd" required>
+          </div>
+          <div class="eq-field">
+            <label for="eq-contact">Contact Name</label>
+            <input type="text" id="eq-contact" placeholder="e.g. James Smith" required>
+          </div>
+          <div class="eq-field">
+            <label for="eq-email">Email</label>
+            <input type="email" id="eq-email" placeholder="james@company.com" required>
+          </div>
+          <div class="eq-actions">
+            <button type="button" id="hold-btn" class="btn-hold">
+              <i data-lucide="clock"></i> Hold (24h)
+            </button>
+            <button type="submit" class="btn-book">
+              <i data-lucide="check-circle"></i> Book Now
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Quick stats strip -->
+      <div class="fp-stats-strip">
+        <div class="stat-chip">
+          <span class="chip-val" id="stat-avail">—</span>
+          <span class="chip-lbl">Available</span>
+        </div>
+        <div class="stat-chip">
+          <span class="chip-val" id="stat-sqm">—</span>
+          <span class="chip-lbl">m² left</span>
+        </div>
+        <div class="stat-chip">
+          <span class="chip-val" id="stat-held">—</span>
+          <span class="chip-lbl">On Hold</span>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="floorplan.js"></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>

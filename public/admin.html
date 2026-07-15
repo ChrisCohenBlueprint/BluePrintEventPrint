@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard | BluePrint EventPrint</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+  <div class="bg-glow g1"></div>
+  <div class="bg-glow g2"></div>
+
+  <!-- Sidebar -->
+  <nav class="admin-nav">
+    <div class="nav-brand">
+      <div class="nav-brand-text">
+        <span class="nav-brand-main">BLUEPRINT</span>
+        <span class="nav-brand-sub">ADMIN</span>
+      </div>
+    </div>
+    <ul class="nav-links">
+      <li class="nav-link active" data-section="overview"><i data-lucide="layout-dashboard"></i> Overview</li>
+      <li class="nav-link" data-section="floorplan"><i data-lucide="map"></i> Floorplan</li>
+      <li class="nav-link" data-section="bookings"><i data-lucide="book-open"></i> Bookings</li>
+      <li class="nav-link" data-section="tools"><i data-lucide="wrench"></i> Tools</li>
+      <li class="nav-link" data-section="log"><i data-lucide="activity"></i> Activity Log</li>
+    </ul>
+    <a href="/floorplan" target="_blank" class="nav-view-public">
+      <i data-lucide="external-link"></i> View Public Page
+    </a>
+  </nav>
+
+  <!-- Main content -->
+  <div class="admin-body">
+
+    <!-- Top bar -->
+    <header class="admin-topbar">
+      <div class="topbar-title" id="section-title">Overview</div>
+      <div class="topbar-right">
+        <div class="conn-badge" id="conn-badge">
+          <span class="conn-dot"></span>
+          <span id="conn-count">—</span> live viewers
+        </div>
+        <button id="reset-btn" class="admin-btn danger">
+          <i data-lucide="rotate-ccw"></i> Reset Floorplan
+        </button>
+      </div>
+    </header>
+
+    <!-- ═══ SECTION: OVERVIEW ════════════════════════════════════════════════ -->
+    <section class="admin-section active" id="section-overview">
+
+      <!-- KPI Cards -->
+      <div class="kpi-grid">
+        <div class="kpi-card highlight">
+          <div class="kpi-icon"><i data-lucide="euro"></i></div>
+          <div class="kpi-body">
+            <div class="kpi-label">Revenue Earned</div>
+            <div class="kpi-value" id="kpi-earned">€0</div>
+            <div class="kpi-sub" id="kpi-earned-sqm">0 m² sold</div>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon avail"><i data-lucide="package"></i></div>
+          <div class="kpi-body">
+            <div class="kpi-label">Available Space</div>
+            <div class="kpi-value" id="kpi-avail-sqm">— m²</div>
+            <div class="kpi-sub" id="kpi-avail-rev">€— potential</div>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon held"><i data-lucide="clock"></i></div>
+          <div class="kpi-body">
+            <div class="kpi-label">On Hold</div>
+            <div class="kpi-value" id="kpi-held-sqm">— m²</div>
+            <div class="kpi-sub" id="kpi-held-count">0 stands</div>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon total"><i data-lucide="layers"></i></div>
+          <div class="kpi-body">
+            <div class="kpi-label">Total Floor</div>
+            <div class="kpi-value" id="kpi-total-sqm">— m²</div>
+            <div class="kpi-sub" id="kpi-total-booths">0 stands</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fill rate bar -->
+      <div class="fill-rate-card">
+        <div class="fill-rate-header">
+          <span>Floor Fill Rate</span>
+          <span id="fill-pct">0%</span>
+        </div>
+        <div class="fill-bar-track">
+          <div class="fill-bar-sold"  id="fill-bar-sold"  style="width:0%"></div>
+          <div class="fill-bar-held"  id="fill-bar-held"  style="width:0%"></div>
+        </div>
+        <div class="fill-bar-legend">
+          <span><span class="dot yellow"></span> Sold</span>
+          <span><span class="dot orange"></span> On Hold</span>
+          <span><span class="dot white"></span> Available</span>
+        </div>
+      </div>
+
+      <!-- Revenue breakdown -->
+      <div class="rev-breakdown">
+        <h3>Revenue Breakdown</h3>
+        <div class="rev-row">
+          <span class="rev-label"><span class="dot yellow"></span> Booked Revenue</span>
+          <span class="rev-val" id="rev-booked">€0</span>
+        </div>
+        <div class="rev-row">
+          <span class="rev-label"><span class="dot orange"></span> On Hold (Potential)</span>
+          <span class="rev-val" id="rev-held">€0</span>
+        </div>
+        <div class="rev-row">
+          <span class="rev-label"><span class="dot white"></span> Available Revenue</span>
+          <span class="rev-val" id="rev-avail">€0</span>
+        </div>
+        <div class="rev-row total-row">
+          <span class="rev-label">Total Floor Value</span>
+          <span class="rev-val" id="rev-total">€0</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: FLOORPLAN ═══════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-floorplan">
+      <div class="admin-map-toolbar">
+        <div class="admin-legend">
+          <div class="leg-item"><span class="leg-dot white"></span> Available</div>
+          <div class="leg-item"><span class="leg-dot yellow"></span> Taken</div>
+          <div class="leg-item"><span class="leg-dot orange"></span> On Hold</div>
+        </div>
+        <div class="fp-zoom-controls">
+          <button id="admin-zoom-in"    class="zoom-btn"><i data-lucide="zoom-in"></i></button>
+          <button id="admin-zoom-out"   class="zoom-btn"><i data-lucide="zoom-out"></i></button>
+          <button id="admin-zoom-reset" class="zoom-btn"><i data-lucide="maximize-2"></i></button>
+        </div>
+      </div>
+      <div class="admin-map-frame" id="admin-map-frame">
+        <div class="admin-map-inner" id="admin-map-inner">
+          <div id="admin-svg-mount">
+            <div class="loading-state">
+              <i data-lucide="loader-2" class="spin-icon"></i>
+              <span>Loading floorplan…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Admin tooltip -->
+      <div id="admin-tooltip" class="fp-tooltip hidden">
+        <div class="tt-label" id="att-label">Stand 001</div>
+        <div class="tt-status" id="att-status">Available</div>
+        <div class="tt-price" id="att-price">€0</div>
+      </div>
+      <!-- Admin booth action panel -->
+      <div class="admin-booth-action hidden" id="admin-booth-action">
+        <div class="aba-header">
+          <span id="aba-id">Stand —</span>
+          <span class="aba-badge" id="aba-status">Available</span>
+        </div>
+        <div class="aba-stats">
+          <div><span class="aba-lbl">Size</span><span class="aba-val" id="aba-sqm">—</span></div>
+          <div><span class="aba-lbl">Price</span><span class="aba-val" id="aba-price">—</span></div>
+          <div><span class="aba-lbl">Company</span><span class="aba-val" id="aba-company">—</span></div>
+          <div><span class="aba-lbl">Viewers</span><span class="aba-val" id="aba-viewers">0</span></div>
+        </div>
+        <div class="aba-actions">
+          <button class="admin-btn success" id="aba-book">✅ Mark Sold</button>
+          <button class="admin-btn warning" id="aba-hold">⏳ Put on Hold</button>
+          <button class="admin-btn" id="aba-release">🔓 Release</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: BOOKINGS ════════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-bookings">
+      <div class="bookings-toolbar">
+        <input type="text" id="bookings-search" class="admin-input" placeholder="🔍  Search by company or stand…">
+        <select id="bookings-filter" class="admin-select">
+          <option value="all">All statuses</option>
+          <option value="sold">Booked</option>
+          <option value="held">On Hold</option>
+          <option value="available">Available</option>
+        </select>
+      </div>
+      <div class="bookings-table-wrap">
+        <table class="bookings-table">
+          <thead>
+            <tr>
+              <th>Stand</th>
+              <th>Size (m²)</th>
+              <th>Price</th>
+              <th>Status</th>
+              <th>Company</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="bookings-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: TOOLS ═══════════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-tools">
+      <div class="tools-grid">
+
+        <!-- Consolidation tool -->
+        <div class="tool-card">
+          <div class="tool-header">
+            <i data-lucide="combine"></i>
+            <h3>Consolidate Stands</h3>
+          </div>
+          <p>Merge two adjacent available stands into a single larger space.</p>
+          <form id="consolidation-form" class="tool-form">
+            <div class="tool-form-row">
+              <div class="tool-field">
+                <label>Primary Stand</label>
+                <select id="merge-1" class="admin-select"><option value="">Select…</option></select>
+              </div>
+              <div class="tool-field">
+                <label>Merge With</label>
+                <select id="merge-2" class="admin-select"><option value="">Select…</option></select>
+              </div>
+            </div>
+            <button type="submit" class="admin-btn success full">
+              <i data-lucide="combine"></i> Consolidate Stands
+            </button>
+          </form>
+        </div>
+
+        <!-- Bulk status tool -->
+        <div class="tool-card">
+          <div class="tool-header">
+            <i data-lucide="sliders"></i>
+            <h3>Bulk Status Update</h3>
+          </div>
+          <p>Change the status of a specific stand directly.</p>
+          <form id="status-form" class="tool-form">
+            <div class="tool-field">
+              <label>Stand</label>
+              <select id="status-stand" class="admin-select"><option value="">Select…</option></select>
+            </div>
+            <div class="tool-field">
+              <label>New Status</label>
+              <select id="status-new" class="admin-select">
+                <option value="available">Available</option>
+                <option value="sold">Booked / Sold</option>
+                <option value="held">On Hold</option>
+              </select>
+            </div>
+            <div class="tool-field">
+              <label>Company (optional)</label>
+              <input type="text" id="status-company" class="admin-input" placeholder="Company name">
+            </div>
+            <button type="submit" class="admin-btn success full">
+              <i data-lucide="save"></i> Update Status
+            </button>
+          </form>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: ACTIVITY LOG ════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-log">
+      <div class="log-toolbar">
+        <h3>Live Activity Log</h3>
+        <button id="clear-log" class="admin-btn">Clear</button>
+      </div>
+      <div class="admin-log" id="admin-log">
+        <div class="log-entry system"><span class="log-time">Now</span> Admin console ready.</div>
+      </div>
+    </section>
+
+  </div><!-- /admin-body -->
+
+  <script src="admin.js"></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>
