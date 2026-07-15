@@ -1,0 +1,2722 @@
+{
+  "booth-001": {
+    "boothId": "booth-001",
+    "status": "available",
+    "x": 477,
+    "y": 1278,
+    "w": 101,
+    "h": 101,
+    "sqm": 36,
+    "price": 21600
+  },
+  "booth-002": {
+    "boothId": "booth-002",
+    "status": "available",
+    "x": 729,
+    "y": 1768,
+    "w": 134,
+    "h": 50,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-003": {
+    "boothId": "booth-003",
+    "status": "available",
+    "x": 729,
+    "y": 1903,
+    "w": 168,
+    "h": 100,
+    "sqm": 59,
+    "price": 35400
+  },
+  "booth-004": {
+    "boothId": "booth-004",
+    "status": "available",
+    "x": 729,
+    "y": 361,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-005": {
+    "boothId": "booth-005",
+    "status": "available",
+    "x": 552,
+    "y": 2053,
+    "w": 101,
+    "h": 101,
+    "sqm": 36,
+    "price": 21600
+  },
+  "booth-006": {
+    "boothId": "booth-006",
+    "status": "available",
+    "x": 1650,
+    "y": 1379,
+    "w": 134,
+    "h": 101,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-007": {
+    "boothId": "booth-007",
+    "status": "available",
+    "x": 1315,
+    "y": 495,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-008": {
+    "boothId": "booth-008",
+    "status": "available",
+    "x": 2086,
+    "y": 1362,
+    "w": 67,
+    "h": 117,
+    "sqm": 28,
+    "price": 16800
+  },
+  "booth-009": {
+    "boothId": "booth-009",
+    "status": "available",
+    "x": 2086,
+    "y": 834,
+    "w": 67,
+    "h": 134,
+    "sqm": 32,
+    "price": 19200
+  },
+  "booth-010": {
+    "boothId": "booth-010",
+    "status": "available",
+    "x": 1164,
+    "y": 1044,
+    "w": 101,
+    "h": 0,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-011": {
+    "boothId": "booth-011",
+    "status": "available",
+    "x": 1919,
+    "y": 1697,
+    "w": 84,
+    "h": 84,
+    "sqm": 25,
+    "price": 15000
+  },
+  "booth-012": {
+    "boothId": "booth-012",
+    "status": "available",
+    "x": 967,
+    "y": 1345,
+    "w": 84,
+    "h": 67,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-013": {
+    "boothId": "booth-013",
+    "status": "available",
+    "x": 729,
+    "y": 1903,
+    "w": 84,
+    "h": 100,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-014": {
+    "boothId": "booth-014",
+    "status": "available",
+    "x": 1650,
+    "y": 630,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-015": {
+    "boothId": "booth-015",
+    "status": "available",
+    "x": 1382,
+    "y": 311,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-016": {
+    "boothId": "booth-016",
+    "status": "available",
+    "x": 1717,
+    "y": 630,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-017": {
+    "boothId": "booth-017",
+    "status": "available",
+    "x": 2204,
+    "y": 834,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-018": {
+    "boothId": "booth-018",
+    "status": "available",
+    "x": 2204,
+    "y": 885,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1000": {
+    "boothId": "booth-1000",
+    "status": "sold",
+    "x": 1315,
+    "y": 834,
+    "w": 84,
+    "h": 117,
+    "sqm": 35,
+    "price": 21000
+  },
+  "booth-1001": {
+    "boothId": "booth-1001",
+    "status": "sold",
+    "x": 318,
+    "y": 1584,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1002": {
+    "boothId": "booth-1002",
+    "status": "sold",
+    "x": 368,
+    "y": 1584,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1003": {
+    "boothId": "booth-1003",
+    "status": "sold",
+    "x": 419,
+    "y": 1584,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1004": {
+    "boothId": "booth-1004",
+    "status": "sold",
+    "x": 318,
+    "y": 1534,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1005": {
+    "boothId": "booth-1005",
+    "status": "sold",
+    "x": 368,
+    "y": 1534,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1006": {
+    "boothId": "booth-1006",
+    "status": "sold",
+    "x": 419,
+    "y": 1534,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1007": {
+    "boothId": "booth-1007",
+    "status": "sold",
+    "x": 335,
+    "y": 1396,
+    "w": 101,
+    "h": 84,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1008": {
+    "boothId": "booth-1008",
+    "status": "sold",
+    "x": 335,
+    "y": 1312,
+    "w": 101,
+    "h": 84,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1009": {
+    "boothId": "booth-1009",
+    "status": "sold",
+    "x": 318,
+    "y": 1211,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1010": {
+    "boothId": "booth-1010",
+    "status": "sold",
+    "x": 318,
+    "y": 1161,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1011": {
+    "boothId": "booth-1011",
+    "status": "sold",
+    "x": 318,
+    "y": 1069,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1012": {
+    "boothId": "booth-1012",
+    "status": "sold",
+    "x": 318,
+    "y": 1019,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1013": {
+    "boothId": "booth-1013",
+    "status": "sold",
+    "x": 335,
+    "y": 901,
+    "w": 84,
+    "h": 67,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1014": {
+    "boothId": "booth-1014",
+    "status": "sold",
+    "x": 335,
+    "y": 834,
+    "w": 84,
+    "h": 67,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1015": {
+    "boothId": "booth-1015",
+    "status": "sold",
+    "x": 544,
+    "y": 1919,
+    "w": 134,
+    "h": 84,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1016": {
+    "boothId": "booth-1016",
+    "status": "sold",
+    "x": 544,
+    "y": 1869,
+    "w": 134,
+    "h": 50,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1017": {
+    "boothId": "booth-1017",
+    "status": "sold",
+    "x": 544,
+    "y": 1735,
+    "w": 134,
+    "h": 84,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1018": {
+    "boothId": "booth-1018",
+    "status": "sold",
+    "x": 544,
+    "y": 1651,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1019": {
+    "boothId": "booth-1019",
+    "status": "sold",
+    "x": 611,
+    "y": 1651,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1020": {
+    "boothId": "booth-1020",
+    "status": "sold",
+    "x": 544,
+    "y": 1534,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1021": {
+    "boothId": "booth-1021",
+    "status": "sold",
+    "x": 611,
+    "y": 1534,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1022": {
+    "boothId": "booth-1022",
+    "status": "sold",
+    "x": 578,
+    "y": 1379,
+    "w": 101,
+    "h": 101,
+    "sqm": 36,
+    "price": 21600
+  },
+  "booth-1023": {
+    "boothId": "booth-1023",
+    "status": "sold",
+    "x": 477,
+    "y": 1379,
+    "w": 101,
+    "h": 101,
+    "sqm": 36,
+    "price": 21600
+  },
+  "booth-1024": {
+    "boothId": "booth-1024",
+    "status": "sold",
+    "x": 578,
+    "y": 1278,
+    "w": 101,
+    "h": 101,
+    "sqm": 36,
+    "price": 21600
+  },
+  "booth-1025": {
+    "boothId": "booth-1025",
+    "status": "sold",
+    "x": 494,
+    "y": 1178,
+    "w": 84,
+    "h": 50,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1026": {
+    "boothId": "booth-1026",
+    "status": "sold",
+    "x": 578,
+    "y": 1178,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1027": {
+    "boothId": "booth-1027",
+    "status": "sold",
+    "x": 494,
+    "y": 1128,
+    "w": 84,
+    "h": 50,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1028": {
+    "boothId": "booth-1028",
+    "status": "sold",
+    "x": 578,
+    "y": 1128,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1029": {
+    "boothId": "booth-1029",
+    "status": "sold",
+    "x": 477,
+    "y": 1035,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1030": {
+    "boothId": "booth-1030",
+    "status": "sold",
+    "x": 578,
+    "y": 1035,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1031": {
+    "boothId": "booth-1031",
+    "status": "sold",
+    "x": 477,
+    "y": 985,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1032": {
+    "boothId": "booth-1032",
+    "status": "sold",
+    "x": 578,
+    "y": 985,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1033": {
+    "boothId": "booth-1033",
+    "status": "sold",
+    "x": 477,
+    "y": 885,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1034": {
+    "boothId": "booth-1034",
+    "status": "sold",
+    "x": 578,
+    "y": 885,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1035": {
+    "boothId": "booth-1035",
+    "status": "sold",
+    "x": 477,
+    "y": 834,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1036": {
+    "boothId": "booth-1036",
+    "status": "sold",
+    "x": 578,
+    "y": 834,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1037": {
+    "boothId": "booth-1037",
+    "status": "sold",
+    "x": 913,
+    "y": 1701,
+    "w": 84,
+    "h": 151,
+    "sqm": 45,
+    "price": 27000
+  },
+  "booth-1038": {
+    "boothId": "booth-1038",
+    "status": "sold",
+    "x": 729,
+    "y": 1534,
+    "w": 134,
+    "h": 101,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1039": {
+    "boothId": "booth-1039",
+    "status": "sold",
+    "x": 913,
+    "y": 1534,
+    "w": 168,
+    "h": 101,
+    "sqm": 60,
+    "price": 36000
+  },
+  "booth-1040": {
+    "boothId": "booth-1040",
+    "status": "sold",
+    "x": 1131,
+    "y": 1534,
+    "w": 134,
+    "h": 101,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1041": {
+    "boothId": "booth-1041",
+    "status": "sold",
+    "x": 729,
+    "y": 1412,
+    "w": 101,
+    "h": 67,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1042": {
+    "boothId": "booth-1042",
+    "status": "sold",
+    "x": 729,
+    "y": 1345,
+    "w": 101,
+    "h": 67,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1043": {
+    "boothId": "booth-1043",
+    "status": "sold",
+    "x": 883,
+    "y": 1345,
+    "w": 84,
+    "h": 50,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1044": {
+    "boothId": "booth-1044",
+    "status": "sold",
+    "x": 967,
+    "y": 1345,
+    "w": 84,
+    "h": 134,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1045": {
+    "boothId": "booth-1045",
+    "status": "sold",
+    "x": 1097,
+    "y": 1312,
+    "w": 84,
+    "h": 168,
+    "sqm": 50,
+    "price": 30000
+  },
+  "booth-1046": {
+    "boothId": "booth-1046",
+    "status": "sold",
+    "x": 1181,
+    "y": 1312,
+    "w": 84,
+    "h": 168,
+    "sqm": 50,
+    "price": 30000
+  },
+  "booth-1047": {
+    "boothId": "booth-1047",
+    "status": "sold",
+    "x": 1097,
+    "y": 1195,
+    "w": 84,
+    "h": 117,
+    "sqm": 35,
+    "price": 21000
+  },
+  "booth-1048": {
+    "boothId": "booth-1048",
+    "status": "sold",
+    "x": 1181,
+    "y": 1195,
+    "w": 84,
+    "h": 117,
+    "sqm": 35,
+    "price": 21000
+  },
+  "booth-1049": {
+    "boothId": "booth-1049",
+    "status": "sold",
+    "x": 883,
+    "y": 1199,
+    "w": 84,
+    "h": 101,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1050": {
+    "boothId": "booth-1050",
+    "status": "sold",
+    "x": 967,
+    "y": 1199,
+    "w": 84,
+    "h": 101,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1051": {
+    "boothId": "booth-1051",
+    "status": "sold",
+    "x": 729,
+    "y": 1232,
+    "w": 101,
+    "h": 67,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1052": {
+    "boothId": "booth-1052",
+    "status": "sold",
+    "x": 729,
+    "y": 1165,
+    "w": 101,
+    "h": 67,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1053": {
+    "boothId": "booth-1053",
+    "status": "sold",
+    "x": 729,
+    "y": 968,
+    "w": 101,
+    "h": 134,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1054": {
+    "boothId": "booth-1054",
+    "status": "sold",
+    "x": 729,
+    "y": 834,
+    "w": 101,
+    "h": 134,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1055": {
+    "boothId": "booth-1055",
+    "status": "sold",
+    "x": 883,
+    "y": 1048,
+    "w": 168,
+    "h": 84,
+    "sqm": 50,
+    "price": 30000
+  },
+  "booth-1056": {
+    "boothId": "booth-1056",
+    "status": "sold",
+    "x": 1097,
+    "y": 834,
+    "w": 67,
+    "h": 151,
+    "sqm": 36,
+    "price": 21600
+  },
+  "booth-1057": {
+    "boothId": "booth-1057",
+    "status": "sold",
+    "x": 1097,
+    "y": 985,
+    "w": 67,
+    "h": 168,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1058": {
+    "boothId": "booth-1058",
+    "status": "sold",
+    "x": 1164,
+    "y": 834,
+    "w": 101,
+    "h": 101,
+    "sqm": 36,
+    "price": 21600
+  },
+  "booth-1059": {
+    "boothId": "booth-1059",
+    "status": "sold",
+    "x": 1164,
+    "y": 935,
+    "w": 101,
+    "h": 218,
+    "sqm": 77,
+    "price": 46200
+  },
+  "booth-1060": {
+    "boothId": "booth-1060",
+    "status": "sold",
+    "x": 1198,
+    "y": 730,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1061": {
+    "boothId": "booth-1061",
+    "status": "sold",
+    "x": 1198,
+    "y": 679,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1062": {
+    "boothId": "booth-1062",
+    "status": "sold",
+    "x": 1131,
+    "y": 730,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1063": {
+    "boothId": "booth-1063",
+    "status": "sold",
+    "x": 1131,
+    "y": 679,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1064": {
+    "boothId": "booth-1064",
+    "status": "sold",
+    "x": 829,
+    "y": 679,
+    "w": 50,
+    "h": 101,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1065": {
+    "boothId": "booth-1065",
+    "status": "sold",
+    "x": 779,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1066": {
+    "boothId": "booth-1066",
+    "status": "sold",
+    "x": 729,
+    "y": 730,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1067": {
+    "boothId": "booth-1067",
+    "status": "sold",
+    "x": 729,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1068": {
+    "boothId": "booth-1068",
+    "status": "sold",
+    "x": 628,
+    "y": 545,
+    "w": 50,
+    "h": 84,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1069": {
+    "boothId": "booth-1069",
+    "status": "sold",
+    "x": 578,
+    "y": 545,
+    "w": 101,
+    "h": 84,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1070": {
+    "boothId": "booth-1070",
+    "status": "sold",
+    "x": 477,
+    "y": 545,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1071": {
+    "boothId": "booth-1071",
+    "status": "sold",
+    "x": 427,
+    "y": 545,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1072": {
+    "boothId": "booth-1072",
+    "status": "sold",
+    "x": 829,
+    "y": 545,
+    "w": 50,
+    "h": 84,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1073": {
+    "boothId": "booth-1073",
+    "status": "sold",
+    "x": 829,
+    "y": 478,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1074": {
+    "boothId": "booth-1074",
+    "status": "sold",
+    "x": 980,
+    "y": 478,
+    "w": 101,
+    "h": 134,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1075": {
+    "boothId": "booth-1075",
+    "status": "sold",
+    "x": 930,
+    "y": 545,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1076": {
+    "boothId": "booth-1076",
+    "status": "sold",
+    "x": 930,
+    "y": 478,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1077": {
+    "boothId": "booth-1077",
+    "status": "sold",
+    "x": 829,
+    "y": 311,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1078": {
+    "boothId": "booth-1078",
+    "status": "sold",
+    "x": 779,
+    "y": 311,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1079": {
+    "boothId": "booth-1079",
+    "status": "sold",
+    "x": 729,
+    "y": 311,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1080": {
+    "boothId": "booth-1080",
+    "status": "sold",
+    "x": 1030,
+    "y": 311,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1081": {
+    "boothId": "booth-1081",
+    "status": "sold",
+    "x": 980,
+    "y": 311,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1082": {
+    "boothId": "booth-1082",
+    "status": "sold",
+    "x": 930,
+    "y": 311,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1083": {
+    "boothId": "booth-1083",
+    "status": "sold",
+    "x": 1131,
+    "y": 361,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1084": {
+    "boothId": "booth-1084",
+    "status": "sold",
+    "x": 1198,
+    "y": 361,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1085": {
+    "boothId": "booth-1085",
+    "status": "sold",
+    "x": 1198,
+    "y": 311,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1086": {
+    "boothId": "booth-1086",
+    "status": "sold",
+    "x": 1131,
+    "y": 311,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1087": {
+    "boothId": "booth-1087",
+    "status": "sold",
+    "x": 852,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1088": {
+    "boothId": "booth-1088",
+    "status": "sold",
+    "x": 802,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1089": {
+    "boothId": "booth-1089",
+    "status": "sold",
+    "x": 752,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1090": {
+    "boothId": "booth-1090",
+    "status": "sold",
+    "x": 1003,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1091": {
+    "boothId": "booth-1091",
+    "status": "sold",
+    "x": 953,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1092": {
+    "boothId": "booth-1092",
+    "status": "sold",
+    "x": 902,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1093": {
+    "boothId": "booth-1093",
+    "status": "sold",
+    "x": 1104,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1094": {
+    "boothId": "booth-1094",
+    "status": "sold",
+    "x": 1053,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1095": {
+    "boothId": "booth-1095",
+    "status": "sold",
+    "x": 1204,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1096": {
+    "boothId": "booth-1096",
+    "status": "sold",
+    "x": 1154,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1097": {
+    "boothId": "booth-1097",
+    "status": "sold",
+    "x": 1315,
+    "y": 1534,
+    "w": 117,
+    "h": 101,
+    "sqm": 42,
+    "price": 25200
+  },
+  "booth-1098": {
+    "boothId": "booth-1098",
+    "status": "sold",
+    "x": 1315,
+    "y": 1379,
+    "w": 151,
+    "h": 101,
+    "sqm": 54,
+    "price": 32400
+  },
+  "booth-1099": {
+    "boothId": "booth-1099",
+    "status": "sold",
+    "x": 1315,
+    "y": 1278,
+    "w": 84,
+    "h": 101,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1100": {
+    "boothId": "booth-1100",
+    "status": "sold",
+    "x": 1399,
+    "y": 1278,
+    "w": 67,
+    "h": 101,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1101": {
+    "boothId": "booth-1101",
+    "status": "sold",
+    "x": 1315,
+    "y": 952,
+    "w": 168,
+    "h": 101,
+    "sqm": 60,
+    "price": 36000
+  },
+  "booth-1102": {
+    "boothId": "booth-1102",
+    "status": "sold",
+    "x": 1399,
+    "y": 834,
+    "w": 84,
+    "h": 117,
+    "sqm": 35,
+    "price": 21000
+  },
+  "booth-1103": {
+    "boothId": "booth-1103",
+    "status": "sold",
+    "x": 1483,
+    "y": 1701,
+    "w": 117,
+    "h": 50,
+    "sqm": 21,
+    "price": 12600
+  },
+  "booth-1104": {
+    "boothId": "booth-1104",
+    "status": "sold",
+    "x": 1483,
+    "y": 1534,
+    "w": 118,
+    "h": 101,
+    "sqm": 42,
+    "price": 25200
+  },
+  "booth-1105": {
+    "boothId": "booth-1105",
+    "status": "sold",
+    "x": 1667,
+    "y": 1534,
+    "w": 118,
+    "h": 101,
+    "sqm": 42,
+    "price": 25200
+  },
+  "booth-1106": {
+    "boothId": "booth-1106",
+    "status": "sold",
+    "x": 1516,
+    "y": 1379,
+    "w": 134,
+    "h": 101,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1107": {
+    "boothId": "booth-1107",
+    "status": "sold",
+    "x": 1516,
+    "y": 1278,
+    "w": 134,
+    "h": 101,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1108": {
+    "boothId": "booth-1108",
+    "status": "sold",
+    "x": 1650,
+    "y": 1278,
+    "w": 134,
+    "h": 101,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1109": {
+    "boothId": "booth-1109",
+    "status": "sold",
+    "x": 1701,
+    "y": 1165,
+    "w": 84,
+    "h": 67,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1110": {
+    "boothId": "booth-1110",
+    "status": "sold",
+    "x": 1701,
+    "y": 1098,
+    "w": 84,
+    "h": 67,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1111": {
+    "boothId": "booth-1111",
+    "status": "sold",
+    "x": 1500,
+    "y": 495,
+    "w": 50,
+    "h": 84,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1112": {
+    "boothId": "booth-1112",
+    "status": "sold",
+    "x": 1550,
+    "y": 495,
+    "w": 50,
+    "h": 84,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1113": {
+    "boothId": "booth-1113",
+    "status": "sold",
+    "x": 1650,
+    "y": 495,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1114": {
+    "boothId": "booth-1114",
+    "status": "sold",
+    "x": 1718,
+    "y": 495,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1115": {
+    "boothId": "booth-1115",
+    "status": "sold",
+    "x": 1500,
+    "y": 378,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1116": {
+    "boothId": "booth-1116",
+    "status": "sold",
+    "x": 1550,
+    "y": 378,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1117": {
+    "boothId": "booth-1117",
+    "status": "sold",
+    "x": 1500,
+    "y": 311,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1118": {
+    "boothId": "booth-1118",
+    "status": "sold",
+    "x": 1550,
+    "y": 311,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1119": {
+    "boothId": "booth-1119",
+    "status": "sold",
+    "x": 1650,
+    "y": 311,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1120": {
+    "boothId": "booth-1120",
+    "status": "sold",
+    "x": 1650,
+    "y": 378,
+    "w": 134,
+    "h": 67,
+    "sqm": 32,
+    "price": 19200
+  },
+  "booth-1121": {
+    "boothId": "booth-1121",
+    "status": "sold",
+    "x": 1718,
+    "y": 311,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1122": {
+    "boothId": "booth-1122",
+    "status": "sold",
+    "x": 1399,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1123": {
+    "boothId": "booth-1123",
+    "status": "sold",
+    "x": 1349,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1124": {
+    "boothId": "booth-1124",
+    "status": "sold",
+    "x": 1500,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1125": {
+    "boothId": "booth-1125",
+    "status": "sold",
+    "x": 1449,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1126": {
+    "boothId": "booth-1126",
+    "status": "sold",
+    "x": 1600,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1127": {
+    "boothId": "booth-1127",
+    "status": "sold",
+    "x": 1550,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1128": {
+    "boothId": "booth-1128",
+    "status": "sold",
+    "x": 1701,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1129": {
+    "boothId": "booth-1129",
+    "status": "sold",
+    "x": 1650,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1130": {
+    "boothId": "booth-1130",
+    "status": "sold",
+    "x": 1919,
+    "y": 1534,
+    "w": 84,
+    "h": 101,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1131": {
+    "boothId": "booth-1131",
+    "status": "sold",
+    "x": 1835,
+    "y": 1396,
+    "w": 134,
+    "h": 84,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1132": {
+    "boothId": "booth-1132",
+    "status": "sold",
+    "x": 1835,
+    "y": 1345,
+    "w": 134,
+    "h": 50,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1133": {
+    "boothId": "booth-1133",
+    "status": "sold",
+    "x": 1835,
+    "y": 1178,
+    "w": 67,
+    "h": 117,
+    "sqm": 28,
+    "price": 16800
+  },
+  "booth-1134": {
+    "boothId": "booth-1134",
+    "status": "sold",
+    "x": 1902,
+    "y": 1178,
+    "w": 67,
+    "h": 117,
+    "sqm": 28,
+    "price": 16800
+  },
+  "booth-1135": {
+    "boothId": "booth-1135",
+    "status": "sold",
+    "x": 1835,
+    "y": 1052,
+    "w": 134,
+    "h": 67,
+    "sqm": 32,
+    "price": 19200
+  },
+  "booth-1136": {
+    "boothId": "booth-1136",
+    "status": "sold",
+    "x": 1835,
+    "y": 1002,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1137": {
+    "boothId": "booth-1137",
+    "status": "sold",
+    "x": 1902,
+    "y": 1002,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1138": {
+    "boothId": "booth-1138",
+    "status": "sold",
+    "x": 1835,
+    "y": 834,
+    "w": 67,
+    "h": 117,
+    "sqm": 28,
+    "price": 16800
+  },
+  "booth-1139": {
+    "boothId": "booth-1139",
+    "status": "sold",
+    "x": 1902,
+    "y": 834,
+    "w": 67,
+    "h": 117,
+    "sqm": 28,
+    "price": 16800
+  },
+  "booth-1140": {
+    "boothId": "booth-1140",
+    "status": "sold",
+    "x": 1835,
+    "y": 696,
+    "w": 101,
+    "h": 84,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1141": {
+    "boothId": "booth-1141",
+    "status": "sold",
+    "x": 1835,
+    "y": 629,
+    "w": 101,
+    "h": 67,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1142": {
+    "boothId": "booth-1142",
+    "status": "sold",
+    "x": 1835,
+    "y": 529,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1143": {
+    "boothId": "booth-1143",
+    "status": "sold",
+    "x": 1885,
+    "y": 361,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1144": {
+    "boothId": "booth-1144",
+    "status": "sold",
+    "x": 1835,
+    "y": 311,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1145": {
+    "boothId": "booth-1145",
+    "status": "sold",
+    "x": 1902,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1146": {
+    "boothId": "booth-1146",
+    "status": "sold",
+    "x": 1852,
+    "y": 210,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1147": {
+    "boothId": "booth-1147",
+    "status": "sold",
+    "x": 2053,
+    "y": 1584,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1148": {
+    "boothId": "booth-1148",
+    "status": "sold",
+    "x": 2053,
+    "y": 1534,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1149": {
+    "boothId": "booth-1149",
+    "status": "sold",
+    "x": 2103,
+    "y": 1584,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1150": {
+    "boothId": "booth-1150",
+    "status": "sold",
+    "x": 2103,
+    "y": 1534,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1151": {
+    "boothId": "booth-1151",
+    "status": "sold",
+    "x": 2019,
+    "y": 1262,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1152": {
+    "boothId": "booth-1152",
+    "status": "sold",
+    "x": 2086,
+    "y": 1262,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1153": {
+    "boothId": "booth-1153",
+    "status": "sold",
+    "x": 2019,
+    "y": 1211,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1154": {
+    "boothId": "booth-1154",
+    "status": "sold",
+    "x": 2086,
+    "y": 1211,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1155": {
+    "boothId": "booth-1155",
+    "status": "sold",
+    "x": 2019,
+    "y": 1069,
+    "w": 67,
+    "h": 101,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1156": {
+    "boothId": "booth-1156",
+    "status": "sold",
+    "x": 2086,
+    "y": 1069,
+    "w": 67,
+    "h": 101,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1157": {
+    "boothId": "booth-1157",
+    "status": "sold",
+    "x": 2019,
+    "y": 1019,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1158": {
+    "boothId": "booth-1158",
+    "status": "sold",
+    "x": 2086,
+    "y": 1019,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1159": {
+    "boothId": "booth-1159",
+    "status": "sold",
+    "x": 2019,
+    "y": 834,
+    "w": 67,
+    "h": 134,
+    "sqm": 32,
+    "price": 19200
+  },
+  "booth-1160": {
+    "boothId": "booth-1160",
+    "status": "sold",
+    "x": 1986,
+    "y": 696,
+    "w": 134,
+    "h": 84,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1161": {
+    "boothId": "booth-1161",
+    "status": "sold",
+    "x": 2170,
+    "y": 696,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1162": {
+    "boothId": "booth-1162",
+    "status": "sold",
+    "x": 2204,
+    "y": 935,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1163": {
+    "boothId": "booth-1163",
+    "status": "sold",
+    "x": 2204,
+    "y": 985,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1164": {
+    "boothId": "booth-1164",
+    "status": "sold",
+    "x": 2204,
+    "y": 1086,
+    "w": 50,
+    "h": 101,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1165": {
+    "boothId": "booth-1165",
+    "status": "sold",
+    "x": 2204,
+    "y": 1228,
+    "w": 50,
+    "h": 101,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1166": {
+    "boothId": "booth-1166",
+    "status": "sold",
+    "x": 2204,
+    "y": 1379,
+    "w": 50,
+    "h": 101,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1167": {
+    "boothId": "booth-1167",
+    "status": "sold",
+    "x": 2204,
+    "y": 1534,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1168": {
+    "boothId": "booth-1168",
+    "status": "sold",
+    "x": 2204,
+    "y": 1584,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1169": {
+    "boothId": "booth-1169",
+    "status": "sold",
+    "x": 2204,
+    "y": 1685,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1170": {
+    "boothId": "booth-1170",
+    "status": "sold",
+    "x": 2204,
+    "y": 1752,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1171": {
+    "boothId": "booth-1171",
+    "status": "sold",
+    "x": 2204,
+    "y": 1869,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1172": {
+    "boothId": "booth-1172",
+    "status": "sold",
+    "x": 2204,
+    "y": 1936,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1173": {
+    "boothId": "booth-1173",
+    "status": "sold",
+    "x": 1315,
+    "y": 1098,
+    "w": 101,
+    "h": 134,
+    "sqm": 48,
+    "price": 28800
+  },
+  "booth-1174": {
+    "boothId": "booth-1174",
+    "status": "sold",
+    "x": 980,
+    "y": 730,
+    "w": 101,
+    "h": 50,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1175": {
+    "boothId": "booth-1175",
+    "status": "sold",
+    "x": 427,
+    "y": 730,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1176": {
+    "boothId": "booth-1176",
+    "status": "sold",
+    "x": 477,
+    "y": 730,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1177": {
+    "boothId": "booth-1177",
+    "status": "sold",
+    "x": 327,
+    "y": 730,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1178": {
+    "boothId": "booth-1178",
+    "status": "sold",
+    "x": 578,
+    "y": 730,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1179": {
+    "boothId": "booth-1179",
+    "status": "sold",
+    "x": 628,
+    "y": 730,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1180": {
+    "boothId": "booth-1180",
+    "status": "sold",
+    "x": 1315,
+    "y": 696,
+    "w": 72,
+    "h": 84,
+    "sqm": 21,
+    "price": 12600
+  },
+  "booth-1181": {
+    "boothId": "booth-1181",
+    "status": "sold",
+    "x": 1315,
+    "y": 629,
+    "w": 135,
+    "h": 67,
+    "sqm": 32,
+    "price": 19200
+  },
+  "booth-1182": {
+    "boothId": "booth-1182",
+    "status": "sold",
+    "x": 729,
+    "y": 478,
+    "w": 101,
+    "h": 151,
+    "sqm": 54,
+    "price": 32400
+  },
+  "booth-1183": {
+    "boothId": "booth-1183",
+    "status": "sold",
+    "x": 1315,
+    "y": 696,
+    "w": 135,
+    "h": 84,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1184": {
+    "boothId": "booth-1184",
+    "status": "sold",
+    "x": 883,
+    "y": 1396,
+    "w": 84,
+    "h": 84,
+    "sqm": 25,
+    "price": 15000
+  },
+  "booth-1185": {
+    "boothId": "booth-1185",
+    "status": "sold",
+    "x": 796,
+    "y": 1685,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1186": {
+    "boothId": "booth-1186",
+    "status": "sold",
+    "x": 729,
+    "y": 1769,
+    "w": 134,
+    "h": 84,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1187": {
+    "boothId": "booth-1187",
+    "status": "sold",
+    "x": 1315,
+    "y": 1903,
+    "w": 117,
+    "h": 101,
+    "sqm": 42,
+    "price": 25200
+  },
+  "booth-1188": {
+    "boothId": "booth-1188",
+    "status": "sold",
+    "x": 1483,
+    "y": 1752,
+    "w": 117,
+    "h": 84,
+    "sqm": 35,
+    "price": 21000
+  },
+  "booth-1189": {
+    "boothId": "booth-1189",
+    "status": "sold",
+    "x": 1667,
+    "y": 1886,
+    "w": 117,
+    "h": 117,
+    "sqm": 49,
+    "price": 29400
+  },
+  "booth-1190": {
+    "boothId": "booth-1190",
+    "status": "sold",
+    "x": 1667,
+    "y": 1701,
+    "w": 118,
+    "h": 50,
+    "sqm": 21,
+    "price": 12600
+  },
+  "booth-1191": {
+    "boothId": "booth-1191",
+    "status": "sold",
+    "x": 1835,
+    "y": 1534,
+    "w": 84,
+    "h": 101,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1192": {
+    "boothId": "booth-1192",
+    "status": "sold",
+    "x": 2019,
+    "y": 1362,
+    "w": 67,
+    "h": 117,
+    "sqm": 28,
+    "price": 16800
+  },
+  "booth-1193": {
+    "boothId": "booth-1193",
+    "status": "sold",
+    "x": 729,
+    "y": 1685,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1194": {
+    "boothId": "booth-1194",
+    "status": "sold",
+    "x": 997,
+    "y": 1701,
+    "w": 84,
+    "h": 151,
+    "sqm": 45,
+    "price": 27000
+  },
+  "booth-1195": {
+    "boothId": "booth-1195",
+    "status": "sold",
+    "x": 796,
+    "y": 361,
+    "w": 84,
+    "h": 67,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1196": {
+    "boothId": "booth-1196",
+    "status": "sold",
+    "x": 1835,
+    "y": 478,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1197": {
+    "boothId": "booth-1197",
+    "status": "sold",
+    "x": 2053,
+    "y": 1685,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1198": {
+    "boothId": "booth-1198",
+    "status": "sold",
+    "x": 2103,
+    "y": 1735,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1199": {
+    "boothId": "booth-1199",
+    "status": "sold",
+    "x": 2053,
+    "y": 1735,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1200": {
+    "boothId": "booth-1200",
+    "status": "sold",
+    "x": 2053,
+    "y": 1919,
+    "w": 101,
+    "h": 84,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1201": {
+    "boothId": "booth-1201",
+    "status": "sold",
+    "x": 1835,
+    "y": 1697,
+    "w": 84,
+    "h": 84,
+    "sqm": 25,
+    "price": 15000
+  },
+  "booth-1202": {
+    "boothId": "booth-1202",
+    "status": "sold",
+    "x": 327,
+    "y": 545,
+    "w": 50,
+    "h": 84,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1203": {
+    "boothId": "booth-1203",
+    "status": "sold",
+    "x": 1533,
+    "y": 834,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1204": {
+    "boothId": "booth-1204",
+    "status": "sold",
+    "x": 1600,
+    "y": 834,
+    "w": 50,
+    "h": 84,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1205": {
+    "boothId": "booth-1205",
+    "status": "sold",
+    "x": 1701,
+    "y": 834,
+    "w": 84,
+    "h": 84,
+    "sqm": 25,
+    "price": 15000
+  },
+  "booth-1206": {
+    "boothId": "booth-1206",
+    "status": "sold",
+    "x": 1533,
+    "y": 952,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1207": {
+    "boothId": "booth-1207",
+    "status": "sold",
+    "x": 1600,
+    "y": 952,
+    "w": 50,
+    "h": 84,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1208": {
+    "boothId": "booth-1208",
+    "status": "sold",
+    "x": 1701,
+    "y": 952,
+    "w": 84,
+    "h": 84,
+    "sqm": 25,
+    "price": 15000
+  },
+  "booth-1209": {
+    "boothId": "booth-1209",
+    "status": "sold",
+    "x": 2086,
+    "y": 1362,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1210": {
+    "boothId": "booth-1210",
+    "status": "sold",
+    "x": 628,
+    "y": 311,
+    "w": 50,
+    "h": 84,
+    "sqm": 15,
+    "price": 9000
+  },
+  "booth-1211": {
+    "boothId": "booth-1211",
+    "status": "sold",
+    "x": 2103,
+    "y": 1685,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1212": {
+    "boothId": "booth-1212",
+    "status": "sold",
+    "x": 1885,
+    "y": 311,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1213": {
+    "boothId": "booth-1213",
+    "status": "sold",
+    "x": 1667,
+    "y": 1752,
+    "w": 117,
+    "h": 84,
+    "sqm": 35,
+    "price": 21000
+  },
+  "booth-1214": {
+    "boothId": "booth-1214",
+    "status": "sold",
+    "x": 1885,
+    "y": 478,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1215": {
+    "boothId": "booth-1215",
+    "status": "sold",
+    "x": 1483,
+    "y": 1903,
+    "w": 117,
+    "h": 101,
+    "sqm": 42,
+    "price": 25200
+  },
+  "booth-1216": {
+    "boothId": "booth-1216",
+    "status": "sold",
+    "x": 1667,
+    "y": 1886,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1217": {
+    "boothId": "booth-1217",
+    "status": "sold",
+    "x": 1717,
+    "y": 1886,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1218": {
+    "boothId": "booth-1218",
+    "status": "sold",
+    "x": 410,
+    "y": 445,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1219": {
+    "boothId": "booth-1219",
+    "status": "sold",
+    "x": 343,
+    "y": 445,
+    "w": 67,
+    "h": 50,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1220": {
+    "boothId": "booth-1220",
+    "status": "sold",
+    "x": 1835,
+    "y": 361,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1221": {
+    "boothId": "booth-1221",
+    "status": "sold",
+    "x": 1030,
+    "y": 361,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1222": {
+    "boothId": "booth-1222",
+    "status": "sold",
+    "x": 980,
+    "y": 361,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1223": {
+    "boothId": "booth-1223",
+    "status": "sold",
+    "x": 930,
+    "y": 361,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1224": {
+    "boothId": "booth-1224",
+    "status": "sold",
+    "x": 1986,
+    "y": 696,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1225": {
+    "boothId": "booth-1225",
+    "status": "sold",
+    "x": 2053,
+    "y": 696,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1226": {
+    "boothId": "booth-1226",
+    "status": "sold",
+    "x": 963,
+    "y": 1903,
+    "w": 101,
+    "h": 101,
+    "sqm": 36,
+    "price": 21600
+  },
+  "booth-1227": {
+    "boothId": "booth-1227",
+    "status": "sold",
+    "x": 1198,
+    "y": 1685,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1228": {
+    "boothId": "booth-1228",
+    "status": "sold",
+    "x": 327,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1229": {
+    "boothId": "booth-1229",
+    "status": "sold",
+    "x": 427,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1230": {
+    "boothId": "booth-1230",
+    "status": "sold",
+    "x": 477,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1231": {
+    "boothId": "booth-1231",
+    "status": "sold",
+    "x": 930,
+    "y": 679,
+    "w": 50,
+    "h": 101,
+    "sqm": 18,
+    "price": 10800
+  },
+  "booth-1232": {
+    "boothId": "booth-1232",
+    "status": "sold",
+    "x": 578,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1233": {
+    "boothId": "booth-1233",
+    "status": "sold",
+    "x": 628,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1234": {
+    "boothId": "booth-1234",
+    "status": "sold",
+    "x": 980,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1235": {
+    "boothId": "booth-1235",
+    "status": "sold",
+    "x": 1030,
+    "y": 679,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1236": {
+    "boothId": "booth-1236",
+    "status": "sold",
+    "x": 1315,
+    "y": 495,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1237": {
+    "boothId": "booth-1237",
+    "status": "sold",
+    "x": 1382,
+    "y": 495,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1238": {
+    "boothId": "booth-1238",
+    "status": "sold",
+    "x": 1500,
+    "y": 696,
+    "w": 101,
+    "h": 84,
+    "sqm": 30,
+    "price": 18000
+  },
+  "booth-1239": {
+    "boothId": "booth-1239",
+    "status": "sold",
+    "x": 1500,
+    "y": 629,
+    "w": 101,
+    "h": 67,
+    "sqm": 24,
+    "price": 14400
+  },
+  "booth-1240": {
+    "boothId": "booth-1240",
+    "status": "sold",
+    "x": 1650,
+    "y": 697,
+    "w": 135,
+    "h": 84,
+    "sqm": 40,
+    "price": 24000
+  },
+  "booth-1241": {
+    "boothId": "booth-1241",
+    "status": "sold",
+    "x": 1315,
+    "y": 378,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1242": {
+    "boothId": "booth-1242",
+    "status": "sold",
+    "x": 1315,
+    "y": 311,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1243": {
+    "boothId": "booth-1243",
+    "status": "sold",
+    "x": 1382,
+    "y": 378,
+    "w": 67,
+    "h": 67,
+    "sqm": 16,
+    "price": 9600
+  },
+  "booth-1244": {
+    "boothId": "booth-1244",
+    "status": "sold",
+    "x": 1131,
+    "y": 1818,
+    "w": 134,
+    "h": 57,
+    "sqm": 27,
+    "price": 16200
+  },
+  "booth-1245": {
+    "boothId": "booth-1245",
+    "status": "sold",
+    "x": 1131,
+    "y": 1685,
+    "w": 67,
+    "h": 84,
+    "sqm": 20,
+    "price": 12000
+  },
+  "booth-1246": {
+    "boothId": "booth-1246",
+    "status": "sold",
+    "x": 1131,
+    "y": 1876,
+    "w": 134,
+    "h": 127,
+    "sqm": 60,
+    "price": 36000
+  },
+  "booth-1247": {
+    "boothId": "booth-1247",
+    "status": "sold",
+    "x": 2103,
+    "y": 1852,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1248": {
+    "boothId": "booth-1248",
+    "status": "sold",
+    "x": 2053,
+    "y": 1852,
+    "w": 50,
+    "h": 67,
+    "sqm": 12,
+    "price": 7200
+  },
+  "booth-1249": {
+    "boothId": "booth-1249",
+    "status": "sold",
+    "x": 528,
+    "y": 445,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1250": {
+    "boothId": "booth-1250",
+    "status": "sold",
+    "x": 477,
+    "y": 445,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1251": {
+    "boothId": "booth-1251",
+    "status": "sold",
+    "x": 628,
+    "y": 445,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1252": {
+    "boothId": "booth-1252",
+    "status": "sold",
+    "x": 578,
+    "y": 445,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  },
+  "booth-1253": {
+    "boothId": "booth-1253",
+    "status": "sold",
+    "x": 628,
+    "y": 394,
+    "w": 50,
+    "h": 50,
+    "sqm": 9,
+    "price": 5400
+  }
+}
