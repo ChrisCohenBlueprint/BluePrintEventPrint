@@ -165,8 +165,6 @@ io.on('connection', (socket) => {
     }
 
     // Determine spatial layout merge
-    // We consolidate side-by-side or stacked booths.
-    // For simplicity, we create a unified bounding box:
     const minX = Math.min(booth1.x, booth2.x);
     const minY = Math.min(booth1.y, booth2.y);
     const maxX = Math.max(booth1.x + booth1.width, booth2.x + booth2.width);
@@ -193,7 +191,7 @@ io.on('connection', (socket) => {
     // Clean up active viewers on booth2
     Object.keys(activeViewers).forEach(sid => {
       if (activeViewers[sid] === boothId2) {
-        activeViewers[sid] = boothId1; // redirect to consolidated booth
+        activeViewers[sid] = boothId1;
       }
     });
 

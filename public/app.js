@@ -44,13 +44,10 @@ socket.on('disconnect', () => {
 });
 
 socket.on('booths-update', (data) => {
-  // Check if data is wrapped in object or raw array (from updated server.js)
   const incomingBooths = data.booths || data;
   const connections = data.connections || 1;
-  
   boothsData = incomingBooths;
   
-  // Render views
   renderFloorplan();
   updateAnalytics(connections);
   updateDetailsPanel();
@@ -92,7 +89,6 @@ function updateTransform() {
   panZoomTarget.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
 }
 
-// Zoom Controls
 document.getElementById('zoom-in').addEventListener('click', () => {
   zoomLevel = Math.min(zoomLevel + 0.15, 4);
   updateTransform();
@@ -110,9 +106,7 @@ document.getElementById('zoom-reset').addEventListener('click', () => {
   updateTransform();
 });
 
-// Drag Panning Mouse Handlers
 floorplanContainer.addEventListener('mousedown', (e) => {
-  // Only pan if clicking on empty space/grid, not on booths
   if (e.target.tagName === 'svg' || e.target.id === 'floorplan-svg' || e.target.tagName === 'rect' && e.target.classList.contains('grid-bg')) {
     isDragging = true;
     startX = e.clientX - panX;
@@ -133,7 +127,6 @@ window.addEventListener('mouseup', () => {
   floorplanContainer.style.cursor = 'grab';
 });
 
-// Mouse Wheel Zoom
 floorplanContainer.addEventListener('wheel', (e) => {
   e.preventDefault();
   const zoomFactor = 0.05;
@@ -153,12 +146,10 @@ function renderFloorplan() {
   boothsData.forEach(booth => {
     if (!booth.active) return;
     
-    // Group container
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('class', 'booth-group');
     g.dataset.id = booth.id;
 
-    // Rect shape
     const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     rect.setAttribute('x', booth.x);
     rect.setAttribute('y', booth.y);
@@ -166,7 +157,6 @@ function renderFloorplan() {
     rect.setAttribute('height', booth.height);
     rect.setAttribute('rx', 6);
     
-    // Status Classes
     let stateClass = `state-${booth.status}`;
     let viewersClass = booth.viewerCount > 0 ? 'has-viewers' : '';
     let selectedClass = selectedBoothId === booth.id ? 'selected' : '';
@@ -174,10 +164,8 @@ function renderFloorplan() {
     rect.setAttribute('class', `booth-rect ${stateClass} ${viewersClass} ${selectedClass}`);
     g.appendChild(rect);
 
-    // Text Label (Booth ID)
     const textLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     textLabel.setAttribute('x', booth.x + booth.width / 2);
-    // Center text vertically
     const labelY = booth.status === 'amenity' || (booth.status === 'sold' && booth.width > 70) 
       ? booth.y + booth.height / 2.5 
       : booth.y + booth.height / 2 + 4;
@@ -188,7 +176,6 @@ function renderFloorplan() {
     textLabel.textContent = booth.id;
     g.appendChild(textLabel);
 
-    // Sub-label (Company Name or Amenity Info if wide enough)
     if (booth.width >= 70 && (booth.company || booth.status === 'amenity')) {
       const subLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       subLabel.setAttribute('x', booth.x + booth.width / 2);
@@ -201,7 +188,6 @@ function renderFloorplan() {
       g.appendChild(subLabel);
     }
     
-    // Active Viewers Indicator Count
     if (booth.viewerCount > 0) {
       const viewerBadgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       
@@ -225,7 +211,6 @@ function renderFloorplan() {
       g.appendChild(viewerBadgeGroup);
     }
 
-    // Interactivity Listeners
     g.addEventListener('click', (e) => {
       e.stopPropagation();
       selectBooth(booth.id);
@@ -247,24 +232,18 @@ function renderFloorplan() {
   });
 }
 
-// Background click deselects
 floorplanContainer.addEventListener('click', (e) => {
   if (e.target.tagName === 'svg' || e.target.id === 'floorplan-svg' || e.target.classList.contains('grid-bg')) {
     deselectBooth();
   }
 });
 
-// Select space logic
 function selectBooth(boothId) {
-  const previousSelection = selectedBoothId;
   selectedBoothId = boothId;
-  
-  // Track click analytics
   const booth = boothsData.find(b => b.id === boothId);
   if (booth && booth.status !== 'amenity') {
     socket.emit('track-click', boothId);
   }
-  
   renderFloorplan();
   updateDetailsPanel();
 }
@@ -277,24 +256,20 @@ function deselectBooth() {
   }
 }
 
-// --- Live Stat Panel Updates ---
 function updateAnalytics(browsersCount) {
   statBrowsers.textContent = browsersCount;
 
   const sellableBooths = boothsData.filter(b => b.status !== 'amenity' && b.active);
   const soldBooths = sellableBooths.filter(b => b.status === 'sold');
   
-  // Ratio
   const ratio = sellableBooths.length > 0 ? Math.round((soldBooths.length / sellableBooths.length) * 100) : 0;
   statSoldRatio.textContent = `${ratio}%`;
   statSoldProgress.style.width = `${ratio}%`;
   
-  // Revenue
   const revenue = soldBooths.reduce((acc, curr) => acc + (curr.price || 0), 0);
   statRevenue.textContent = `$${revenue.toLocaleString()}`;
 }
 
-// --- Detail Card Updates ---
 function updateDetailsPanel() {
   if (!selectedBoothId) {
     selectedDisplay.innerHTML = `
@@ -315,7 +290,6 @@ function updateDetailsPanel() {
     return;
   }
 
-  // Draw booth details card
   let statusBadge = '';
   let footerAction = '';
   
@@ -392,10 +366,8 @@ function updateDetailsPanel() {
     </div>
   `;
 
-  // Initialize new icons
   lucide.createIcons();
 
-  // Attach submit listeners
   const purchaseForm = document.getElementById('purchase-form');
   if (purchaseForm) {
     purchaseForm.addEventListener('submit', (e) => {
@@ -415,7 +387,6 @@ function updateDetailsPanel() {
   }
 }
 
-// --- Admin Dropdown Updates ---
 function updateAdminDropdowns() {
   const currentVal1 = mergeSelect1.value;
   const currentVal2 = mergeSelect2.value;
@@ -437,12 +408,10 @@ function updateAdminDropdowns() {
     mergeSelect2.appendChild(opt2);
   });
 
-  // Restore selections if still valid
   if (mergeableBooths.find(b => b.id === currentVal1)) mergeSelect1.value = currentVal1;
   if (mergeableBooths.find(b => b.id === currentVal2)) mergeSelect2.value = currentVal2;
 }
 
-// Handle Admin Consolidation Submit
 consolidationForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const boothId1 = mergeSelect1.value;
@@ -460,12 +429,10 @@ consolidationForm.addEventListener('submit', (e) => {
 
   socket.emit('consolidate-booths', { boothId1, boothId2 });
   
-  // Reset form selections
   mergeSelect1.value = '';
   mergeSelect2.value = '';
 });
 
-// --- Helper Functions ---
 function addLogEntry(source, message, type = 'system') {
   const time = new Date().toLocaleTimeString();
   const entry = document.createElement('div');
@@ -473,7 +440,6 @@ function addLogEntry(source, message, type = 'system') {
   entry.innerHTML = `<span class="log-time">${time}</span><strong>[${source}]</strong> ${message}`;
   eventLog.appendChild(entry);
   
-  // Auto-scroll to bottom of event log
   eventLog.scrollTop = eventLog.scrollHeight;
 }
 
