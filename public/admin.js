@@ -30,18 +30,32 @@ document.querySelectorAll('.nav-link').forEach(link => {
 });
 
 // ─── Zoom / Pan (Admin Map) ───────────────────────────────────────────────────
-let scale = 1, panX = 0, panY = 0, isPanning = false, startX = 0, startY = 0;
 const aFrame = document.getElementById('admin-map-frame');
 const aInner = document.getElementById('admin-map-inner');
 
-function applyTransform() { aInner.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`; }
-document.getElementById('admin-zoom-in').addEventListener('click',    () => { scale = Math.min(scale * 1.25, 8); applyTransform(); });
-document.getElementById('admin-zoom-out').addEventListener('click',   () => { scale = Math.max(scale / 1.25, 0.3); applyTransform(); });
-document.getElementById('admin-zoom-reset').addEventListener('click', () => { scale = 1; panX = 0; panY = 0; applyTransform(); });
-aFrame.addEventListener('mousedown', e => { isPanning = true; startX = e.clientX - panX; startY = e.clientY - panY; aFrame.style.cursor = 'grabbing'; });
-document.addEventListener('mouseup', () => { isPanning = false; aFrame.style.cursor = 'grab'; });
-document.addEventListener('mousemove', e => { if (!isPanning) return; panX = e.clientX - startX; panY = e.clientY - startY; applyTransform(); });
-aFrame.addEventListener('wheel', e => { e.preventDefault(); scale = Math.min(Math.max(scale * (e.deltaY > 0 ? 0.9 : 1.1), 0.3), 8); applyTransform(); }, { passive: false });
+let pzAdmin;
+function initAdminPanZoom() {
+  pzAdmin = panzoom(aInner, {
+    maxZoom: 8,
+    minZoom: 0.3,
+    bounds: true,
+    boundsPadding: 0.1,
+    zoomDoubleClickSpeed: 1
+  });
+  
+  document.getElementById('admin-zoom-in').addEventListener('click', () => {
+    const r = aFrame.getBoundingClientRect();
+    pzAdmin.smoothZoom(r.width/2, r.height/2, 1.5);
+  });
+  document.getElementById('admin-zoom-out').addEventListener('click', () => {
+    const r = aFrame.getBoundingClientRect();
+    pzAdmin.smoothZoom(r.width/2, r.height/2, 0.66);
+  });
+  document.getElementById('admin-zoom-reset').addEventListener('click', () => {
+    pzAdmin.moveTo(0, 0);
+    pzAdmin.zoomAbs(0, 0, 1);
+  });
+}
 
 // ─── Load Admin SVG ───────────────────────────────────────────────────────────
 async function loadAdminSVG() {
@@ -58,6 +72,7 @@ async function loadAdminSVG() {
     svgDoc.setAttribute('height', '100%');
     tagAdminBooths(boothData);
     lucide.createIcons();
+    initAdminPanZoom();
   } catch (e) {
     mount.innerHTML = '<p style="color:#f87171;padding:20px">Failed to load.</p>';
   }

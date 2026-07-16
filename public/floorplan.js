@@ -7,19 +7,33 @@ let selectedId = null;
 let svgDoc = null;
 let boothData = {};
 
-// ─── Zoom / Pan ───────────────────────────────────────────────────────────────
-let scale = 1, panX = 0, panY = 0, isPanning = false, startX = 0, startY = 0;
+// ─── Zoom / Pan (via panzoom) ─────────────────────────────────────────────────
 const frame  = document.getElementById('map-frame');
 const inner  = document.getElementById('map-inner');
 
-function applyTransform() { inner.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`; }
-document.getElementById('zoom-in').addEventListener('click',    () => { scale = Math.min(scale * 1.25, 8); applyTransform(); });
-document.getElementById('zoom-out').addEventListener('click',   () => { scale = Math.max(scale / 1.25, 0.3); applyTransform(); });
-document.getElementById('zoom-reset').addEventListener('click', () => { scale = 1; panX = 0; panY = 0; applyTransform(); });
-frame.addEventListener('mousedown', e => { isPanning = true; startX = e.clientX - panX; startY = e.clientY - panY; frame.style.cursor = 'grabbing'; });
-document.addEventListener('mouseup', () => { isPanning = false; frame.style.cursor = 'grab'; });
-document.addEventListener('mousemove', e => { if (!isPanning) return; panX = e.clientX - startX; panY = e.clientY - startY; applyTransform(); });
-frame.addEventListener('wheel', e => { e.preventDefault(); scale = Math.min(Math.max(scale * (e.deltaY > 0 ? 0.9 : 1.1), 0.3), 8); applyTransform(); }, { passive: false });
+let pz;
+function initPanZoom() {
+  pz = panzoom(inner, {
+    maxZoom: 8,
+    minZoom: 0.3,
+    bounds: true,
+    boundsPadding: 0.1,
+    zoomDoubleClickSpeed: 1 // disable double click zoom to avoid conflict with clicks
+  });
+  
+  document.getElementById('zoom-in').addEventListener('click', () => {
+    const r = frame.getBoundingClientRect();
+    pz.smoothZoom(r.width/2, r.height/2, 1.5);
+  });
+  document.getElementById('zoom-out').addEventListener('click', () => {
+    const r = frame.getBoundingClientRect();
+    pz.smoothZoom(r.width/2, r.height/2, 0.66);
+  });
+  document.getElementById('zoom-reset').addEventListener('click', () => {
+    pz.moveTo(0, 0);
+    pz.zoomAbs(0, 0, 1);
+  });
+}
 
 // ─── Load SVG + Data ──────────────────────────────────────────────────────────
 async function load() {
@@ -36,6 +50,7 @@ async function load() {
     svgDoc.setAttribute('height', '100%');
     tagBooths();
     lucide.createIcons();
+    initPanZoom();
   } catch (e) {
     mount.innerHTML = '<p style="color:#f87171;padding:20px">Failed to load floorplan.</p>';
   }
