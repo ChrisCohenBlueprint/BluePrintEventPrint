@@ -12,6 +12,27 @@ const PORT   = process.env.PORT || 3000;
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.get('/', (_, res) => res.redirect('/floorplan'));
 
+// ─── Admin Authentication ─────────────────────────────────────────────────────
+function adminAuth(req, res, next) {
+  if (!req.path.startsWith('/admin') && !['/admin.html', '/admin.js', '/admin.css'].includes(req.path)) {
+    return next();
+  }
+  
+  const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
+  const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
+  
+  const envUser = process.env.ADMIN_USER || 'admin';
+  const envPass = process.env.ADMIN_PASS || 'password';
+  
+  if (login && password && login === envUser && password === envPass) {
+    return next();
+  }
+  
+  res.set('WWW-Authenticate', 'Basic realm="401"');
+  res.status(401).send('Authentication required.');
+}
+app.use(adminAuth);
+
 // ─── Serve static files ───────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
