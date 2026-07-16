@@ -36,10 +36,12 @@ function initBoothState() {
   Object.values(boothDataRaw).forEach(b => {
     boothState[b.boothId] = {
       boothId:  b.boothId,
-      status:   b.status,   // 'available' | 'sold' | 'held'
+      status:   b.status,
       sqm:      b.sqm,
-      price:    b.price,    // €600 × sqm
+      price:    b.price,
       company:  null,
+      actualPrice: null,  // the real negotiated price
+      notes:    '',       // deal notes, admin only
       viewers:  0,
       clicks:   0,
       clickHistory: [],
@@ -69,6 +71,8 @@ function loadSavedState() {
         if (boothState[id]) {
           boothState[id].status      = saved[id].status;
           boothState[id].company     = saved[id].company;
+          boothState[id].actualPrice = saved[id].actualPrice ?? null;
+          boothState[id].notes       = saved[id].notes       ?? '';
           boothState[id].clicks      = saved[id].clicks      ?? 0;
           boothState[id].clickHistory= saved[id].clickHistory ?? [];
         }
@@ -217,6 +221,17 @@ io.on('connection', (socket) => {
     broadcastState();
     broadcastLog(`🔗 Stands ${primary.replace('booth-','')} & ${secondary.replace('booth-','')} consolidated → ${b1.sqm}m²`, 'system');
     io.emit('booth:consolidated', { primary, secondary });
+  });
+
+  // ── Update deal price + notes (admin only) ───────────────────────────────────────
+  socket.on('booth:update-deal', ({ boothId, actualPrice, notes }) => {
+    const b = boothState[boothId];
+    if (!b) return;
+    b.actualPrice = actualPrice !== undefined ? actualPrice : b.actualPrice;
+    b.notes       = notes       !== undefined ? notes       : b.notes;
+    saveState();
+    broadcastState();
+    broadcastLog(`📝 Deal updated for Stand ${boothId.replace('booth-','')} — €${actualPrice?.toLocaleString() || 'n/a'}`, 'admin');
   });
 
   // ── Admin: force-set booth status ─────────────────────────────────────────────

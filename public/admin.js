@@ -204,6 +204,18 @@ function renderAdminBoothAction(id) {
   document.getElementById('aba-hold').onclick    = () => socket.emit('booth:hold',    { boothId: id, company: prompt('Company name:') || 'Pending' });
   document.getElementById('aba-release').onclick = () => socket.emit('booth:release', { boothId: id });
   document.getElementById('aba-export').onclick  = () => exportSingleCSV(id);
+
+  // Deal details
+  document.getElementById('aba-actual-price').value = b.actualPrice ?? '';
+  document.getElementById('aba-notes').value         = b.notes       ?? '';
+  document.getElementById('aba-save-deal').onclick  = () => {
+    const actualPrice = parseFloat(document.getElementById('aba-actual-price').value) || null;
+    const notes       = document.getElementById('aba-notes').value.trim();
+    socket.emit('booth:update-deal', { boothId: id, actualPrice, notes });
+    const btn = document.getElementById('aba-save-deal');
+    btn.textContent = '✅ Saved!';
+    setTimeout(() => { btn.textContent = '💾 Save Deal Details'; }, 2000);
+  };
 }
 
 // ─── Bookings Table ───────────────────────────────────────────────────────────
@@ -225,8 +237,10 @@ function renderBookingsTable() {
       <td><strong>Stand ${b.boothId.replace('booth-','')}</strong></td>
       <td>${b.sqm} m²</td>
       <td>€${b.price?.toLocaleString()}</td>
+      <td>${b.actualPrice ? `<strong style="color:var(--green)">€${Number(b.actualPrice).toLocaleString()}</strong>` : '<span style="color:var(--muted)">—</span>'}</td>
       <td><span class="status-pill pill-${b.status}">${cap(b.status)}</span></td>
       <td>${b.company || '<span style="color:var(--muted)">—</span>'}</td>
+      <td style="max-width:180px; font-size:11px; color:var(--muted); white-space:pre-wrap;">${b.notes ? b.notes : '—'}</td>
       <td style="display:flex;gap:6px;flex-wrap:wrap;">
         ${b.status !== 'sold' ? `<button class="admin-btn success" style="font-size:11px;padding:5px 10px" onclick="adminAction('book','${b.boothId}')">Book</button>` : ''}
         ${b.status === 'available' ? `<button class="admin-btn warning" style="font-size:11px;padding:5px 10px" onclick="adminAction('hold','${b.boothId}')">Hold</button>` : ''}
@@ -250,15 +264,17 @@ document.getElementById('bookings-filter').addEventListener('change', renderBook
 // ─── CSV Export ───────────────────────────────────────────────────────────────
 function downloadCSV(dataArray, filename) {
   if (!dataArray || dataArray.length === 0) return;
-  const headers = ['Stand', 'Size (m2)', 'Price (EUR)', 'Status', 'Company', 'Live Viewers', 'Total Clicks'];
+  const headers = ['Stand', 'Size (m2)', 'Listed Price (EUR)', 'Deal Price (EUR)', 'Status', 'Company', 'Notes', 'Live Viewers', 'Total Clicks'];
   const rows = dataArray.map(b => [
     b.boothId.replace('booth-', ''),
     b.sqm,
     b.price || 0,
+    b.actualPrice ?? '',
     b.status,
     `"${(b.company || '').replace(/"/g, '""')}"`,
+    `"${(b.notes   || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
     b.viewers || 0,
-    b.clicks || 0
+    b.clicks  || 0
   ]);
   
   const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');

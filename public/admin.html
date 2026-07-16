@@ -183,6 +183,19 @@
           <button class="admin-btn warning" id="aba-hold">⏳ Put on Hold</button>
           <button class="admin-btn" id="aba-release">🔓 Release</button>
         </div>
+        <!-- Deal details — admin only -->
+        <div class="aba-deal-section" id="aba-deal-section" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+          <div style="font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Deal Details</div>
+          <div style="margin-bottom:8px;">
+            <label style="font-size:11px; color:var(--muted); display:block; margin-bottom:4px;">Actual Sale Price (€)</label>
+            <input type="number" id="aba-actual-price" class="admin-input" placeholder="e.g. 18500" style="width:100%; font-size:13px;">
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="font-size:11px; color:var(--muted); display:block; margin-bottom:4px;">Notes</label>
+            <textarea id="aba-notes" class="admin-input" rows="3" placeholder="e.g. 10% discount agreed, invoice due Sept…" style="width:100%; font-size:13px; resize:vertical;"></textarea>
+          </div>
+          <button class="admin-btn success" id="aba-save-deal" style="width:100%;">💾 Save Deal Details</button>
+        </div>
         <button class="admin-btn" id="aba-export" style="width:100%; margin-top:8px;">⬇️ Export to CSV</button>
       </div>
     </section>
@@ -207,9 +220,11 @@
             <tr>
               <th>Stand</th>
               <th>Size (m²)</th>
-              <th>Price</th>
+              <th>Listed Price</th>
+              <th>Deal Price</th>
               <th>Status</th>
               <th>Company</th>
+              <th>Notes</th>
               <th>Actions</th>
             </tr>
           </thead>
