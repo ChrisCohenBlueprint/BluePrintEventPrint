@@ -48,7 +48,40 @@ function initBoothState() {
   });
 }
 
+// ─── Persistence ─────────────────────────────────────────────────────────────
+const statePath = path.join(__dirname, 'booth_state.json');
+
+function saveState() {
+  try {
+    fs.writeFileSync(statePath, JSON.stringify(boothState, null, 2));
+  } catch (e) {
+    console.error('Failed to save booth state:', e.message);
+  }
+}
+
+function loadSavedState() {
+  try {
+    if (fs.existsSync(statePath)) {
+      const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      // Merge saved status/company/clicks over the freshly-initialised state
+      // (so new booths from an updated SVG still appear, but existing bookings are preserved)
+      Object.keys(saved).forEach(id => {
+        if (boothState[id]) {
+          boothState[id].status      = saved[id].status;
+          boothState[id].company     = saved[id].company;
+          boothState[id].clicks      = saved[id].clicks      ?? 0;
+          boothState[id].clickHistory= saved[id].clickHistory ?? [];
+        }
+      });
+      console.log('✅ Restored booth state from disk');
+    }
+  } catch (e) {
+    console.warn('Could not load saved state:', e.message);
+  }
+}
+
 initBoothState();
+loadSavedState(); // overlay any previously saved bookings
 
 // ─── Viewer tracking: socketId → boothId ──────────────────────────────────────
 const activeViewers = {}; // { socketId: boothId }
@@ -126,6 +159,7 @@ io.on('connection', (socket) => {
       b.clickHistory.unshift({ time: new Date().toISOString(), location: location || 'Unknown' });
       // Keep only last 20 clicks to prevent unbound array growth
       if (b.clickHistory.length > 20) b.clickHistory.pop();
+      saveState();
       broadcastState();
     }
   });
@@ -136,6 +170,7 @@ io.on('connection', (socket) => {
     if (!b || b.status === 'sold') return;
     b.status  = 'sold';
     b.company = company;
+    saveState();
     broadcastState();
     broadcastLog(`✅ <strong>${company}</strong> booked Stand ${boothId.replace('booth-','')} (${b.sqm}m² — €${b.price.toLocaleString()})`, 'booking');
     socket.emit('booth:updated', b);
@@ -147,6 +182,7 @@ io.on('connection', (socket) => {
     if (!b || b.status === 'sold') return;
     b.status  = 'held';
     b.company = company || 'Pending';
+    saveState();
     broadcastState();
     broadcastLog(`⏳ Stand ${boothId.replace('booth-','')} placed on hold for ${b.company}`, 'hold');
     socket.emit('booth:updated', b);
@@ -159,6 +195,7 @@ io.on('connection', (socket) => {
     const prev = b.company;
     b.status  = 'available';
     b.company = null;
+    saveState();
     broadcastState();
     broadcastLog(`🔓 Stand ${boothId.replace('booth-','')} released${prev ? ` (was: ${prev})` : ''}`, 'release');
     socket.emit('booth:updated', b);
@@ -176,7 +213,7 @@ io.on('connection', (socket) => {
 
     // Remove secondary from state
     delete boothState[secondary];
-
+    saveState();
     broadcastState();
     broadcastLog(`🔗 Stands ${primary.replace('booth-','')} & ${secondary.replace('booth-','')} consolidated → ${b1.sqm}m²`, 'system');
     io.emit('booth:consolidated', { primary, secondary });
@@ -188,6 +225,7 @@ io.on('connection', (socket) => {
     if (!b) return;
     b.status  = status;
     b.company = company || null;
+    saveState();
     broadcastState();
     broadcastLog(`🛠 Admin set Stand ${boothId.replace('booth-','')} → ${status}`, 'admin');
   });
@@ -195,6 +233,7 @@ io.on('connection', (socket) => {
   // ── Reset to initial extracted state ──────────────────────────────────────────
   socket.on('demo:reset', () => {
     initBoothState();
+    saveState();
     broadcastState();
     broadcastLog('🔄 Floorplan reset to original state', 'system');
   });

@@ -178,13 +178,14 @@ function renderPanel(id) {
   // Wire form
   const form = document.getElementById('enquiry-form');
   document.getElementById('hold-btn').onclick = () => {
-    const company = document.getElementById('eq-company').value.trim() || 'Enquiry';
-    if (!company) return;
+    const company = document.getElementById('eq-company').value.trim();
+    if (!company) { document.getElementById('eq-company').focus(); return; }
     socket.emit('booth:hold', { boothId: id, company });
   };
   form.onsubmit = e => {
     e.preventDefault();
     const company = document.getElementById('eq-company').value.trim();
+    if (!company) { document.getElementById('eq-company').focus(); return; }
     socket.emit('booth:book', { boothId: id, company });
   };
 }
