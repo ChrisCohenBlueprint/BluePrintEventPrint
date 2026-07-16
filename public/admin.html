@@ -183,19 +183,23 @@
           <button class="admin-btn warning" id="aba-hold">⏳ Put on Hold</button>
           <button class="admin-btn" id="aba-release">🔓 Release</button>
         </div>
+        <button class="admin-btn" id="aba-export" style="width:100%; margin-top:8px;">⬇️ Export to CSV</button>
       </div>
     </section>
 
     <!-- ═══ SECTION: BOOKINGS ════════════════════════════════════════════════ -->
     <section class="admin-section" id="section-bookings">
       <div class="bookings-toolbar">
-        <input type="text" id="bookings-search" class="admin-input" placeholder="🔍  Search by company or stand…">
-        <select id="bookings-filter" class="admin-select">
-          <option value="all">All statuses</option>
-          <option value="sold">Booked</option>
-          <option value="held">On Hold</option>
-          <option value="available">Available</option>
-        </select>
+        <div style="display:flex; gap:12px; flex:1">
+          <input type="text" id="bookings-search" class="admin-input" placeholder="🔍  Search by company or stand…">
+          <select id="bookings-filter" class="admin-select">
+            <option value="all">All statuses</option>
+            <option value="sold">Booked</option>
+            <option value="held">On Hold</option>
+            <option value="available">Available</option>
+          </select>
+        </div>
+        <button id="export-all-csv" class="admin-btn success">⬇️ Export CSV</button>
       </div>
       <div class="bookings-table-wrap">
         <table class="bookings-table">

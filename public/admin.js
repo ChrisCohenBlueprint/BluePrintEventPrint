@@ -190,6 +190,7 @@ function renderAdminBoothAction(id) {
   document.getElementById('aba-book').onclick    = () => socket.emit('booth:book',    { boothId: id, company: prompt('Company name:') || 'Admin' });
   document.getElementById('aba-hold').onclick    = () => socket.emit('booth:hold',    { boothId: id, company: prompt('Company name:') || 'Pending' });
   document.getElementById('aba-release').onclick = () => socket.emit('booth:release', { boothId: id });
+  document.getElementById('aba-export').onclick  = () => exportSingleCSV(id);
 }
 
 // ─── Bookings Table ───────────────────────────────────────────────────────────
@@ -213,10 +214,11 @@ function renderBookingsTable() {
       <td>€${b.price?.toLocaleString()}</td>
       <td><span class="status-pill pill-${b.status}">${cap(b.status)}</span></td>
       <td>${b.company || '<span style="color:var(--muted)">—</span>'}</td>
-      <td style="display:flex;gap:6px">
+      <td style="display:flex;gap:6px;flex-wrap:wrap;">
         ${b.status !== 'sold' ? `<button class="admin-btn success" style="font-size:11px;padding:5px 10px" onclick="adminAction('book','${b.boothId}')">Book</button>` : ''}
         ${b.status === 'available' ? `<button class="admin-btn warning" style="font-size:11px;padding:5px 10px" onclick="adminAction('hold','${b.boothId}')">Hold</button>` : ''}
         ${b.status !== 'available' ? `<button class="admin-btn" style="font-size:11px;padding:5px 10px" onclick="adminAction('release','${b.boothId}')">Release</button>` : ''}
+        <button class="admin-btn" style="font-size:11px;padding:5px 10px;background:var(--glass-bg);border:1px solid var(--border);" onclick="exportSingleCSV('${b.boothId}')">⬇️ CSV</button>
       </td>
     </tr>`).join('');
 }
@@ -231,6 +233,51 @@ window.adminAction = adminAction;
 // Search/filter live update
 document.getElementById('bookings-search').addEventListener('input', renderBookingsTable);
 document.getElementById('bookings-filter').addEventListener('change', renderBookingsTable);
+
+// ─── CSV Export ───────────────────────────────────────────────────────────────
+function downloadCSV(dataArray, filename) {
+  if (!dataArray || dataArray.length === 0) return;
+  const headers = ['Stand', 'Size (m2)', 'Price (EUR)', 'Status', 'Company', 'Live Viewers', 'Total Clicks'];
+  const rows = dataArray.map(b => [
+    b.boothId.replace('booth-', ''),
+    b.sqm,
+    b.price || 0,
+    b.status,
+    `"${(b.company || '').replace(/"/g, '""')}"`,
+    b.viewers || 0,
+    b.clicks || 0
+  ]);
+  
+  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+document.getElementById('export-all-csv').onclick = () => {
+  const search = document.getElementById('bookings-search').value.toLowerCase();
+  const filter = document.getElementById('bookings-filter').value;
+  
+  let rows = Object.values(booths).filter(b => {
+    const matchFilter = filter === 'all' || b.status === filter;
+    const matchSearch = !search || b.boothId.toLowerCase().includes(search) || (b.company || '').toLowerCase().includes(search);
+    return matchFilter && matchSearch;
+  });
+  
+  downloadCSV(rows, 'blueprint_stands_export.csv');
+};
+
+function exportSingleCSV(boothId) {
+  if (booths[boothId]) downloadCSV([booths[boothId]], `stand_${boothId.replace('booth-', '')}_export.csv`);
+}
+window.exportSingleCSV = exportSingleCSV;
 
 // ─── Populate Tool Dropdowns ──────────────────────────────────────────────────
 function populateToolDropdowns() {
