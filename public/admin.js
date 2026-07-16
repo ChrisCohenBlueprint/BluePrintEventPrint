@@ -83,6 +83,20 @@ function tagAdminBooths(boothData) {
   const takenEls = svgDoc.querySelectorAll('.cls-11, .cls-14');
   let idx = 1;
 
+  function addAdminTap(el, callback) {
+    let startX, startY;
+    el.addEventListener('pointerdown', e => {
+      startX = e.clientX;
+      startY = e.clientY;
+    });
+    el.addEventListener('pointerup', e => {
+      if (Math.abs(e.clientX - startX) < 10 && Math.abs(e.clientY - startY) < 10) {
+        e.stopPropagation();
+        callback();
+      }
+    });
+  }
+
   availEls.forEach(el => {
     const id = `booth-${String(idx).padStart(3, '0')}`;
     const bd = boothData[id];
@@ -92,7 +106,7 @@ function tagAdminBooths(boothData) {
     el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
     el.addEventListener('mousemove', e => moveAdminTooltip(e));
     el.addEventListener('mouseleave', () => hideAdminTooltip());
-    el.addEventListener('click', e => { e.stopPropagation(); selectAdminBooth(id); });
+    addAdminTap(el, () => selectAdminBooth(id));
     idx++;
   });
 
@@ -104,7 +118,7 @@ function tagAdminBooths(boothData) {
     el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
     el.addEventListener('mousemove', e => moveAdminTooltip(e));
     el.addEventListener('mouseleave', () => hideAdminTooltip());
-    el.addEventListener('click', e => { e.stopPropagation(); selectAdminBooth(id); });
+    addAdminTap(el, () => selectAdminBooth(id));
     idx++;
   });
 }

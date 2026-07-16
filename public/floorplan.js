@@ -59,18 +59,16 @@ async function load() {
 // ─── Tag Booths ───────────────────────────────────────────────────────────────
 const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
 
-// Tap detection helper — fires callback only if finger moved < 12px (tap, not pan)
+// Tap detection helper — fires callback only if pointer moved < 10px (tap, not pan)
+// Uses pointer events to seamlessly support both mouse (desktop) and touch (iPad)
 function addTapListener(el, callback) {
   let startX, startY;
-  el.addEventListener('touchstart', e => {
-    startX = e.touches[0].clientX;
-    startY = e.touches[0].clientY;
-  }, { passive: true });
-  el.addEventListener('touchend', e => {
-    const dx = Math.abs(e.changedTouches[0].clientX - startX);
-    const dy = Math.abs(e.changedTouches[0].clientY - startY);
-    if (dx < 12 && dy < 12) {
-      e.preventDefault(); // stop the 300ms ghost click
+  el.addEventListener('pointerdown', e => {
+    startX = e.clientX;
+    startY = e.clientY;
+  });
+  el.addEventListener('pointerup', e => {
+    if (Math.abs(e.clientX - startX) < 10 && Math.abs(e.clientY - startY) < 10) {
       e.stopPropagation();
       callback();
     }
@@ -95,12 +93,12 @@ function tagBooths() {
       viewers: 0
     };
 
-    // Mouse events (desktop)
+    // Hover events (desktop)
     el.addEventListener('mouseenter', e => showTooltip(e, id));
     el.addEventListener('mousemove',  e => moveTooltip(e));
     el.addEventListener('mouseleave', () => hideTooltip());
-    el.addEventListener('click',      e => { e.stopPropagation(); selectBooth(id); });
-    // Touch events (iPad / iPhone)
+    
+    // Unified tap/click listener (handles both desktop mouse click and iPad touch)
     addTapListener(el, () => { hideTooltip(); selectBooth(id); });
     idx++;
   });
@@ -113,8 +111,6 @@ function tagBooths() {
     el.addEventListener('mouseenter', e => showTooltip(e, id));
     el.addEventListener('mousemove',  e => moveTooltip(e));
     el.addEventListener('mouseleave', () => hideTooltip());
-    el.addEventListener('click',      e => { e.stopPropagation(); selectBooth(id); });
-    // Touch events (iPad / iPhone)
     addTapListener(el, () => { hideTooltip(); selectBooth(id); });
     idx++;
   });

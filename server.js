@@ -9,12 +9,13 @@ const server = http.createServer(app);
 const io     = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
 const PORT   = process.env.PORT || 3000;
 
+// ─── Routes ───────────────────────────────────────────────────────────────────
+app.get('/', (_, res) => res.redirect('/floorplan'));
+
 // ─── Serve static files ───────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-app.get('/',          (_, res) => res.redirect('/floorplan'));
 app.get('/floorplan', (_, res) => res.sendFile(path.join(__dirname, 'public', 'floorplan.html')));
 app.get('/admin',     (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
