@@ -57,6 +57,26 @@ async function load() {
 }
 
 // ─── Tag Booths ───────────────────────────────────────────────────────────────
+const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
+
+// Tap detection helper — fires callback only if finger moved < 12px (tap, not pan)
+function addTapListener(el, callback) {
+  let startX, startY;
+  el.addEventListener('touchstart', e => {
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+  }, { passive: true });
+  el.addEventListener('touchend', e => {
+    const dx = Math.abs(e.changedTouches[0].clientX - startX);
+    const dy = Math.abs(e.changedTouches[0].clientY - startY);
+    if (dx < 12 && dy < 12) {
+      e.preventDefault(); // stop the 300ms ghost click
+      e.stopPropagation();
+      callback();
+    }
+  });
+}
+
 function tagBooths() {
   const availEls = svgDoc.querySelectorAll('.cls-13');
   const takenEls = svgDoc.querySelectorAll('.cls-11, .cls-14');
@@ -75,10 +95,13 @@ function tagBooths() {
       viewers: 0
     };
 
+    // Mouse events (desktop)
     el.addEventListener('mouseenter', e => showTooltip(e, id));
     el.addEventListener('mousemove',  e => moveTooltip(e));
     el.addEventListener('mouseleave', () => hideTooltip());
     el.addEventListener('click',      e => { e.stopPropagation(); selectBooth(id); });
+    // Touch events (iPad / iPhone)
+    addTapListener(el, () => { hideTooltip(); selectBooth(id); });
     idx++;
   });
 
@@ -90,6 +113,9 @@ function tagBooths() {
     el.addEventListener('mouseenter', e => showTooltip(e, id));
     el.addEventListener('mousemove',  e => moveTooltip(e));
     el.addEventListener('mouseleave', () => hideTooltip());
+    el.addEventListener('click',      e => { e.stopPropagation(); selectBooth(id); });
+    // Touch events (iPad / iPhone)
+    addTapListener(el, () => { hideTooltip(); selectBooth(id); });
     idx++;
   });
 }
@@ -131,6 +157,13 @@ function selectBooth(id) {
   socket.emit('booth:click', { boothId: id, location: loc });
   
   renderPanel(id);
+
+  // On touch (iPad/phone) — scroll panel into view automatically
+  if (window.matchMedia('(pointer: coarse)').matches) {
+    setTimeout(() => {
+      document.getElementById('booth-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  }
 }
 
 function renderPanel(id) {

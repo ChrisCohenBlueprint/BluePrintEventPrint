@@ -280,7 +280,32 @@ body {
 .spin-icon { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-@media (max-width: 768px) {
-  .fp-side { display: none; }
+/* ── iPad / tablet ─────────────────────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .fp-layout {
+    flex-direction: column;
+    height: auto;
+    overflow: visible;
+  }
+  .fp-map {
+    height: 60vh;
+    min-height: 400px;
+    flex: none;
+  }
+  .fp-side {
+    width: 100%;
+    height: auto;
+    max-height: none;
+    overflow-y: visible;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
   body { overflow: auto; }
+}
+
+/* ── Phone ─────────────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .fp-map { height: 50vh; }
+  .fp-header { padding: 12px 16px; }
+  .fp-stats-strip { gap: 12px; padding: 10px 16px; }
 }

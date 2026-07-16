@@ -83,6 +83,17 @@ function tagAdminBooths(boothData) {
   const takenEls = svgDoc.querySelectorAll('.cls-11, .cls-14');
   let idx = 1;
 
+  // Tap helper — distinguishes tap (<12px movement) from pan
+  function addAdminTap(el, id) {
+    let sx, sy;
+    el.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+    el.addEventListener('touchend', e => {
+      const dx = Math.abs(e.changedTouches[0].clientX - sx);
+      const dy = Math.abs(e.changedTouches[0].clientY - sy);
+      if (dx < 12 && dy < 12) { e.preventDefault(); e.stopPropagation(); selectAdminBooth(id); }
+    });
+  }
+
   availEls.forEach(el => {
     const id = `booth-${String(idx).padStart(3,'0')}`;
     const bd = boothData[id];
@@ -93,6 +104,7 @@ function tagAdminBooths(boothData) {
     el.addEventListener('mousemove',  e => moveAdminTooltip(e));
     el.addEventListener('mouseleave', () => hideAdminTooltip());
     el.addEventListener('click', e => { e.stopPropagation(); selectAdminBooth(id); });
+    addAdminTap(el, id);
     idx++;
   });
 
@@ -105,6 +117,7 @@ function tagAdminBooths(boothData) {
     el.addEventListener('mousemove',  e => moveAdminTooltip(e));
     el.addEventListener('mouseleave', () => hideAdminTooltip());
     el.addEventListener('click', e => { e.stopPropagation(); selectAdminBooth(id); });
+    addAdminTap(el, id);
     idx++;
   });
 }
