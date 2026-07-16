@@ -238,10 +238,14 @@ function renderBookingsTable() {
       <td><strong>Stand ${b.boothId.replace('booth-', '')}</strong></td>
       <td>${b.sqm} m²</td>
       <td>€${b.price?.toLocaleString()}</td>
-      <td>${b.actualPrice ? `<strong style="color:var(--green)">€${Number(b.actualPrice).toLocaleString()}</strong>` : '<span style="color:var(--muted)">—</span>'}</td>
+      <td>
+        <input type="number" class="admin-input" placeholder="Price..." value="${b.actualPrice || ''}" style="width:80px; padding:4px 8px; font-size:12px; background:var(--bg);" onchange="inlineUpdateDeal('${b.boothId}', 'price', this.value)">
+      </td>
       <td><span class="status-pill pill-${b.status}">${cap(b.status)}</span></td>
       <td>${b.company || '<span style="color:var(--muted)">—</span>'}</td>
-      <td style="max-width:180px; font-size:11px; color:var(--muted); white-space:pre-wrap;">${b.notes ? b.notes : '—'}</td>
+      <td>
+        <input type="text" class="admin-input" placeholder="Notes..." value="${b.notes || ''}" style="width:140px; padding:4px 8px; font-size:12px; background:var(--bg);" onchange="inlineUpdateDeal('${b.boothId}', 'notes', this.value)">
+      </td>
       <td style="display:flex;gap:6px;flex-wrap:wrap;">
         ${b.status !== 'sold' ? `<button class="admin-btn success" style="font-size:11px;padding:5px 10px" onclick="adminAction('book','${b.boothId}')">Book</button>` : ''}
         ${b.status === 'available' ? `<button class="admin-btn warning" style="font-size:11px;padding:5px 10px" onclick="adminAction('hold','${b.boothId}')">Hold</button>` : ''}
@@ -257,6 +261,15 @@ function adminAction(action, boothId) {
   if (action === 'release') socket.emit('booth:release', { boothId });
 }
 window.adminAction = adminAction;
+
+function inlineUpdateDeal(boothId, field, value) {
+  const b = booths[boothId];
+  if (!b) return;
+  const actualPrice = field === 'price' ? (parseFloat(value) || null) : b.actualPrice;
+  const notes = field === 'notes' ? value : b.notes;
+  socket.emit('booth:update-deal', { boothId, actualPrice, notes });
+}
+window.inlineUpdateDeal = inlineUpdateDeal;
 
 // Search/filter live update
 document.getElementById('bookings-search').addEventListener('input', renderBookingsTable);
