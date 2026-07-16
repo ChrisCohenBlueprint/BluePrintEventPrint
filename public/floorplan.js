@@ -8,8 +8,8 @@ let svgDoc = null;
 let boothData = {};
 
 // ─── Zoom / Pan (via panzoom) ─────────────────────────────────────────────────
-const frame  = document.getElementById('map-frame');
-const inner  = document.getElementById('map-inner');
+const frame = document.getElementById('map-frame');
+const inner = document.getElementById('map-inner');
 
 let pz;
 function initPanZoom() {
@@ -20,14 +20,14 @@ function initPanZoom() {
     boundsPadding: 0.1,
     zoomDoubleClickSpeed: 1 // disable double click zoom to avoid conflict with clicks
   });
-  
+
   document.getElementById('zoom-in').addEventListener('click', () => {
     const r = frame.getBoundingClientRect();
-    pz.smoothZoom(r.width/2, r.height/2, 1.5);
+    pz.smoothZoom(r.width / 2, r.height / 2, 1.5);
   });
   document.getElementById('zoom-out').addEventListener('click', () => {
     const r = frame.getBoundingClientRect();
-    pz.smoothZoom(r.width/2, r.height/2, 0.66);
+    pz.smoothZoom(r.width / 2, r.height / 2, 0.66);
   });
   document.getElementById('zoom-reset').addEventListener('click', () => {
     pz.moveTo(0, 0);
@@ -63,32 +63,32 @@ function tagBooths() {
   let idx = 1;
 
   availEls.forEach(el => {
-    const id = `booth-${String(idx).padStart(3,'0')}`;
+    const id = `booth-${String(idx).padStart(3, '0')}`;
     const bd = boothData[id];
     el.setAttribute('data-id', id);
     el.classList.add('booth-interactive', 'booth-available');
 
     booths[id] = {
       id, status: 'available', company: null,
-      sqm:   bd?.sqm   ?? estimateSqm(el),
+      sqm: bd?.sqm ?? estimateSqm(el),
       price: bd?.price ?? estimateSqm(el) * PRICE_PER_SQM,
       viewers: 0
     };
 
     el.addEventListener('mouseenter', e => showTooltip(e, id));
-    el.addEventListener('mousemove',  e => moveTooltip(e));
+    el.addEventListener('mousemove', e => moveTooltip(e));
     el.addEventListener('mouseleave', () => hideTooltip());
-    el.addEventListener('click',      e => { e.stopPropagation(); selectBooth(id); });
+    el.addEventListener('click', e => { e.stopPropagation(); selectBooth(id); });
     idx++;
   });
 
   takenEls.forEach(el => {
-    const id = `booth-${String(idx).padStart(3,'0')}`;
+    const id = `booth-${String(idx).padStart(3, '0')}`;
     el.setAttribute('data-id', id);
     el.classList.add('booth-taken-orig', 'booth-sold');
     booths[id] = { id, status: 'sold', company: 'Reserved', sqm: estimateSqm(el), price: 0, viewers: 0 };
     el.addEventListener('mouseenter', e => showTooltip(e, id));
-    el.addEventListener('mousemove',  e => moveTooltip(e));
+    el.addEventListener('mousemove', e => moveTooltip(e));
     el.addEventListener('mouseleave', () => hideTooltip());
     idx++;
   });
@@ -103,16 +103,16 @@ function estimateSqm(el) {
 const tooltip = document.getElementById('fp-tooltip');
 function showTooltip(e, id) {
   const b = booths[id];
-  document.getElementById('tt-label').textContent  = `Stand ${id.replace('booth-','')}`;
+  document.getElementById('tt-label').textContent = `Stand ${id.replace('booth-', '')}`;
   document.getElementById('tt-status').textContent = cap(b.status);
-  document.getElementById('tt-price').textContent  = b.status === 'available' ? `${b.sqm} m²` : '';
+  document.getElementById('tt-price').textContent = b.status === 'available' ? `${b.sqm} m²` : '';
   tooltip.classList.remove('hidden');
   moveTooltip(e);
 }
 function moveTooltip(e) {
   const r = frame.getBoundingClientRect();
   tooltip.style.left = (e.clientX - r.left + 14) + 'px';
-  tooltip.style.top  = (e.clientY - r.top  - 10) + 'px';
+  tooltip.style.top = (e.clientY - r.top - 10) + 'px';
 }
 function hideTooltip() { tooltip.classList.add('hidden'); }
 
@@ -124,19 +124,19 @@ function selectBooth(id) {
   selectedId = id;
   svgDoc.querySelector(`[data-id="${id}"]`)?.classList.add('booth-selected');
   socket.emit('booth:view', { boothId: id });
-  
+
   // Track click with approximate location (timezone)
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
   const loc = tz ? tz.split('/')[1]?.replace('_', ' ') || tz : 'Unknown Location';
   socket.emit('booth:click', { boothId: id, location: loc });
-  
+
   renderPanel(id);
 }
 
 function renderPanel(id) {
   const b = booths[id];
   const panel = document.getElementById('booth-panel');
-  const eq    = document.getElementById('enquiry-card');
+  const eq = document.getElementById('enquiry-card');
 
   if (b.status !== 'available') {
     // Show taken notice
@@ -144,7 +144,7 @@ function renderPanel(id) {
     eq.classList.add('hidden');
     panel.innerHTML = `
       <div class="stand-header">
-        <div class="stand-id">Stand ${id.replace('booth-','')}</div>
+        <div class="stand-id">Stand ${id.replace('booth-', '')}</div>
         <div class="stand-badge badge-${b.status}">${cap(b.status)}</div>
       </div>
       <div class="stand-stats">
@@ -164,7 +164,7 @@ function renderPanel(id) {
   eq.classList.remove('hidden');
   panel.innerHTML = `
     <div class="stand-header">
-      <div class="stand-id">Stand ${id.replace('booth-','')}</div>
+      <div class="stand-id">Stand ${id.replace('booth-', '')}</div>
       <div class="stand-badge badge-available">Available</div>
     </div>
     <div class="stand-stats">
@@ -212,7 +212,7 @@ socket.on('booth:updated', (b) => {
 
 socket.on('stats:updated', (stats) => {
   document.getElementById('avail-count').textContent = stats.availableBooths;
-  document.getElementById('avail-sqm').textContent   = stats.availSqm.toLocaleString();
+  document.getElementById('avail-sqm').textContent = stats.availSqm.toLocaleString();
   updateStatsStrip(stats);
 });
 
@@ -228,7 +228,7 @@ socket.on('booth:consolidated', ({ secondary }) => {
 function applyVisual(id) {
   const el = svgDoc?.querySelector(`[data-id="${id}"]`);
   if (!el) return;
-  el.classList.remove('booth-available','booth-sold','booth-held');
+  el.classList.remove('booth-available', 'booth-sold', 'booth-held');
   const status = booths[id]?.status || 'available';
   el.classList.add(`booth-${status}`);
 
@@ -252,7 +252,7 @@ function applyVisual(id) {
     const bbox = el.getBBox();
     textNode.setAttribute('x', bbox.x + bbox.width / 2);
     textNode.setAttribute('y', bbox.y + bbox.height / 2);
-    
+
     // Truncate if very long
     textNode.textContent = company.length > 20 ? company.substring(0, 18) + '...' : company;
   } else if (textNode) {
@@ -261,12 +261,12 @@ function applyVisual(id) {
 }
 
 function updateStatsStrip(stats) {
-  const all  = Object.values(booths);
+  const all = Object.values(booths);
   const avail = all.filter(b => b.status === 'available');
-  const held  = all.filter(b => b.status === 'held');
+  const held = all.filter(b => b.status === 'held');
   document.getElementById('stat-avail').textContent = avail.length;
-  document.getElementById('stat-sqm').textContent   = avail.reduce((s,b) => s+b.sqm, 0).toLocaleString();
-  document.getElementById('stat-held').textContent  = held.length;
+  document.getElementById('stat-sqm').textContent = avail.reduce((s, b) => s + b.sqm, 0).toLocaleString();
+  document.getElementById('stat-held').textContent = held.length;
 }
 
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }

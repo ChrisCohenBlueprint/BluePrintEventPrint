@@ -1,8 +1,8 @@
 // ─── BluePrint EventPrint — Admin Dashboard JS ────────────────────────────────
 const socket = io();
 
-let booths  = {};  // live state
-let svgDoc  = null;
+let booths = {};  // live state
+let svgDoc = null;
 let selectedAdminId = null;
 
 // ─── Section Navigation ───────────────────────────────────────────────────────
@@ -42,14 +42,14 @@ function initAdminPanZoom() {
     boundsPadding: 0.1,
     zoomDoubleClickSpeed: 1
   });
-  
+
   document.getElementById('admin-zoom-in').addEventListener('click', () => {
     const r = aFrame.getBoundingClientRect();
-    pzAdmin.smoothZoom(r.width/2, r.height/2, 1.5);
+    pzAdmin.smoothZoom(r.width / 2, r.height / 2, 1.5);
   });
   document.getElementById('admin-zoom-out').addEventListener('click', () => {
     const r = aFrame.getBoundingClientRect();
-    pzAdmin.smoothZoom(r.width/2, r.height/2, 0.66);
+    pzAdmin.smoothZoom(r.width / 2, r.height / 2, 0.66);
   });
   document.getElementById('admin-zoom-reset').addEventListener('click', () => {
     pzAdmin.moveTo(0, 0);
@@ -84,25 +84,25 @@ function tagAdminBooths(boothData) {
   let idx = 1;
 
   availEls.forEach(el => {
-    const id = `booth-${String(idx).padStart(3,'0')}`;
+    const id = `booth-${String(idx).padStart(3, '0')}`;
     const bd = boothData[id];
     el.setAttribute('data-id', id);
     el.classList.add('booth-interactive');
     applyAdminVisual(el, booths[id]?.status || 'available');
     el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
-    el.addEventListener('mousemove',  e => moveAdminTooltip(e));
+    el.addEventListener('mousemove', e => moveAdminTooltip(e));
     el.addEventListener('mouseleave', () => hideAdminTooltip());
     el.addEventListener('click', e => { e.stopPropagation(); selectAdminBooth(id); });
     idx++;
   });
 
   takenEls.forEach(el => {
-    const id = `booth-${String(idx).padStart(3,'0')}`;
+    const id = `booth-${String(idx).padStart(3, '0')}`;
     el.setAttribute('data-id', id);
     el.classList.add('booth-taken-orig');
     applyAdminVisual(el, booths[id]?.status || 'sold');
     el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
-    el.addEventListener('mousemove',  e => moveAdminTooltip(e));
+    el.addEventListener('mousemove', e => moveAdminTooltip(e));
     el.addEventListener('mouseleave', () => hideAdminTooltip());
     el.addEventListener('click', e => { e.stopPropagation(); selectAdminBooth(id); });
     idx++;
@@ -110,7 +110,7 @@ function tagAdminBooths(boothData) {
 }
 
 function applyAdminVisual(el, status) {
-  el.classList.remove('booth-available','booth-sold','booth-held');
+  el.classList.remove('booth-available', 'booth-sold', 'booth-held');
   el.classList.add(`booth-${status}`);
 
   const id = el.getAttribute('data-id');
@@ -133,7 +133,7 @@ function applyAdminVisual(el, status) {
     const bbox = el.getBBox();
     textNode.setAttribute('x', bbox.x + bbox.width / 2);
     textNode.setAttribute('y', bbox.y + bbox.height / 2);
-    
+
     textNode.textContent = company.length > 20 ? company.substring(0, 18) + '...' : company;
   } else if (textNode) {
     textNode.remove();
@@ -144,16 +144,16 @@ function applyAdminVisual(el, status) {
 const adminTooltip = document.getElementById('admin-tooltip');
 function showAdminTooltip(e, id) {
   const b = booths[id];
-  document.getElementById('att-label').textContent  = `Stand ${id.replace('booth-','')}`;
+  document.getElementById('att-label').textContent = `Stand ${id.replace('booth-', '')}`;
   document.getElementById('att-status').textContent = cap(b?.status || 'unknown');
-  document.getElementById('att-price').textContent  = b ? `€${b.price?.toLocaleString()}` : '';
+  document.getElementById('att-price').textContent = b ? `€${b.price?.toLocaleString()}` : '';
   adminTooltip.classList.remove('hidden');
   moveAdminTooltip(e);
 }
 function moveAdminTooltip(e) {
   const r = aFrame.getBoundingClientRect();
   adminTooltip.style.left = (e.clientX - r.left + 14) + 'px';
-  adminTooltip.style.top  = (e.clientY - r.top  - 10) + 'px';
+  adminTooltip.style.top = (e.clientY - r.top - 10) + 'px';
 }
 function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 
@@ -172,13 +172,13 @@ function renderAdminBoothAction(id) {
   if (!b) return;
   const panel = document.getElementById('admin-booth-action');
   panel.classList.remove('hidden');
-  document.getElementById('aba-id').textContent      = `Stand ${id.replace('booth-','')}`;
-  document.getElementById('aba-status').textContent  = cap(b.status);
-  document.getElementById('aba-sqm').textContent     = `${b.sqm} m²`;
-  document.getElementById('aba-price').textContent   = `€${b.price?.toLocaleString()}`;
+  document.getElementById('aba-id').textContent = `Stand ${id.replace('booth-', '')}`;
+  document.getElementById('aba-status').textContent = cap(b.status);
+  document.getElementById('aba-sqm').textContent = `${b.sqm} m²`;
+  document.getElementById('aba-price').textContent = `€${b.price?.toLocaleString()}`;
   document.getElementById('aba-company').textContent = b.company || '—';
   document.getElementById('aba-viewers').textContent = b.viewers || 0;
-  document.getElementById('aba-clicks').textContent  = b.clicks || 0;
+  document.getElementById('aba-clicks').textContent = b.clicks || 0;
 
   const clickList = document.getElementById('aba-click-list');
   if (b.clickHistory && b.clickHistory.length > 0) {
@@ -187,15 +187,15 @@ function renderAdminBoothAction(id) {
     clickList.innerHTML = '<div>No clicks yet.</div>';
   }
 
-  document.getElementById('aba-book').onclick    = () => socket.emit('booth:book',    { boothId: id, company: prompt('Company name:') || 'Admin' });
-  document.getElementById('aba-hold').onclick    = () => socket.emit('booth:hold',    { boothId: id, company: prompt('Company name:') || 'Pending' });
+  document.getElementById('aba-book').onclick = () => socket.emit('booth:book', { boothId: id, company: prompt('Company name:') || 'Admin' });
+  document.getElementById('aba-hold').onclick = () => socket.emit('booth:hold', { boothId: id, company: prompt('Company name:') || 'Pending' });
   document.getElementById('aba-release').onclick = () => socket.emit('booth:release', { boothId: id });
-  document.getElementById('aba-export').onclick  = () => exportSingleCSV(id);
+  document.getElementById('aba-export').onclick = () => exportSingleCSV(id);
 }
 
 // ─── Bookings Table ───────────────────────────────────────────────────────────
 function renderBookingsTable() {
-  const tbody  = document.getElementById('bookings-tbody');
+  const tbody = document.getElementById('bookings-tbody');
   const search = document.getElementById('bookings-search').value.toLowerCase();
   const filter = document.getElementById('bookings-filter').value;
 
@@ -209,7 +209,7 @@ function renderBookingsTable() {
 
   tbody.innerHTML = rows.map(b => `
     <tr>
-      <td><strong>Stand ${b.boothId.replace('booth-','')}</strong></td>
+      <td><strong>Stand ${b.boothId.replace('booth-', '')}</strong></td>
       <td>${b.sqm} m²</td>
       <td>€${b.price?.toLocaleString()}</td>
       <td><span class="status-pill pill-${b.status}">${cap(b.status)}</span></td>
@@ -224,8 +224,8 @@ function renderBookingsTable() {
 }
 
 function adminAction(action, boothId) {
-  if (action === 'book')    socket.emit('booth:book',    { boothId, company: prompt('Company name:') || 'Admin' });
-  if (action === 'hold')    socket.emit('booth:hold',    { boothId, company: prompt('Company name:') || 'Pending' });
+  if (action === 'book') socket.emit('booth:book', { boothId, company: prompt('Company name:') || 'Admin' });
+  if (action === 'hold') socket.emit('booth:hold', { boothId, company: prompt('Company name:') || 'Pending' });
   if (action === 'release') socket.emit('booth:release', { boothId });
 }
 window.adminAction = adminAction;
@@ -247,11 +247,11 @@ function downloadCSV(dataArray, filename) {
     b.viewers || 0,
     b.clicks || 0
   ]);
-  
+
   const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
-  
+
   const link = document.createElement('a');
   link.setAttribute('href', url);
   link.setAttribute('download', filename);
@@ -264,13 +264,13 @@ function downloadCSV(dataArray, filename) {
 document.getElementById('export-all-csv').onclick = () => {
   const search = document.getElementById('bookings-search').value.toLowerCase();
   const filter = document.getElementById('bookings-filter').value;
-  
+
   let rows = Object.values(booths).filter(b => {
     const matchFilter = filter === 'all' || b.status === filter;
     const matchSearch = !search || b.boothId.toLowerCase().includes(search) || (b.company || '').toLowerCase().includes(search);
     return matchFilter && matchSearch;
   });
-  
+
   downloadCSV(rows, 'blueprint_stands_export.csv');
 };
 
@@ -282,20 +282,20 @@ window.exportSingleCSV = exportSingleCSV;
 // ─── Populate Tool Dropdowns ──────────────────────────────────────────────────
 function populateToolDropdowns() {
   const avail = Object.values(booths).filter(b => b.status === 'available');
-  const all   = Object.values(booths);
+  const all = Object.values(booths);
 
-  ['merge-1','merge-2'].forEach(id => {
+  ['merge-1', 'merge-2'].forEach(id => {
     const sel = document.getElementById(id);
     const cur = sel.value;
     sel.innerHTML = '<option value="">Select…</option>' +
-      avail.map(b => `<option value="${b.boothId}">Stand ${b.boothId.replace('booth-','')}</option>`).join('');
+      avail.map(b => `<option value="${b.boothId}">Stand ${b.boothId.replace('booth-', '')}</option>`).join('');
     sel.value = cur;
   });
 
   const statusStand = document.getElementById('status-stand');
   const cur2 = statusStand.value;
   statusStand.innerHTML = '<option value="">Select…</option>' +
-    all.map(b => `<option value="${b.boothId}">Stand ${b.boothId.replace('booth-','')}</option>`).join('');
+    all.map(b => `<option value="${b.boothId}">Stand ${b.boothId.replace('booth-', '')}</option>`).join('');
   statusStand.value = cur2;
 }
 
@@ -312,7 +312,7 @@ document.getElementById('consolidation-form').addEventListener('submit', e => {
 document.getElementById('status-form').addEventListener('submit', e => {
   e.preventDefault();
   const boothId = document.getElementById('status-stand').value;
-  const status  = document.getElementById('status-new').value;
+  const status = document.getElementById('status-new').value;
   const company = document.getElementById('status-company').value.trim();
   if (!boothId) return;
   socket.emit('admin:setStatus', { boothId, status, company });
@@ -379,64 +379,64 @@ socket.on('log:entry', ({ msg, type, time }) => {
 
 // ─── Update Overview KPIs ─────────────────────────────────────────────────────
 function updateOverview() {
-  const all   = Object.values(booths);
+  const all = Object.values(booths);
   const avail = all.filter(b => b.status === 'available');
-  const sold  = all.filter(b => b.status === 'sold');
-  const held  = all.filter(b => b.status === 'held');
+  const sold = all.filter(b => b.status === 'sold');
+  const held = all.filter(b => b.status === 'held');
 
-  const totalSqm   = all.reduce((s,b) => s + (b.sqm||0), 0);
-  const availSqm   = avail.reduce((s,b) => s + (b.sqm||0), 0);
-  const soldSqm    = sold.reduce((s,b) => s + (b.sqm||0), 0);
-  const heldSqm    = held.reduce((s,b) => s + (b.sqm||0), 0);
-  const earnedRev  = sold.reduce((s,b) => s + (b.price||0), 0);
-  const availRev   = avail.reduce((s,b) => s + (b.price||0), 0);
-  const heldRev    = held.reduce((s,b) => s + (b.price||0), 0);
-  const totalRev   = all.reduce((s,b) => s + (b.price||0), 0);
-  const fillPct    = totalSqm > 0 ? Math.round(((soldSqm + heldSqm) / totalSqm) * 100) : 0;
-  const soldPct    = totalSqm > 0 ? Math.round((soldSqm / totalSqm) * 100) : 0;
-  const heldPct    = totalSqm > 0 ? Math.round((heldSqm / totalSqm) * 100) : 0;
+  const totalSqm = all.reduce((s, b) => s + (b.sqm || 0), 0);
+  const availSqm = avail.reduce((s, b) => s + (b.sqm || 0), 0);
+  const soldSqm = sold.reduce((s, b) => s + (b.sqm || 0), 0);
+  const heldSqm = held.reduce((s, b) => s + (b.sqm || 0), 0);
+  const earnedRev = sold.reduce((s, b) => s + (b.price || 0), 0);
+  const availRev = avail.reduce((s, b) => s + (b.price || 0), 0);
+  const heldRev = held.reduce((s, b) => s + (b.price || 0), 0);
+  const totalRev = all.reduce((s, b) => s + (b.price || 0), 0);
+  const fillPct = totalSqm > 0 ? Math.round(((soldSqm + heldSqm) / totalSqm) * 100) : 0;
+  const soldPct = totalSqm > 0 ? Math.round((soldSqm / totalSqm) * 100) : 0;
+  const heldPct = totalSqm > 0 ? Math.round((heldSqm / totalSqm) * 100) : 0;
 
-  el('kpi-earned').textContent    = `€${earnedRev.toLocaleString()}`;
+  el('kpi-earned').textContent = `€${earnedRev.toLocaleString()}`;
   el('kpi-earned-sqm').textContent = `${soldSqm.toLocaleString()} m² sold`;
   el('kpi-avail-sqm').textContent = `${availSqm.toLocaleString()} m²`;
   el('kpi-avail-rev').textContent = `€${availRev.toLocaleString()} potential`;
-  el('kpi-held-sqm').textContent  = `${heldSqm.toLocaleString()} m²`;
+  el('kpi-held-sqm').textContent = `${heldSqm.toLocaleString()} m²`;
   el('kpi-held-count').textContent = `${held.length} stands`;
   el('kpi-total-sqm').textContent = `${totalSqm.toLocaleString()} m²`;
   el('kpi-total-booths').textContent = `${all.length} stands`;
-  el('fill-pct').textContent      = `${fillPct}%`;
+  el('fill-pct').textContent = `${fillPct}%`;
   el('fill-bar-sold').style.width = `${soldPct}%`;
   el('fill-bar-held').style.width = `${heldPct}%`;
-  el('rev-booked').textContent    = `€${earnedRev.toLocaleString()}`;
-  el('rev-held').textContent      = `€${heldRev.toLocaleString()}`;
-  el('rev-avail').textContent     = `€${availRev.toLocaleString()}`;
-  el('rev-total').textContent     = `€${totalRev.toLocaleString()}`;
+  el('rev-booked').textContent = `€${earnedRev.toLocaleString()}`;
+  el('rev-held').textContent = `€${heldRev.toLocaleString()}`;
+  el('rev-avail').textContent = `€${availRev.toLocaleString()}`;
+  el('rev-total').textContent = `€${totalRev.toLocaleString()}`;
 }
 
 function updateOverviewFromStats(s) {
-  el('kpi-earned').textContent    = `€${s.earnedRev.toLocaleString()}`;
+  el('kpi-earned').textContent = `€${s.earnedRev.toLocaleString()}`;
   el('kpi-earned-sqm').textContent = `${s.soldSqm.toLocaleString()} m² sold`;
   el('kpi-avail-sqm').textContent = `${s.availSqm.toLocaleString()} m²`;
   el('kpi-avail-rev').textContent = `€${s.availRev.toLocaleString()} potential`;
-  el('kpi-held-sqm').textContent  = `${s.heldSqm.toLocaleString()} m²`;
+  el('kpi-held-sqm').textContent = `${s.heldSqm.toLocaleString()} m²`;
   el('kpi-held-count').textContent = `${s.heldBooths} stands`;
   el('kpi-total-sqm').textContent = `${s.totalSqm.toLocaleString()} m²`;
   el('kpi-total-booths').textContent = `${s.totalBooths} stands`;
-  const pct  = s.totalSqm > 0 ? Math.round(((s.soldSqm + s.heldSqm) / s.totalSqm) * 100) : 0;
+  const pct = s.totalSqm > 0 ? Math.round(((s.soldSqm + s.heldSqm) / s.totalSqm) * 100) : 0;
   const sold = s.totalSqm > 0 ? Math.round((s.soldSqm / s.totalSqm) * 100) : 0;
   const held = s.totalSqm > 0 ? Math.round((s.heldSqm / s.totalSqm) * 100) : 0;
-  el('fill-pct').textContent      = `${pct}%`;
+  el('fill-pct').textContent = `${pct}%`;
   el('fill-bar-sold').style.width = `${sold}%`;
   el('fill-bar-held').style.width = `${held}%`;
-  el('rev-booked').textContent    = `€${s.earnedRev.toLocaleString()}`;
-  el('rev-held').textContent      = `€${s.heldRev.toLocaleString()}`;
-  el('rev-avail').textContent     = `€${s.availRev.toLocaleString()}`;
-  el('rev-total').textContent     = `€${s.totalRevenue.toLocaleString()}`;
+  el('rev-booked').textContent = `€${s.earnedRev.toLocaleString()}`;
+  el('rev-held').textContent = `€${s.heldRev.toLocaleString()}`;
+  el('rev-avail').textContent = `€${s.availRev.toLocaleString()}`;
+  el('rev-total').textContent = `€${s.totalRevenue.toLocaleString()}`;
 }
 
 // ─── Activity Log ─────────────────────────────────────────────────────────────
 function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB')) {
-  const log   = document.getElementById('admin-log');
+  const log = document.getElementById('admin-log');
   const entry = document.createElement('div');
   entry.className = `log-entry ${type}`;
   entry.innerHTML = `<span class="log-time">${time}</span> ${msg}`;
@@ -445,5 +445,21 @@ function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB'
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function el(id)  { return document.getElementById(id); }
-function cap(s)  { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
+function el(id) { return document.getElementById(id); }
+function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
+el('rev-total').textContent = `€${s.totalRevenue.toLocaleString()}`;
+}
+
+// ─── Activity Log ─────────────────────────────────────────────────────────────
+function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB')) {
+  const log = document.getElementById('admin-log');
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${type}`;
+  entry.innerHTML = `<span class="log-time">${time}</span> ${msg}`;
+  log.prepend(entry);
+  while (log.children.length > 100) log.removeChild(log.lastChild);
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function el(id) { return document.getElementById(id); }
+function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }

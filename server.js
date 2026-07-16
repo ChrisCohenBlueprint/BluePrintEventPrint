@@ -1,26 +1,26 @@
 const express = require('express');
-const http    = require('http');
+const http = require('http');
 const { Server } = require('socket.io');
-const path    = require('path');
-const fs      = require('fs');
+const path = require('path');
+const fs = require('fs');
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
-const PORT   = process.env.PORT || 3000;
+const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
+const PORT = process.env.PORT || 3000;
 
 // ─── Serve static files ───────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
-app.get('/',          (_, res) => res.redirect('/floorplan'));
+app.get('/', (_, res) => res.redirect('/floorplan'));
 app.get('/floorplan', (_, res) => res.sendFile(path.join(__dirname, 'public', 'floorplan.html')));
-app.get('/admin',     (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+app.get('/admin', (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
 // ─── Load booth data from extracted JSON ──────────────────────────────────────
 const boothDataPath = path.join(__dirname, 'public', 'booth_data.json');
-let boothDataRaw    = {};
+let boothDataRaw = {};
 try {
   boothDataRaw = JSON.parse(fs.readFileSync(boothDataPath, 'utf8'));
 } catch (e) {
@@ -35,13 +35,13 @@ function initBoothState() {
   boothState = {};
   Object.values(boothDataRaw).forEach(b => {
     boothState[b.boothId] = {
-      boothId:  b.boothId,
-      status:   b.status,   // 'available' | 'sold' | 'held'
-      sqm:      b.sqm,
-      price:    b.price,    // €600 × sqm
-      company:  null,
-      viewers:  0,
-      clicks:   0,
+      boothId: b.boothId,
+      status: b.status,   // 'available' | 'sold' | 'held'
+      sqm: b.sqm,
+      price: b.price,    // €600 × sqm
+      company: null,
+      viewers: 0,
+      clicks: 0,
       clickHistory: [],
       x: b.x, y: b.y, w: b.w, h: b.h
     };
@@ -67,10 +67,10 @@ function loadSavedState() {
       // (so new booths from an updated SVG still appear, but existing bookings are preserved)
       Object.keys(saved).forEach(id => {
         if (boothState[id]) {
-          boothState[id].status      = saved[id].status;
-          boothState[id].company     = saved[id].company;
-          boothState[id].clicks      = saved[id].clicks      ?? 0;
-          boothState[id].clickHistory= saved[id].clickHistory ?? [];
+          boothState[id].status = saved[id].status;
+          boothState[id].company = saved[id].company;
+          boothState[id].clicks = saved[id].clicks ?? 0;
+          boothState[id].clickHistory = saved[id].clickHistory ?? [];
         }
       });
       console.log('✅ Restored booth state from disk');
@@ -89,20 +89,20 @@ let totalConnections = 0;
 
 // ─── Computed stats ───────────────────────────────────────────────────────────
 function getStats() {
-  const all       = Object.values(boothState);
+  const all = Object.values(boothState);
   const available = all.filter(b => b.status === 'available');
-  const sold      = all.filter(b => b.status === 'sold');
-  const held      = all.filter(b => b.status === 'held');
+  const sold = all.filter(b => b.status === 'sold');
+  const held = all.filter(b => b.status === 'held');
 
-  const totalSqm     = all.reduce((s, b) => s + b.sqm, 0);
-  const availSqm     = available.reduce((s, b) => s + b.sqm, 0);
-  const soldSqm      = sold.reduce((s, b) => s + b.sqm, 0);
-  const heldSqm      = held.reduce((s, b) => s + b.sqm, 0);
+  const totalSqm = all.reduce((s, b) => s + b.sqm, 0);
+  const availSqm = available.reduce((s, b) => s + b.sqm, 0);
+  const soldSqm = sold.reduce((s, b) => s + b.sqm, 0);
+  const heldSqm = held.reduce((s, b) => s + b.sqm, 0);
 
   const totalRevenue = all.reduce((s, b) => s + b.price, 0);
-  const earnedRev    = sold.reduce((s, b) => s + b.price, 0);
-  const availRev     = available.reduce((s, b) => s + b.price, 0);
-  const heldRev      = held.reduce((s, b) => s + b.price, 0);
+  const earnedRev = sold.reduce((s, b) => s + b.price, 0);
+  const availRev = available.reduce((s, b) => s + b.price, 0);
+  const heldRev = held.reduce((s, b) => s + b.price, 0);
 
   return {
     totalBooths: all.length,
@@ -126,7 +126,7 @@ function broadcastState() {
     b.viewers = viewerMap[b.boothId] || 0;
   });
 
-  io.emit('state:full',    Object.values(boothState));
+  io.emit('state:full', Object.values(boothState));
   io.emit('stats:updated', getStats());
 }
 
@@ -140,7 +140,7 @@ io.on('connection', (socket) => {
   console.log(`+ Client ${socket.id} connected (total: ${totalConnections})`);
 
   // Send full state on connect
-  socket.emit('state:full',    Object.values(boothState));
+  socket.emit('state:full', Object.values(boothState));
   socket.emit('stats:updated', getStats());
   io.emit('viewers:count', totalConnections);
 
@@ -168,11 +168,11 @@ io.on('connection', (socket) => {
   socket.on('booth:book', ({ boothId, company }) => {
     const b = boothState[boothId];
     if (!b || b.status === 'sold') return;
-    b.status  = 'sold';
+    b.status = 'sold';
     b.company = company;
     saveState();
     broadcastState();
-    broadcastLog(`✅ <strong>${company}</strong> booked Stand ${boothId.replace('booth-','')} (${b.sqm}m² — €${b.price.toLocaleString()})`, 'booking');
+    broadcastLog(`✅ <strong>${company}</strong> booked Stand ${boothId.replace('booth-', '')} (${b.sqm}m² — €${b.price.toLocaleString()})`, 'booking');
     socket.emit('booth:updated', b);
   });
 
@@ -180,11 +180,11 @@ io.on('connection', (socket) => {
   socket.on('booth:hold', ({ boothId, company }) => {
     const b = boothState[boothId];
     if (!b || b.status === 'sold') return;
-    b.status  = 'held';
+    b.status = 'held';
     b.company = company || 'Pending';
     saveState();
     broadcastState();
-    broadcastLog(`⏳ Stand ${boothId.replace('booth-','')} placed on hold for ${b.company}`, 'hold');
+    broadcastLog(`⏳ Stand ${boothId.replace('booth-', '')} placed on hold for ${b.company}`, 'hold');
     socket.emit('booth:updated', b);
   });
 
@@ -193,11 +193,11 @@ io.on('connection', (socket) => {
     const b = boothState[boothId];
     if (!b) return;
     const prev = b.company;
-    b.status  = 'available';
+    b.status = 'available';
     b.company = null;
     saveState();
     broadcastState();
-    broadcastLog(`🔓 Stand ${boothId.replace('booth-','')} released${prev ? ` (was: ${prev})` : ''}`, 'release');
+    broadcastLog(`🔓 Stand ${boothId.replace('booth-', '')} released${prev ? ` (was: ${prev})` : ''}`, 'release');
     socket.emit('booth:updated', b);
   });
 
@@ -208,14 +208,14 @@ io.on('connection', (socket) => {
     if (!b1 || !b2) return;
 
     // Merge sqm and price into primary
-    b1.sqm   += b2.sqm;
+    b1.sqm += b2.sqm;
     b1.price += b2.price;
 
     // Remove secondary from state
     delete boothState[secondary];
     saveState();
     broadcastState();
-    broadcastLog(`🔗 Stands ${primary.replace('booth-','')} & ${secondary.replace('booth-','')} consolidated → ${b1.sqm}m²`, 'system');
+    broadcastLog(`🔗 Stands ${primary.replace('booth-', '')} & ${secondary.replace('booth-', '')} consolidated → ${b1.sqm}m²`, 'system');
     io.emit('booth:consolidated', { primary, secondary });
   });
 
@@ -223,11 +223,11 @@ io.on('connection', (socket) => {
   socket.on('admin:setStatus', ({ boothId, status, company }) => {
     const b = boothState[boothId];
     if (!b) return;
-    b.status  = status;
+    b.status = status;
     b.company = company || null;
     saveState();
     broadcastState();
-    broadcastLog(`🛠 Admin set Stand ${boothId.replace('booth-','')} → ${status}`, 'admin');
+    broadcastLog(`🛠 Admin set Stand ${boothId.replace('booth-', '')} → ${status}`, 'admin');
   });
 
   // ── Reset to initial extracted state ──────────────────────────────────────────
@@ -249,7 +249,7 @@ io.on('connection', (socket) => {
 });
 
 // ─── REST API for stats (optional, for future integrations) ──────────────────
-app.get('/api/stats',  (_, res) => res.json(getStats()));
+app.get('/api/stats', (_, res) => res.json(getStats()));
 app.get('/api/booths', (_, res) => res.json(Object.values(boothState)));
 
 server.listen(PORT, () => console.log(`BluePrint EventPrint running on port ${PORT}`));
