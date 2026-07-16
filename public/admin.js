@@ -30,18 +30,32 @@ document.querySelectorAll('.nav-link').forEach(link => {
 });
 
 // ─── Zoom / Pan (Admin Map) ───────────────────────────────────────────────────
-let scale = 1, panX = 0, panY = 0, isPanning = false, startX = 0, startY = 0;
 const aFrame = document.getElementById('admin-map-frame');
 const aInner = document.getElementById('admin-map-inner');
 
-function applyTransform() { aInner.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`; }
-document.getElementById('admin-zoom-in').addEventListener('click',    () => { scale = Math.min(scale * 1.25, 8); applyTransform(); });
-document.getElementById('admin-zoom-out').addEventListener('click',   () => { scale = Math.max(scale / 1.25, 0.3); applyTransform(); });
-document.getElementById('admin-zoom-reset').addEventListener('click', () => { scale = 1; panX = 0; panY = 0; applyTransform(); });
-aFrame.addEventListener('mousedown', e => { isPanning = true; startX = e.clientX - panX; startY = e.clientY - panY; aFrame.style.cursor = 'grabbing'; });
-document.addEventListener('mouseup', () => { isPanning = false; aFrame.style.cursor = 'grab'; });
-document.addEventListener('mousemove', e => { if (!isPanning) return; panX = e.clientX - startX; panY = e.clientY - startY; applyTransform(); });
-aFrame.addEventListener('wheel', e => { e.preventDefault(); scale = Math.min(Math.max(scale * (e.deltaY > 0 ? 0.9 : 1.1), 0.3), 8); applyTransform(); }, { passive: false });
+let pzAdmin;
+function initAdminPanZoom() {
+  pzAdmin = panzoom(aInner, {
+    maxZoom: 8,
+    minZoom: 0.3,
+    bounds: true,
+    boundsPadding: 0.1,
+    zoomDoubleClickSpeed: 1
+  });
+  
+  document.getElementById('admin-zoom-in').addEventListener('click', () => {
+    const r = aFrame.getBoundingClientRect();
+    pzAdmin.smoothZoom(r.width/2, r.height/2, 1.5);
+  });
+  document.getElementById('admin-zoom-out').addEventListener('click', () => {
+    const r = aFrame.getBoundingClientRect();
+    pzAdmin.smoothZoom(r.width/2, r.height/2, 0.66);
+  });
+  document.getElementById('admin-zoom-reset').addEventListener('click', () => {
+    pzAdmin.moveTo(0, 0);
+    pzAdmin.zoomAbs(0, 0, 1);
+  });
+}
 
 // ─── Load Admin SVG ───────────────────────────────────────────────────────────
 async function loadAdminSVG() {
@@ -58,6 +72,7 @@ async function loadAdminSVG() {
     svgDoc.setAttribute('height', '100%');
     tagAdminBooths(boothData);
     lucide.createIcons();
+    initAdminPanZoom();
   } catch (e) {
     mount.innerHTML = '<p style="color:#f87171;padding:20px">Failed to load.</p>';
   }
@@ -97,6 +112,32 @@ function tagAdminBooths(boothData) {
 function applyAdminVisual(el, status) {
   el.classList.remove('booth-available','booth-sold','booth-held');
   el.classList.add(`booth-${status}`);
+
+  const id = el.getAttribute('data-id');
+  let textNode = svgDoc.querySelector(`#admin-text-${id}`);
+  const company = booths[id]?.company;
+
+  if (status !== 'available' && company) {
+    if (!textNode) {
+      textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      textNode.setAttribute('id', `admin-text-${id}`);
+      textNode.setAttribute('text-anchor', 'middle');
+      textNode.setAttribute('dominant-baseline', 'middle');
+      textNode.setAttribute('fill', '#111827');
+      textNode.setAttribute('font-size', '14px');
+      textNode.setAttribute('font-family', 'Plus Jakarta Sans, sans-serif');
+      textNode.setAttribute('font-weight', '700');
+      textNode.style.pointerEvents = 'none';
+      el.parentNode.appendChild(textNode);
+    }
+    const bbox = el.getBBox();
+    textNode.setAttribute('x', bbox.x + bbox.width / 2);
+    textNode.setAttribute('y', bbox.y + bbox.height / 2);
+    
+    textNode.textContent = company.length > 20 ? company.substring(0, 18) + '...' : company;
+  } else if (textNode) {
+    textNode.remove();
+  }
 }
 
 // ─── Admin Tooltip ────────────────────────────────────────────────────────────
@@ -149,6 +190,7 @@ function renderAdminBoothAction(id) {
   document.getElementById('aba-book').onclick    = () => socket.emit('booth:book',    { boothId: id, company: prompt('Company name:') || 'Admin' });
   document.getElementById('aba-hold').onclick    = () => socket.emit('booth:hold',    { boothId: id, company: prompt('Company name:') || 'Pending' });
   document.getElementById('aba-release').onclick = () => socket.emit('booth:release', { boothId: id });
+  document.getElementById('aba-export').onclick  = () => exportSingleCSV(id);
 }
 
 // ─── Bookings Table ───────────────────────────────────────────────────────────
@@ -172,10 +214,11 @@ function renderBookingsTable() {
       <td>€${b.price?.toLocaleString()}</td>
       <td><span class="status-pill pill-${b.status}">${cap(b.status)}</span></td>
       <td>${b.company || '<span style="color:var(--muted)">—</span>'}</td>
-      <td style="display:flex;gap:6px">
+      <td style="display:flex;gap:6px;flex-wrap:wrap;">
         ${b.status !== 'sold' ? `<button class="admin-btn success" style="font-size:11px;padding:5px 10px" onclick="adminAction('book','${b.boothId}')">Book</button>` : ''}
         ${b.status === 'available' ? `<button class="admin-btn warning" style="font-size:11px;padding:5px 10px" onclick="adminAction('hold','${b.boothId}')">Hold</button>` : ''}
         ${b.status !== 'available' ? `<button class="admin-btn" style="font-size:11px;padding:5px 10px" onclick="adminAction('release','${b.boothId}')">Release</button>` : ''}
+        <button class="admin-btn" style="font-size:11px;padding:5px 10px;background:var(--glass-bg);border:1px solid var(--border);" onclick="exportSingleCSV('${b.boothId}')">⬇️ CSV</button>
       </td>
     </tr>`).join('');
 }
@@ -190,6 +233,51 @@ window.adminAction = adminAction;
 // Search/filter live update
 document.getElementById('bookings-search').addEventListener('input', renderBookingsTable);
 document.getElementById('bookings-filter').addEventListener('change', renderBookingsTable);
+
+// ─── CSV Export ───────────────────────────────────────────────────────────────
+function downloadCSV(dataArray, filename) {
+  if (!dataArray || dataArray.length === 0) return;
+  const headers = ['Stand', 'Size (m2)', 'Price (EUR)', 'Status', 'Company', 'Live Viewers', 'Total Clicks'];
+  const rows = dataArray.map(b => [
+    b.boothId.replace('booth-', ''),
+    b.sqm,
+    b.price || 0,
+    b.status,
+    `"${(b.company || '').replace(/"/g, '""')}"`,
+    b.viewers || 0,
+    b.clicks || 0
+  ]);
+  
+  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+document.getElementById('export-all-csv').onclick = () => {
+  const search = document.getElementById('bookings-search').value.toLowerCase();
+  const filter = document.getElementById('bookings-filter').value;
+  
+  let rows = Object.values(booths).filter(b => {
+    const matchFilter = filter === 'all' || b.status === filter;
+    const matchSearch = !search || b.boothId.toLowerCase().includes(search) || (b.company || '').toLowerCase().includes(search);
+    return matchFilter && matchSearch;
+  });
+  
+  downloadCSV(rows, 'blueprint_stands_export.csv');
+};
+
+function exportSingleCSV(boothId) {
+  if (booths[boothId]) downloadCSV([booths[boothId]], `stand_${boothId.replace('booth-', '')}_export.csv`);
+}
+window.exportSingleCSV = exportSingleCSV;
 
 // ─── Populate Tool Dropdowns ──────────────────────────────────────────────────
 function populateToolDropdowns() {
