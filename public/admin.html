@@ -1,21 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Dashboard | BluePrint EventPrint</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
-    rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@latest"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/panzoom@9.4.0/dist/panzoom.min.js"></script>
   <link rel="stylesheet" href="admin.css">
 </head>
-
 <body>
   <div class="bg-glow g1"></div>
   <div class="bg-glow g2"></div>
@@ -103,8 +99,8 @@
           <span id="fill-pct">0%</span>
         </div>
         <div class="fill-bar-track">
-          <div class="fill-bar-sold" id="fill-bar-sold" style="width:0%"></div>
-          <div class="fill-bar-held" id="fill-bar-held" style="width:0%"></div>
+          <div class="fill-bar-sold"  id="fill-bar-sold"  style="width:0%"></div>
+          <div class="fill-bar-held"  id="fill-bar-held"  style="width:0%"></div>
         </div>
         <div class="fill-bar-legend">
           <span><span class="dot yellow"></span> Sold</span>
@@ -144,8 +140,8 @@
           <div class="leg-item"><span class="leg-dot orange"></span> On Hold</div>
         </div>
         <div class="fp-zoom-controls">
-          <button id="admin-zoom-in" class="zoom-btn"><i data-lucide="zoom-in"></i></button>
-          <button id="admin-zoom-out" class="zoom-btn"><i data-lucide="zoom-out"></i></button>
+          <button id="admin-zoom-in"    class="zoom-btn"><i data-lucide="zoom-in"></i></button>
+          <button id="admin-zoom-out"   class="zoom-btn"><i data-lucide="zoom-out"></i></button>
           <button id="admin-zoom-reset" class="zoom-btn"><i data-lucide="maximize-2"></i></button>
         </div>
       </div>
@@ -178,17 +174,27 @@
           <div><span class="aba-lbl">Viewers</span><span class="aba-val" id="aba-viewers">0</span></div>
           <div><span class="aba-lbl">Clicks</span><span class="aba-val" id="aba-clicks">0</span></div>
         </div>
-        <div class="aba-click-history"
-          style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--border); max-height:100px; overflow-y:auto; font-size:11px; color:var(--muted)">
+        <div class="aba-click-history" style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--border); max-height:100px; overflow-y:auto; font-size:11px; color:var(--muted)">
           <div style="margin-bottom:6px;font-weight:600;color:var(--text);">Recent Clicks</div>
-          <div id="aba-click-list">
-            <div>No clicks yet.</div>
-          </div>
+          <div id="aba-click-list"><div>No clicks yet.</div></div>
         </div>
         <div class="aba-actions">
           <button class="admin-btn success" id="aba-book">✅ Mark Sold</button>
           <button class="admin-btn warning" id="aba-hold">⏳ Put on Hold</button>
           <button class="admin-btn" id="aba-release">🔓 Release</button>
+        </div>
+        <!-- Deal details — admin only -->
+        <div class="aba-deal-section" id="aba-deal-section" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+          <div style="font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Deal Details</div>
+          <div style="margin-bottom:8px;">
+            <label style="font-size:11px; color:var(--muted); display:block; margin-bottom:4px;">Actual Sale Price (€)</label>
+            <input type="number" id="aba-actual-price" class="admin-input" placeholder="e.g. 18500" style="width:100%; font-size:13px;">
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="font-size:11px; color:var(--muted); display:block; margin-bottom:4px;">Notes</label>
+            <textarea id="aba-notes" class="admin-input" rows="3" placeholder="e.g. 10% discount agreed, invoice due Sept…" style="width:100%; font-size:13px; resize:vertical;"></textarea>
+          </div>
+          <button class="admin-btn success" id="aba-save-deal" style="width:100%;">💾 Save Deal Details</button>
         </div>
         <button class="admin-btn" id="aba-export" style="width:100%; margin-top:8px;">⬇️ Export to CSV</button>
       </div>
@@ -214,9 +220,11 @@
             <tr>
               <th>Stand</th>
               <th>Size (m²)</th>
-              <th>Price</th>
+              <th>Listed Price</th>
+              <th>Deal Price</th>
               <th>Status</th>
               <th>Company</th>
+              <th>Notes</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -240,15 +248,11 @@
             <div class="tool-form-row">
               <div class="tool-field">
                 <label>Primary Stand</label>
-                <select id="merge-1" class="admin-select">
-                  <option value="">Select…</option>
-                </select>
+                <select id="merge-1" class="admin-select"><option value="">Select…</option></select>
               </div>
               <div class="tool-field">
                 <label>Merge With</label>
-                <select id="merge-2" class="admin-select">
-                  <option value="">Select…</option>
-                </select>
+                <select id="merge-2" class="admin-select"><option value="">Select…</option></select>
               </div>
             </div>
             <button type="submit" class="admin-btn success full">
@@ -267,9 +271,7 @@
           <form id="status-form" class="tool-form">
             <div class="tool-field">
               <label>Stand</label>
-              <select id="status-stand" class="admin-select">
-                <option value="">Select…</option>
-              </select>
+              <select id="status-stand" class="admin-select"><option value="">Select…</option></select>
             </div>
             <div class="tool-field">
               <label>New Status</label>
@@ -308,5 +310,4 @@
   <script src="admin.js"></script>
   <script>lucide.createIcons();</script>
 </body>
-
 </html>
