@@ -447,19 +447,4 @@ function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB'
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function el(id) { return document.getElementById(id); }
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
-el('rev-total').textContent = `€${s.totalRevenue.toLocaleString()}`;
-}
 
-// ─── Activity Log ─────────────────────────────────────────────────────────────
-function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB')) {
-  const log = document.getElementById('admin-log');
-  const entry = document.createElement('div');
-  entry.className = `log-entry ${type}`;
-  entry.innerHTML = `<span class="log-time">${time}</span> ${msg}`;
-  log.prepend(entry);
-  while (log.children.length > 100) log.removeChild(log.lastChild);
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function el(id) { return document.getElementById(id); }
-function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
