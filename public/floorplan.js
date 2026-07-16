@@ -215,6 +215,33 @@ function applyVisual(id) {
   el.classList.remove('booth-available','booth-sold','booth-held');
   const status = booths[id]?.status || 'available';
   el.classList.add(`booth-${status}`);
+
+  // Company text overlay
+  let textNode = svgDoc.querySelector(`#text-${id}`);
+  const company = booths[id]?.company;
+
+  if (status !== 'available' && company) {
+    if (!textNode) {
+      textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      textNode.setAttribute('id', `text-${id}`);
+      textNode.setAttribute('text-anchor', 'middle');
+      textNode.setAttribute('dominant-baseline', 'middle');
+      textNode.setAttribute('fill', '#111827');
+      textNode.setAttribute('font-size', '14px');
+      textNode.setAttribute('font-family', 'Plus Jakarta Sans, sans-serif');
+      textNode.setAttribute('font-weight', '700');
+      textNode.style.pointerEvents = 'none';
+      el.parentNode.appendChild(textNode);
+    }
+    const bbox = el.getBBox();
+    textNode.setAttribute('x', bbox.x + bbox.width / 2);
+    textNode.setAttribute('y', bbox.y + bbox.height / 2);
+    
+    // Truncate if very long
+    textNode.textContent = company.length > 20 ? company.substring(0, 18) + '...' : company;
+  } else if (textNode) {
+    textNode.remove();
+  }
 }
 
 function updateStatsStrip(stats) {
