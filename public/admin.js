@@ -248,7 +248,7 @@ function downloadCSV(dataArray, filename) {
     b.clicks || 0
   ]);
   
-  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\\n');
+  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   
