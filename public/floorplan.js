@@ -369,7 +369,7 @@ function applyVisual(n) {
       textNode.setAttribute('dominant-baseline', 'middle');
       textNode.setAttribute('fill', '#111827');
       textNode.setAttribute('font-size', '14px');
-      textNode.setAttribute('font-family', 'Plus Jakarta Sans, sans-serif');
+      textNode.setAttribute('font-family', 'Raleway, sans-serif');
       textNode.setAttribute('font-weight', '700');
       textNode.style.pointerEvents = 'none';
       el.parentNode.appendChild(textNode);
@@ -392,6 +392,49 @@ function updateStatsStrip() {
   document.getElementById('stat-held').textContent  = resv.length;
 }
 
+// ─── Sponsor strip ────────────────────────────────────────────────────────────
+// Driven entirely by /sponsors/sponsors.json so logos can be added, removed or
+// reordered by editing that file and dropping an image alongside it. Built with
+// DOM nodes rather than markup, so a stray character in a sponsor name cannot
+// become executable.
+async function loadSponsors() {
+  const strip = document.getElementById('sponsor-strip');
+  try {
+    const res = await fetch('/sponsors/sponsors.json', { cache: 'no-cache' });
+    if (!res.ok) return;
+    const cfg = await res.json();
+    const list = Array.isArray(cfg.sponsors) ? cfg.sponsors.filter(s => s && s.image) : [];
+    if (!list.length) return;                       // no sponsors: strip stays hidden
+
+    document.getElementById('sponsor-heading').textContent = cfg.heading || 'In partnership with';
+
+    const box = document.getElementById('sponsor-logos');
+    box.replaceChildren();
+    for (const s of list) {
+      const img = document.createElement('img');
+      img.src = s.image;
+      img.alt = s.alt || s.name || 'Sponsor';
+      img.loading = 'lazy';
+      // A missing file shouldn't leave a broken-image icon on a customer page.
+      img.onerror = () => wrapper.remove();
+
+      const wrapper = s.url ? document.createElement('a') : document.createElement('span');
+      if (s.url) {
+        wrapper.href = s.url;
+        wrapper.target = '_blank';
+        wrapper.rel = 'noopener noreferrer';
+        wrapper.title = s.name || '';
+      }
+      wrapper.appendChild(img);
+      box.appendChild(wrapper);
+    }
+    strip.classList.remove('hidden');
+  } catch {
+    /* strip simply stays hidden */
+  }
+}
+
 initConsent();
 initForm();
+loadSponsors();
 load();

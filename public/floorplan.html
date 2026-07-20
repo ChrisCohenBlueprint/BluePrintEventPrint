@@ -7,7 +7,7 @@
   <meta name="description" content="Browse available exhibition stands at LEX 2026. Click any white space to view pricing and reserve your spot.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@latest"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/panzoom@9.4.0/dist/panzoom.min.js"></script>
@@ -74,6 +74,13 @@
         <div class="tt-price" id="tt-price">€0</div>
         <div class="tt-hint">Click to view details</div>
       </div>
+
+      <!-- Sponsor strip. Content comes from /sponsors/sponsors.json — no code
+           change needed to add, remove or reorder logos. Hidden when empty. -->
+      <footer class="sponsor-strip hidden" id="sponsor-strip">
+        <span class="sponsor-heading" id="sponsor-heading"></span>
+        <div class="sponsor-logos" id="sponsor-logos"></div>
+      </footer>
     </section>
 
     <!-- Side panel -->

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" role="img" aria-label="Example Sponsor">
+  <rect width="240" height="64" rx="6" fill="none" stroke="#60abbf" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="120" y="30" text-anchor="middle" font-family="Raleway, sans-serif" font-size="15" font-weight="700" fill="#60abbf">YOUR LOGO HERE</text>
+  <text x="120" y="47" text-anchor="middle" font-family="Raleway, sans-serif" font-size="10" fill="#7f9fa8">replace in public/sponsors/</text>
+</svg>

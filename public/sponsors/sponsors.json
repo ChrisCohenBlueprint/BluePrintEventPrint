@@ -1,0 +1,12 @@
+{
+  "_comment": "Sponsor strip under the floorplan. Drop logo files into public/sponsors/ and list them here. Delete an entry to remove it; empty the list to hide the strip entirely. No code changes needed.",
+  "heading": "In partnership with",
+  "sponsors": [
+    {
+      "name": "Example Sponsor",
+      "image": "/sponsors/example-sponsor.svg",
+      "url": "https://example.com",
+      "alt": "Example Sponsor logo"
+    }
+  ]
+}
