@@ -357,11 +357,9 @@ body {
 
 .stand-hint, .stand-alt { font-size: 11.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
 
-.badge-reserved { background: rgba(249,115,22,.18); color: #fdba74; }
+.badge-held { background: rgba(249,115,22,.18); color: #fdba74; }
 .badge-taken    { background: rgba(234,179,8,.16);  color: #fde047; }
 
-.booth-reserved { fill: rgba(249,115,22,.55) !important; }
-.booth-taken    { fill: rgba(234,179,8,.30)  !important; }
 .booth-shortlisted {
   stroke: #4ade80 !important; stroke-width: 3px !important;
   fill: rgba(74,222,128,.35) !important;

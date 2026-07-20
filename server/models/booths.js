@@ -3,8 +3,6 @@ const config    = require('../config');
 
 const col = () => getDb().collection('booths');
 
-const PUBLIC_STATUSES = { available: 'available', held: 'reserved', sold: 'taken', reserved: 'reserved' };
-
 const all = () => col().find({ showId: config.showId }).toArray();
 
 const get = (boothNumber) => col().findOne({ showId: config.showId, boothNumber });
@@ -12,17 +10,20 @@ const get = (boothNumber) => col().findOne({ showId: config.showId, boothNumber 
 /**
  * Projection sent to the public floorplan.
  *
- * Deal price, negotiated amounts, internal notes and the customer's company
- * name are all withheld — a held booth reads as "reserved" with no indication
- * of who holds it or what they paid.
+ * Status names and exhibitor company names are unchanged from the original —
+ * naming who has taken a stand is the point of a published floorplan.
+ *
+ * What is withheld is the negotiated price and the internal deal notes. The
+ * original broadcast the entire booth record to every visitor, so those were
+ * public by accident rather than by intent.
  */
 function toPublic(b) {
   return {
     boothNumber: b.boothNumber,
     svgElementId: b.svgElementId,
-    status:  PUBLIC_STATUSES[b.status] || 'taken',
+    status:  b.status,
+    company: b.assignment?.company || null,
     sqm:     b.sqm,
-    listPrice: b.status === 'available' ? b.listPrice : null,
     geometry: b.geometry,
     viewers: b.viewers || 0,
     interest: b.clicks || 0,

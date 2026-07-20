@@ -54,7 +54,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
 
 const cap = (s) => s ? s[0].toUpperCase() + s.slice(1) : '';
 
-const STATUS_LABEL = { available: 'Available', reserved: 'Reserved', taken: 'Taken' };
+const STATUS_LABEL = { available: 'Available', held: 'On Hold', sold: 'Taken' };
 
 // ─── Zoom / Pan ───────────────────────────────────────────────────────────────
 const frame = document.getElementById('map-frame');
@@ -144,7 +144,7 @@ function tagBooths() {
   };
 
   avail.forEach(el => wire(el, 'available'));
-  taken.forEach(el => wire(el, 'taken'));
+  taken.forEach(el => wire(el, 'sold'));
 }
 
 // ─── Deep link: /floorplan?booth=412 ──────────────────────────────────────────
@@ -230,11 +230,11 @@ function renderShortlist() {
 // ─── Detail panel ─────────────────────────────────────────────────────────────
 function renderPanel(n) {
   if (!n) return;
-  const b     = booths[n] || { status: 'taken' };
+  const b     = booths[n] || { status: 'sold' };
   const panel = document.getElementById('booth-panel');
   panel.classList.remove('hidden');
 
-  const status = b.status || 'taken';
+  const status = b.status || 'sold';
   const inList = shortlist.includes(n);
 
   if (status !== 'available') {
@@ -249,7 +249,7 @@ function renderPanel(n) {
       </div>
       <div class="stand-taken-notice">
         <i data-lucide="lock" style="width:14px;height:14px"></i>
-        ${status === 'reserved' ? 'This stand is currently reserved.' : 'This stand has been taken.'}
+        ${status === 'held' ? 'This stand is currently on hold.' : 'This stand has been taken.'}
       </div>
       <p class="stand-alt">Interested in something nearby? Select an available stand and we'll suggest alternatives.</p>`;
     lucide.createIcons();
@@ -348,18 +348,45 @@ socket.on('error:action', ({ message }) => console.warn(message));
 function applyVisual(n) {
   const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   if (!el) return;
-  el.classList.remove('booth-available', 'booth-sold', 'booth-held', 'booth-taken', 'booth-reserved');
-  el.classList.add(`booth-${booths[n]?.status || 'taken'}`);
+
+  const status = booths[n]?.status || 'sold';
+  el.classList.remove('booth-available', 'booth-sold', 'booth-held');
+  el.classList.add(`booth-${status}`);
+
   if (shortlist.includes(n)) el.classList.add('booth-shortlisted');
   else el.classList.remove('booth-shortlisted');
-  // Company names are deliberately not rendered on the public plan — who holds
-  // a stand is commercial information.
+
+  // Exhibitor name painted onto the stand, as before. textContent, never
+  // innerHTML — the value reaches here from the public enquiry form.
+  let textNode = svgDoc.querySelector(`#text-booth-${CSS.escape(n)}`);
+  const company = booths[n]?.company;
+
+  if (status !== 'available' && company) {
+    if (!textNode) {
+      textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      textNode.setAttribute('id', `text-booth-${n}`);
+      textNode.setAttribute('text-anchor', 'middle');
+      textNode.setAttribute('dominant-baseline', 'middle');
+      textNode.setAttribute('fill', '#111827');
+      textNode.setAttribute('font-size', '14px');
+      textNode.setAttribute('font-family', 'Plus Jakarta Sans, sans-serif');
+      textNode.setAttribute('font-weight', '700');
+      textNode.style.pointerEvents = 'none';
+      el.parentNode.appendChild(textNode);
+    }
+    const bbox = el.getBBox();
+    textNode.setAttribute('x', bbox.x + bbox.width / 2);
+    textNode.setAttribute('y', bbox.y + bbox.height / 2);
+    textNode.textContent = company.length > 20 ? company.substring(0, 18) + '…' : company;
+  } else if (textNode) {
+    textNode.remove();
+  }
 }
 
 function updateStatsStrip() {
   const all   = Object.values(booths);
   const avail = all.filter(b => b.status === 'available');
-  const resv  = all.filter(b => b.status === 'reserved');
+  const resv  = all.filter(b => b.status === 'held');
   document.getElementById('stat-avail').textContent = avail.length;
   document.getElementById('stat-sqm').textContent   = avail.reduce((s, b) => s + (b.sqm || 0), 0).toLocaleString();
   document.getElementById('stat-held').textContent  = resv.length;
