@@ -64,11 +64,31 @@ async function reconcile() {
     .project({ boothNumber: 1 })
     .toArray();
 
-  const liveSet = new Set(live.map(h => h.boothNumber));
-  const expired = held.filter(b => !liveSet.has(b.boothNumber)).map(b => b.boothNumber);
+  // A hold document that is past its expiry counts as gone even if Mongo's TTL
+  // reaper has not removed it yet. Treating it as live would leave the booth
+  // held and unsellable for as long as the reaper lagged.
+  const now = new Date();
+  const liveSet = new Set(live.filter(h => !h.expiresAt || h.expiresAt > now).map(h => h.boothNumber));
+  const candidates = held.filter(b => !liveSet.has(b.boothNumber)).map(b => b.boothNumber);
 
-  for (const boothNumber of expired) {
-    await booths.setStatus(boothNumber, 'available', { company: null, actor: 'system:expiry' });
+  const expired = [];
+  for (const boothNumber of candidates) {
+    // Conditional write: only release if the booth is STILL held. Between this
+    // sweep reading the booth list and writing, an admin may have booked it —
+    // an unconditional write would silently erase that sale.
+    const res = await booths.col().updateOne(
+      { showId: config.showId, boothNumber, status: 'held' },
+      { $set: {
+          status: 'available',
+          'assignment.company': null,
+          updatedAt: new Date(),
+          updatedBy: 'system:expiry',
+      } }
+    );
+    if (!res.matchedCount) continue;   // status changed under us; leave it alone
+
+    await drop(boothNumber);
+    expired.push(boothNumber);
     track({ type: 'hold.expire', boothNumber, meta: {}, actor: 'system:expiry' });
     console.log(`⏱  Hold expired — stand ${boothNumber} released`);
   }

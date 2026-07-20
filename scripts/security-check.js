@@ -77,10 +77,11 @@ async function main() {
   leaked.length === 0 ? pass('public state carries no commercial fields')
                       : fail('public state carries no commercial fields', `leaked: ${leaked.join(', ')}`);
 
-  const soldSample = state.find(b => b.status === 'taken');
-  soldSample && soldSample.listPrice === null
-    ? pass('sold stands hide price from public')
-    : fail('sold stands hide price from public');
+  // Price is absent from the public projection entirely, not merely nulled.
+  const priced = state.filter(b => b.listPrice !== undefined || b.actualPrice !== undefined);
+  priced.length === 0
+    ? pass('no price of any kind reaches the public payload')
+    : fail('no price of any kind reaches the public payload', `${priced.length} stands carry a price`);
 
   // ── 3. Verify nothing was actually written ────────────────────────────────
   const cookie = await adminCookie();

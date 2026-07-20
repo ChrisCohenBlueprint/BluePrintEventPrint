@@ -50,8 +50,18 @@ function parseCookies(header = '') {
 const ADMIN_PATHS = ['/admin.html', '/admin.js', '/admin.css'];
 
 function adminAuth(req, res, next) {
-  const isAdminPath = req.path.startsWith('/admin') || ADMIN_PATHS.includes(req.path);
-  const isApiPath   = req.path.startsWith('/api/');
+  // Express matches routes case-insensitively and express.static resolves
+  // percent-encoding, so the guard has to normalise both before comparing.
+  // Without this, /API/booths served every negotiated price unauthenticated and
+  // /ADMIN served the whole dashboard.
+  let p = req.path;
+  try { p = decodeURIComponent(p); } catch { /* malformed escape: match on raw */ }
+  p = p.toLowerCase().replace(/\/{2,}/g, '/');
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+
+  const isAdminPath = p === '/admin' || p.startsWith('/admin/') || ADMIN_PATHS.includes(p) ||
+                      p.startsWith('/admin.');
+  const isApiPath   = p === '/api' || p.startsWith('/api/');
 
   // /api/* previously sat outside this check and served deal prices, company
   // names and internal notes to anyone who asked.

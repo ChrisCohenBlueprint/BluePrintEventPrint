@@ -51,17 +51,36 @@ function broadcastState(io) {
   if (pending) return;
   pending = setTimeout(async () => {
     pending = null;
-    const rows = decorate();
-    io.except(ADMIN_ROOM).emit('state:full', rows.map(booths.toPublic));
-    io.to(ADMIN_ROOM).emit('state:full',     rows.map(booths.toAdmin));
+    // Anything thrown in here is a bare timer callback, so an unhandled
+    // rejection would take the whole process down and drop every socket. A
+    // failed broadcast should degrade to a missed update, nothing worse.
+    try {
+      const rows = decorate();
+      io.except(ADMIN_ROOM).emit('state:full', rows.map(booths.toPublic));
+      io.to(ADMIN_ROOM).emit('state:full',     rows.map(booths.toAdmin));
 
-    const s = await booths.stats();
-    io.except(ADMIN_ROOM).emit('stats:updated', {
-      totalBooths: s.totalBooths, availableBooths: s.availableBooths,
-      totalSqm: s.totalSqm, availSqm: s.availSqm,
-    });
-    io.to(ADMIN_ROOM).emit('stats:updated', { ...s, connections });
+      const s = await booths.stats();
+      io.except(ADMIN_ROOM).emit('stats:updated', {
+        totalBooths: s.totalBooths, availableBooths: s.availableBooths,
+        totalSqm: s.totalSqm, availSqm: s.availSqm,
+      });
+      io.to(ADMIN_ROOM).emit('stats:updated', { ...s, connections });
+    } catch (e) {
+      console.error('Broadcast failed:', e.message);
+    }
   }, 80);
+}
+
+/**
+ * Wrap a public (unauthenticated) handler so a database error becomes a logged
+ * failure rather than an unhandled rejection. Without this, anyone able to
+ * induce a write failure could crash the server with a single public event.
+ */
+function safe(type, handler) {
+  return async (...args) => {
+    try { return await handler(...args); }
+    catch (e) { console.error(`✗ ${type} failed:`, e.stack || e.message); }
+  };
 }
 
 // Activity log is admin-only — it names companies and quotes prices.
@@ -101,14 +120,24 @@ function register(io) {
     // ── Public ────────────────────────────────────────────────────────────────
     socket.on('booth:view', ({ boothNumber }) => {
       if (!allowView()) return;
-      activeViewers[socket.id] = stand(boothNumber);
+      const n = stand(boothNumber);
+
+      // Close out the previous booth's dwell before switching. This used to be
+      // overwritten, so all attention except the final booth was discarded.
+      if (socket.data.viewing && socket.data.viewing !== n && socket.data.viewStart) {
+        track({ type: 'booth.dwell', boothNumber: socket.data.viewing, socket,
+                meta: { ms: Date.now() - socket.data.viewStart } });
+      }
+      if (socket.data.viewing === n) return;   // repeat view of the same booth
+
+      activeViewers[socket.id] = n;
       socket.data.viewStart = Date.now();
-      socket.data.viewing   = stand(boothNumber);
-      track({ type: 'booth.view', boothNumber: stand(boothNumber), socket });
+      socket.data.viewing   = n;
+      track({ type: 'booth.view', boothNumber: n, socket });
       broadcastState(io);
     });
 
-    socket.on('booth:click', async ({ boothNumber }) => {
+    socket.on('booth:click', safe('booth:click', async ({ boothNumber }) => {
       if (!allowClick()) return;
       const n = stand(boothNumber);
       const b = cache.find(x => x.boothNumber === n);
@@ -122,9 +151,16 @@ function register(io) {
       }
       await booths.incrementClicks(n);
       track({ type: 'booth.click', boothNumber: n, socket });
+
+      // Re-anchor dwell tracking to the booth now open. Without this the timer
+      // stayed pinned to the first booth viewed, so its dwell was re-emitted on
+      // every subsequent click and accumulated far beyond real attention.
+      socket.data.viewing   = n;
+      socket.data.viewStart = Date.now();
+
       await refresh();
       broadcastState(io);
-    });
+    }));
 
     // Sent when a visitor accepts analytics consent mid-session, so their
     // events attach to a stable id from that point on.
@@ -142,7 +178,7 @@ function register(io) {
 
     // Replaces booth:book / booth:hold on the public floorplan. Captures the
     // name and email that were previously discarded in the browser.
-    socket.on('inquiry:submit', async (payload = {}, ack) => {
+    socket.on('inquiry:submit', safe('inquiry:submit', async (payload = {}, ack) => {
       if (!allowSubmit()) return ack?.({ ok: false, errors: ['Too many submissions. Please wait a moment.'] });
       if (payload.website) return ack?.({ ok: true });   // honeypot
 
@@ -157,7 +193,7 @@ function register(io) {
         console.error('Inquiry failed:', e.message);
         ack?.({ ok: false, errors: ['Something went wrong. Please try again.'] });
       }
-    });
+    }));
 
     // ── Admin ─────────────────────────────────────────────────────────────────
     // Every handler below is wrapped. Previously any visitor could emit these
@@ -207,10 +243,27 @@ function register(io) {
     }));
 
     socket.on('admin:setStatus', requireAdmin(socket, 'admin:setStatus', async ({ boothNumber, status, company }) => {
-      const allowed = ['available', 'held', 'sold', 'reserved'];
+      const allowed = ['available', 'held', 'sold'];
       if (!allowed.includes(status)) return;
       const n = stand(boothNumber);
-      const r = await booths.setStatus(n, status, { company: company || null, actor: socket.data.user });
+      const before = await booths.get(n);
+      if (!before) return;
+
+      // Forcing 'held' without a hold document left the booth to be reclaimed
+      // by the expiry sweep within 60 seconds — the stand silently went back on
+      // sale. Keep the hold collection in step with whatever status is forced.
+      if (status === 'held') {
+        await holdsSvc.drop(n);
+        await holdsSvc.create({ boothNumber: n, company: company || 'Pending', actor: socket.data.user });
+      } else {
+        await holdsSvc.drop(n);
+      }
+
+      const r = await booths.setStatus(n, status, {
+        // Blank company on a status change used to wipe an existing exhibitor.
+        company: company || (status === 'available' ? null : before.assignment?.company || null),
+        actor: socket.data.user,
+      });
       if (!r) return;
       track({ type: 'booth.status_change', boothNumber: n, socket,
               meta: { from: r.before.status, to: status, forced: true } });
