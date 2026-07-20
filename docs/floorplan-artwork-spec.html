@@ -1,0 +1,505 @@
+<title>Floorplan Artwork Specification — Blueprint Event Company</title>
+<style>
+  :root {
+    --paper:     #FCFCFB;
+    --panel:     #FFFFFF;
+    --panel-2:   #F2F3F1;
+    --ink:       #16191C;
+    --ink-soft:  #4A5157;
+    --ink-faint: #7B8288;
+    --rule:      #DBDDDA;
+    --rule-hard: #B6BAB6;
+    --accent:    #0F5F73;
+    --accent-bg: #E4EFF2;
+    --deny:      #A32E1F;
+    --deny-bg:   #F8EAE7;
+    --ok:        #1E6B4A;
+    --ok-bg:     #E6F1EA;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0F1113; --panel: #161A1D; --panel-2: #1E2326;
+      --ink: #E8EAEB; --ink-soft: #9BA1A5; --ink-faint: #6E767A;
+      --rule: #262A2D; --rule-hard: #3A4145;
+      --accent: #6FBFD4; --accent-bg: #10262C;
+      --deny: #E08472; --deny-bg: #2B1613;
+      --ok: #58BF93; --ok-bg: #0F2419;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0F1113; --panel: #161A1D; --panel-2: #1E2326;
+    --ink: #E8EAEB; --ink-soft: #9BA1A5; --ink-faint: #6E767A;
+    --rule: #262A2D; --rule-hard: #3A4145;
+    --accent: #6FBFD4; --accent-bg: #10262C;
+    --deny: #E08472; --deny-bg: #2B1613;
+    --ok: #58BF93; --ok-bg: #0F2419;
+  }
+  :root[data-theme="light"] {
+    --paper: #FCFCFB; --panel: #FFFFFF; --panel-2: #F2F3F1;
+    --ink: #16191C; --ink-soft: #4A5157; --ink-faint: #7B8288;
+    --rule: #DBDDDA; --rule-hard: #B6BAB6;
+    --accent: #0F5F73; --accent-bg: #E4EFF2;
+    --deny: #A32E1F; --deny-bg: #F8EAE7;
+    --ok: #1E6B4A; --ok-bg: #E6F1EA;
+  }
+
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px 110px;
+          display: grid; grid-template-columns: 1fr; gap: 44px; }
+  @media (min-width: 1060px) { .wrap { grid-template-columns: 178px minmax(0,1fr); } }
+
+  /* masthead */
+  .mast { grid-column: 1/-1; border-bottom: 3px double var(--rule-hard); padding: 52px 0 22px; }
+  .doccode {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 16px;
+  }
+  h1 { font-size: clamp(28px,4.6vw,42px); line-height: 1.09; letter-spacing: -.025em;
+       font-weight: 700; text-wrap: balance; margin-bottom: 12px; }
+  .sub { font-size: 17.5px; color: var(--ink-soft); max-width: 60ch; }
+  .issue {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr));
+    gap: 4px 24px; margin-top: 24px; font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink-faint);
+  }
+  .issue b { display: block; color: var(--ink-soft); font-weight: 500; letter-spacing: .04em; }
+
+  /* contents */
+  nav.toc { display: none; }
+  @media (min-width: 1060px) {
+    nav.toc { display: block; position: sticky; top: 28px; align-self: start;
+              font-family: var(--mono); font-size: 11.5px; line-height: 1.5; }
+    nav.toc ol { list-style: none; display: flex; flex-direction: column; gap: 11px; }
+    nav.toc a { color: var(--ink-faint); text-decoration: none; display: grid;
+                grid-template-columns: 26px 1fr; gap: 4px; }
+    nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+    nav.toc a span { color: var(--rule-hard); }
+  }
+
+  main { min-width: 0; display: flex; flex-direction: column; gap: 50px; }
+  section { scroll-margin-top: 22px; }
+
+  h2 {
+    font-family: var(--mono); font-size: 12.5px; text-transform: uppercase;
+    letter-spacing: .14em; font-weight: 600;
+    padding-bottom: 9px; border-bottom: 1px solid var(--rule-hard); margin-bottom: 24px;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+  }
+  h2 em { font-style: normal; color: var(--ink-faint); font-weight: 400;
+          letter-spacing: .05em; font-size: 11px; }
+  p { max-width: 68ch; margin-bottom: 13px; color: var(--ink-soft); }
+  p.lead { color: var(--ink); font-size: 16.5px; }
+  section > p:last-child { margin-bottom: 0; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .86em; background: var(--panel-2);
+         padding: 1.5px 5px; border: 1px solid var(--rule); color: var(--ink); }
+
+  /* requirement clauses */
+  .clause {
+    display: grid; grid-template-columns: 1fr; gap: 3px 20px;
+    padding: 20px 0; border-top: 1px solid var(--rule);
+  }
+  @media (min-width: 660px) { .clause { grid-template-columns: 74px minmax(0,1fr); } }
+  .clause:last-of-type { border-bottom: 1px solid var(--rule); }
+  .cid {
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+    color: var(--accent); letter-spacing: .04em; padding-top: 2px;
+  }
+  .clause h3 { font-size: 16.5px; font-weight: 650; letter-spacing: -.008em;
+               margin-bottom: 7px; text-wrap: balance; }
+  .clause p { font-size: 15px; margin-bottom: 0; }
+  .clause p + p { margin-top: 9px; }
+
+  .kw { font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+        letter-spacing: .06em; padding: 1px 6px; border: 1px solid currentColor;
+        white-space: nowrap; }
+  .kw.must  { color: var(--accent); background: var(--accent-bg); }
+  .kw.never { color: var(--deny);   background: var(--deny-bg); }
+  .kw.should{ color: var(--ink-faint); background: var(--panel-2); }
+
+  .why {
+    margin-top: 10px; padding: 9px 13px; background: var(--panel-2);
+    border-left: 2px solid var(--rule-hard);
+    font-size: 13.5px; color: var(--ink-soft);
+  }
+  .why b { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+           text-transform: uppercase; color: var(--ink-faint); display: block; margin-bottom: 3px; }
+
+  /* tables */
+  .tscroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--panel); margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 480px; }
+  th { text-align: left; font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+       text-transform: uppercase; color: var(--ink-faint); font-weight: 600;
+       padding: 10px 15px; border-bottom: 1px solid var(--rule-hard); white-space: nowrap; }
+  td { padding: 10px 15px; border-bottom: 1px solid var(--rule); color: var(--ink-soft); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.k { font-family: var(--mono); font-size: 12.5px; color: var(--ink); white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .swatch { display: inline-block; width: 13px; height: 13px; border: 1px solid var(--rule-hard);
+            vertical-align: -2px; margin-right: 7px; }
+
+  .callout { border-left: 3px solid var(--accent); background: var(--panel);
+             padding: 17px 21px; margin: 20px 0; }
+  .callout.warn { border-left-color: var(--deny); }
+  .callout h4 { font-family: var(--mono); font-size: 12px; text-transform: uppercase;
+                letter-spacing: .09em; color: var(--accent); margin-bottom: 7px; font-weight: 600; }
+  .callout.warn h4 { color: var(--deny); }
+  .callout p { margin-bottom: 0; }
+
+  ul.list { list-style: none; display: flex; flex-direction: column; gap: 8px;
+            max-width: 68ch; margin-bottom: 14px; }
+  ul.list li { color: var(--ink-soft); padding-left: 19px; position: relative; }
+  ul.list li::before { content: ""; position: absolute; left: 2px; top: 11px;
+                       width: 7px; height: 1px; background: var(--rule-hard); }
+
+  /* diagram */
+  .diagram { background: var(--panel); border: 1px solid var(--rule); padding: 22px; margin-bottom: 16px; }
+  .stand-demo { position: relative; width: 100%; max-width: 340px; aspect-ratio: 3/2;
+                background: var(--panel-2); border: 2px solid var(--ink); margin: 0 auto; }
+  .stand-demo span { position: absolute; font-family: var(--mono); font-size: 12px; color: var(--ink); }
+  .sd-num  { top: 7px; left: 8px; font-weight: 700; }
+  .sd-name { top: 50%; left: 50%; transform: translate(-50%,-50%); font-family: var(--sans);
+             font-size: 13px; font-weight: 600; text-align: center; }
+  .sd-size { bottom: 7px; right: 8px; }
+  .dlabel { font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+            text-align: center; margin-top: 12px; letter-spacing: .04em; }
+
+  pre { background: var(--panel); border: 1px solid var(--rule); padding: 16px 18px;
+        overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.62;
+        color: var(--ink-soft); margin-bottom: 16px; }
+  pre b { color: var(--accent); font-weight: 500; }
+  pre i { color: var(--ink-faint); font-style: normal; }
+
+  .check td:first-child { width: 46px; }
+  .box { font-family: var(--mono); color: var(--ink-faint); }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="doccode">Blueprint Event Company · Artwork Specification · BEC-FP-01</div>
+    <h1>Floorplan artwork specification</h1>
+    <p class="sub">Mandatory requirements for exhibition floorplan files supplied to Blueprint Event Company. Files that do not meet these requirements cannot be used in the interactive floorplan and will be returned.</p>
+    <div class="issue">
+      <span><b>Issue</b>1.0</span>
+      <span><b>Applies to</b>All halls, all shows</span>
+      <span><b>Supersedes</b>—</span>
+      <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <ol>
+      <li><a href="#why"><span>1</span> Why this exists</a></li>
+      <li><a href="#text"><span>2</span> Text</a></li>
+      <li><a href="#geometry"><span>3</span> Stand geometry</a></li>
+      <li><a href="#labels"><span>4</span> Label placement</a></li>
+      <li><a href="#colour"><span>5</span> Colour &amp; layers</a></li>
+      <li><a href="#data"><span>6</span> Companion data file</a></li>
+      <li><a href="#export"><span>7</span> Export &amp; delivery</a></li>
+      <li><a href="#accept"><span>8</span> Acceptance checks</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- 1 -->
+    <section id="why">
+      <h2>1 — Why this exists <em>Findings from LEX26</em></h2>
+      <p class="lead">The LEX26 file could not be read reliably by software. Every stand number on the plan was unrecoverable, and the software had to guess which rectangles were stands. These are the measured findings from that file.</p>
+
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>What we found</th><th>Measured</th><th>Consequence</th></tr></thead>
+          <tbody>
+            <tr><td>All text converted to outlines</td><td class="k num">0 text elements<br>5,970 vector paths</td><td>No stand number is machine-readable</td></tr>
+            <tr><td>Every glyph shape unique</td><td class="k num">5,955 distinct<br>of 5,970</td><td>Numbers cannot be recovered by shape matching either</td></tr>
+            <tr><td>One rectangle spanning two stands</td><td class="k num">167.6 × 100.5</td><td>Two 30 m² stands reported as one 59 m² stand</td></tr>
+            <tr><td>Rectangles containing two stand numbers</td><td class="k num">7</td><td>Stands merged or lost</td></tr>
+            <tr><td>Zero-area rectangle</td><td class="k num">100.6 × 0.1</td><td>Invisible phantom stand inflating availability</td></tr>
+            <tr><td>Stands drawn in a non-stand style</td><td class="k num">3</td><td>Stands rendered but not selectable by customers</td></tr>
+            <tr><td>Distinct near-white fills used</td><td class="k num">3</td><td>Software cannot tell stands from facilities</td></tr>
+            <tr><td>Duplicate shapes on one footprint</td><td class="k num">4</td><td>Same stand counted twice</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <h4>The single most damaging item</h4>
+        <p>Converting text to outlines. It is irreversible: once a number becomes a set of shapes, the information is gone from the file. Nothing in post-production recovers it, and every downstream problem — wrong areas, wrong stand counts, manual re-keying — follows from it.</p>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section id="text">
+      <h2>2 — Text <em>Clauses R1–R3</em></h2>
+
+      <div class="clause">
+        <div class="cid">R1</div>
+        <div>
+          <h3><span class="kw never">Never</span> convert text to outlines, curves or paths</h3>
+          <p>Every stand number, area figure and exhibitor name must remain live, selectable text in the delivered file. Do not apply <em>Create Outlines</em> (Illustrator), <em>Convert to Curves</em> (CorelDRAW), <em>Flatten</em>, or <em>Explode Text</em> (AutoCAD).</p>
+          <p>A quick check: open the file and try to select a stand number with the text tool. If you cannot place a cursor in it, the file fails this clause.</p>
+          <div class="why"><b>Because</b>This is the fault that made LEX26 unusable. All 5,970 text shapes arrived as outlines and not one stand number could be read.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R2</div>
+        <div>
+          <h3><span class="kw never">Never</span> rasterise any part of the drawing</h3>
+          <p>No stand, number, dimension or hall feature may be delivered as a bitmap, embedded image, or flattened image layer. The only permitted raster content is sponsor and exhibitor logos, subject to R3.</p>
+          <div class="why"><b>Because</b>Rasterised regions are unreadable and unclickable. A customer cannot select a stand that exists only as pixels.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R3</div>
+        <div>
+          <h3><span class="kw must">Must</span> keep logos clear of stand boundaries</h3>
+          <p>Sponsor logos may be placed images, but must sit in their own dedicated box and must not overlap any stand rectangle or any stand label.</p>
+          <div class="why"><b>Note</b>LEX26 handled this correctly — all 5 logo images sat in their own boxes. No change needed.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section id="geometry">
+      <h2>3 — Stand geometry <em>Clauses R4–R8</em></h2>
+
+      <div class="clause">
+        <div class="cid">R4</div>
+        <div>
+          <h3><span class="kw must">Must</span> draw exactly one closed shape per stand</h3>
+          <p>Each sellable stand is one rectangle or one closed polygon. One shape must never cover two or more stands, even where they share a wall and are drawn as a block with a dividing line on top.</p>
+          <div class="why"><b>Because</b>In LEX26 one rectangle covered stands 410 and 509. The software sold it as a single 59 m² unit that does not exist.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R5</div>
+        <div>
+          <h3><span class="kw never">Never</span> stack duplicate or overlapping shapes</h3>
+          <p>No two stand shapes may overlap. Do not leave an older shape underneath a newer one, and do not draw a block rectangle behind individually drawn stands.</p>
+          <div class="why"><b>Because</b>Four stands in LEX26 existed twice, and one block rectangle sat behind two real stands. Counts and areas were wrong in both directions.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R6</div>
+        <div>
+          <h3><span class="kw never">Never</span> leave zero-area or sliver geometry</h3>
+          <p>Delete construction lines, collapsed rectangles and stray shapes. Any shape narrower than 0.5 m in either direction must not carry a stand style.</p>
+          <div class="why"><b>Because</b>A 0.1-unit-tall rectangle in LEX26 was counted as an available stand — invisible on screen, but inflating the availability figure shown to customers.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R7</div>
+        <div>
+          <h3><span class="kw must">Must</span> close every stand shape</h3>
+          <p>Stand outlines must be closed polylines, not four separate line segments. Open paths cannot be filled or hit-tested.</p>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R8</div>
+        <div>
+          <h3><span class="kw must">Must</span> draw to true scale</h3>
+          <p>Stand geometry must be at real-world scale, and the drawing must state its units and scale. The printed area figure must match the drawn geometry.</p>
+          <div class="why"><b>Because</b>Without a stated scale, areas can only be estimated. LEX26 areas were derived from a guessed conversion factor and every price was calculated from it.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section id="labels">
+      <h2>4 — Label placement <em>Clauses R9–R11</em></h2>
+      <p class="lead">Label position is how software works out which text belongs to which stand. The convention below is already used on your plans and must be applied consistently.</p>
+
+      <div class="diagram">
+        <div class="stand-demo">
+          <span class="sd-num">412</span>
+          <span class="sd-name">Acme Lubricants Ltd</span>
+          <span class="sd-size">30</span>
+        </div>
+        <div class="dlabel">number top-left · exhibitor name centre · area bottom-right</div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R9</div>
+        <div>
+          <h3><span class="kw must">Must</span> place each label in its fixed position</h3>
+          <p>Stand number in the top-left. Area figure in the bottom-right. Exhibitor name centred. No other text may appear inside a stand.</p>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R10</div>
+        <div>
+          <h3><span class="kw must">Must</span> keep every label inside its own stand</h3>
+          <p>A label must sit fully within the boundary of the stand it describes. Where a stand is too small, use a leader line to a label outside the plan area rather than letting text spill into a neighbour.</p>
+          <div class="why"><b>Because</b>Software assigns text to a stand by asking which stand it sits inside. A number that overhangs is assigned to the wrong stand or to none.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R11</div>
+        <div>
+          <h3><span class="kw must">Must</span> give every stand a unique number</h3>
+          <p>Stand numbers must be unique across the entire show, not merely within a hall. Numbers must not be reused between shows within the same year.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section id="colour">
+      <h2>5 — Colour and layers <em>Clauses R12–R14</em></h2>
+
+      <div class="clause">
+        <div class="cid">R12</div>
+        <div>
+          <h3><span class="kw must">Must</span> use exactly one fill per status</h3>
+          <p>Use these exact values. Do not introduce near-identical variants.</p>
+          <div class="tscroll" style="margin-top:12px">
+            <table>
+              <thead><tr><th>Meaning</th><th>Fill</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td>Available stand</td><td class="k"><span class="swatch" style="background:#ffffff"></span>#FFFFFF</td><td>Pure white only</td></tr>
+                <tr><td>Taken stand</td><td class="k"><span class="swatch" style="background:#fcdf6d"></span>#FCDF6D</td><td></td></tr>
+                <tr><td>Facility (catering, toilets, lounges)</td><td class="k"><span class="swatch" style="background:#60abbf"></span>#60ABBF</td><td>Must never be white</td></tr>
+                <tr><td>Structure (walls, conference rooms)</td><td class="k"><span class="swatch" style="background:#122830"></span>#122830</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="why"><b>Because</b>LEX26 used three different near-whites for stands (#FFFFFF, #FBFBF7, #FAFBFB) and also used pure white for logo boxes. Three real stands were invisible to the software, and facility boxes were nearly sold as stands.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R13</div>
+        <div>
+          <h3><span class="kw must">Must</span> separate content onto named layers</h3>
+          <p>Minimum layer set, named exactly:</p>
+          <pre><b>STANDS</b>        <i>stand outlines only</i>
+<b>STAND-NUMBERS</b> <i>number text only</i>
+<b>STAND-AREAS</b>   <i>area text only</i>
+<b>EXHIBITORS</b>    <i>exhibitor name text only</i>
+<b>FACILITIES</b>    <i>catering, toilets, lounges</i>
+<b>STRUCTURE</b>     <i>walls, halls, conference space</i>
+<b>LOGOS</b>         <i>placed images</i>
+<b>ANNOTATION</b>    <i>titles, keys, arrows</i></pre>
+          <p>Nothing else may sit on <code>STANDS</code>. In particular, facility boxes and logo backing boxes must not.</p>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R14</div>
+        <div>
+          <h3><span class="kw should">Should</span> avoid transparency and clipping masks on stands</h3>
+          <p>Stand fills should be flat and fully opaque. Transparency, gradients, blend modes and clipping masks on stand geometry make colour detection unreliable.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6 -->
+    <section id="data">
+      <h2>6 — Companion data file <em>Clause R15</em></h2>
+
+      <div class="clause">
+        <div class="cid">R15</div>
+        <div>
+          <h3><span class="kw must">Must</span> supply a stand schedule alongside the drawing</h3>
+          <p>A CSV or Excel file listing every stand, issued with each drawing revision and matching it exactly.</p>
+          <pre>stand_number,area_sqm,hall,status,exhibitor
+412,30,1,available,
+414,30,1,taken,Acme Lubricants Ltd
+416,24,1,taken,Northern Oils BV</pre>
+          <p><code>status</code> is one of <code>available</code>, <code>taken</code>, <code>reserved</code>. <code>exhibitor</code> may be blank.</p>
+          <div class="why"><b>Why this matters more than anything else here</b>The schedule is the authoritative record. With it, stand numbers and areas are read directly and no interpretation of the drawing is required. It takes minutes to export and removes every remaining risk in this document.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section id="export">
+      <h2>7 — Export and delivery <em>Clauses R16–R18</em></h2>
+
+      <div class="clause">
+        <div class="cid">R16</div>
+        <div>
+          <h3><span class="kw must">Must</span> deliver in one of these formats</h3>
+          <ul class="list">
+            <li><strong>SVG</strong> — with live text. In Illustrator's SVG export set <em>Type</em> to <strong>SVG</strong>, never <em>Convert to outline</em>. Do not tick <em>Preserve Illustrator Editing Capabilities</em>.</li>
+            <li><strong>DWG or DXF</strong> — with text as <code>TEXT</code> or <code>MTEXT</code> entities, never exploded to geometry.</li>
+            <li><strong>PDF</strong> — with embedded fonts and selectable text, as a secondary format only.</li>
+          </ul>
+          <p>A flattened PNG or JPEG is not an acceptable delivery format under any circumstances.</p>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R17</div>
+        <div>
+          <h3><span class="kw must">Must</span> keep geometry untransformed</h3>
+          <p>Apply no scaling, rotation or group transforms to stand shapes at export. Coordinates must be baked into the geometry so a stand's position can be read directly.</p>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R18</div>
+        <div>
+          <h3><span class="kw must">Must</span> name files by show and revision</h3>
+          <pre>LEX26_Floorplan_v03.svg
+LEX26_StandSchedule_v03.csv</pre>
+          <p>The drawing and its schedule must always carry the same version number. Never re-issue a changed drawing under an existing version number.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8 -->
+    <section id="accept">
+      <h2>8 — Acceptance checks <em>Run before you send</em></h2>
+      <p class="lead">Each delivery is checked automatically on receipt. A file failing any check is returned. Running these yourself first will save a round trip.</p>
+
+      <div class="tscroll">
+        <table class="check">
+          <thead><tr><th></th><th>Check</th><th>Pass condition</th></tr></thead>
+          <tbody>
+            <tr><td class="box">☐</td><td>Text is live</td><td>A stand number can be selected with the text tool</td></tr>
+            <tr><td class="box">☐</td><td>No rasterised drawing content</td><td>Only logos are images</td></tr>
+            <tr><td class="box">☐</td><td>One shape per stand</td><td>No shape contains two stand numbers</td></tr>
+            <tr><td class="box">☐</td><td>No overlaps</td><td>No two stand shapes intersect</td></tr>
+            <tr><td class="box">☐</td><td>No slivers</td><td>No stand shape under 0.5 m in either direction</td></tr>
+            <tr><td class="box">☐</td><td>Labels inside stands</td><td>Every number and area sits within its own stand</td></tr>
+            <tr><td class="box">☐</td><td>Numbers unique</td><td>No stand number appears twice</td></tr>
+            <tr><td class="box">☐</td><td>Colours exact</td><td>Only the four fills in R12 appear on stands and facilities</td></tr>
+            <tr><td class="box">☐</td><td>Layers correct</td><td>Nothing but stands on the <code>STANDS</code> layer</td></tr>
+            <tr><td class="box">☐</td><td>Schedule supplied</td><td>CSV present, same version, row count matches stand count</td></tr>
+            <tr><td class="box">☐</td><td>Schedule agrees with drawing</td><td>Every number and area matches</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <h4>What happens on receipt</h4>
+        <p>The file is parsed and every check above is run automatically. You will receive either a confirmation, or a report naming the specific stands and coordinates that failed. The check takes a few minutes, so a corrected file can usually be turned around the same day.</p>
+      </div>
+
+      <div class="callout warn">
+        <h4>If only one thing changes</h4>
+        <p>Keep the text live and send the stand schedule. Those two alone remove the great majority of the risk, and everything else in this document becomes a refinement rather than a rescue.</p>
+      </div>
+    </section>
+
+  </main>
+</div>

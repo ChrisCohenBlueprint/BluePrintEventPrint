@@ -11,7 +11,8 @@
     "mongo:down": "docker stop blueprint-mongo",
     "check:security": "node scripts/security-check.js",
     "check:browser": "node scripts/browser-check.js",
-    "check": "npm run check:security && npm run check:browser"
+    "check": "npm run check:security && npm run check:browser",
+    "validate:artwork": "node scripts/validate-artwork.js"
   },
   "keywords": [],
   "author": "",
