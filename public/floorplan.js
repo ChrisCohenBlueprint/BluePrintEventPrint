@@ -1,303 +1,370 @@
-// ─── BluePrint EventPrint — Public Floorplan JS ───────────────────────────────
-const socket = io();
-const PRICE_PER_SQM = 600;
+// ─── BluePrint EventPrint — Public Floorplan ──────────────────────────────────
+// Browse and enquire. Booking and holding are administrator actions and are no
+// longer reachable from this page.
 
-let booths = {};
-let selectedId = null;
-let svgDoc = null;
-let boothData = {};
+// ─── Consent ──────────────────────────────────────────────────────────────────
+// Behavioural events are not sent until the visitor accepts. Stand views still
+// work; they simply are not recorded.
+const CONSENT_KEY = 'bp_consent';
+let consent = localStorage.getItem(CONSENT_KEY);          // 'granted' | 'denied' | null
 
-// ─── Zoom / Pan (via panzoom) ─────────────────────────────────────────────────
-const frame  = document.getElementById('map-frame');
-const inner  = document.getElementById('map-inner');
-
-let pz;
-function initPanZoom() {
-  pz = panzoom(inner, {
-    maxZoom: 8,
-    minZoom: 0.3,
-    bounds: true,
-    boundsPadding: 0.1,
-    zoomDoubleClickSpeed: 1 // disable double click zoom to avoid conflict with clicks
-  });
-  
-  document.getElementById('zoom-in').addEventListener('click', () => {
-    const r = frame.getBoundingClientRect();
-    pz.smoothZoom(r.width/2, r.height/2, 1.5);
-  });
-  document.getElementById('zoom-out').addEventListener('click', () => {
-    const r = frame.getBoundingClientRect();
-    pz.smoothZoom(r.width/2, r.height/2, 0.66);
-  });
-  document.getElementById('zoom-reset').addEventListener('click', () => {
-    pz.moveTo(0, 0);
-    pz.zoomAbs(0, 0, 1);
-  });
+const SESSION_KEY = 'bp_session';
+function sessionId() {
+  if (consent !== 'granted') return null;
+  let s = localStorage.getItem(SESSION_KEY);
+  if (!s) {
+    s = (crypto.randomUUID?.() || Math.random().toString(16).slice(2).repeat(2)).replace(/-/g, '').slice(0, 32);
+    localStorage.setItem(SESSION_KEY, s);
+  }
+  return s;
 }
 
-// ─── Load SVG + Data ──────────────────────────────────────────────────────────
+const socket = io({ auth: { sessionId: sessionId() } });
+
+/** Emit a tracking-only event, suppressed when consent has not been given. */
+function emitTracked(event, payload) {
+  if (consent !== 'granted') return;
+  socket.emit(event, payload);
+}
+
+function initConsent() {
+  const bar = document.getElementById('consent-bar');
+  if (!consent) bar.classList.remove('hidden');
+
+  const decide = (value) => {
+    consent = value;
+    localStorage.setItem(CONSENT_KEY, value);
+    bar.classList.add('hidden');
+    if (value === 'granted') socket.emit('session:adopt', { sessionId: sessionId() });
+    else localStorage.removeItem(SESSION_KEY);
+  };
+  document.getElementById('consent-accept').onclick  = () => decide('granted');
+  document.getElementById('consent-decline').onclick = () => decide('denied');
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let booths      = {};      // boothNumber → booth
+let selectedId  = null;
+let shortlist   = [];      // boothNumbers the visitor wants to enquire about
+let svgDoc      = null;
+let submitted   = false;
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const cap = (s) => s ? s[0].toUpperCase() + s.slice(1) : '';
+
+const STATUS_LABEL = { available: 'Available', reserved: 'Reserved', taken: 'Taken' };
+
+// ─── Zoom / Pan ───────────────────────────────────────────────────────────────
+const frame = document.getElementById('map-frame');
+const inner = document.getElementById('map-inner');
+let pz;
+
+function initPanZoom() {
+  pz = panzoom(inner, {
+    maxZoom: 8, minZoom: 0.3, bounds: true, boundsPadding: 0.1,
+    zoomDoubleClickSpeed: 1,
+  });
+
+  // Which parts of the hall people navigate toward, before they click anything.
+  let zoomTimer = null;
+  pz.on('zoom', () => {
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => {
+      const t = pz.getTransform();
+      emitTracked('plan:zoom', { level: Number(t.scale.toFixed(2)), cx: Math.round(t.x), cy: Math.round(t.y) });
+    }, 700);
+  });
+
+  const zoomBy = (f) => {
+    const r = frame.getBoundingClientRect();
+    pz.smoothZoom(r.width / 2, r.height / 2, f);
+  };
+  document.getElementById('zoom-in').onclick  = () => zoomBy(1.5);
+  document.getElementById('zoom-out').onclick = () => zoomBy(0.66);
+  document.getElementById('zoom-reset').onclick = () => { pz.moveTo(0, 0); pz.zoomAbs(0, 0, 1); };
+}
+
+// ─── Load ─────────────────────────────────────────────────────────────────────
 async function load() {
   const mount = document.getElementById('svg-mount');
   try {
-    const [bdRes, svgRes] = await Promise.all([
-      fetch('/booth_data.json'),
-      fetch('/LEX26_Floorplan_Web-Format_57.svg')
-    ]);
-    boothData = await bdRes.json();
+    const svgRes = await fetch('/LEX26_Floorplan_Web-Format_57.svg');
     mount.innerHTML = await svgRes.text();
     svgDoc = mount.querySelector('svg');
     svgDoc.setAttribute('width', '100%');
     svgDoc.setAttribute('height', '100%');
     tagBooths();
+
+    // The socket connects while the 2.1 MB SVG is still downloading, so the
+    // first state:full almost always lands before there are any elements to
+    // paint. Re-apply it now that the plan is in the DOM.
+    Object.keys(booths).forEach(applyVisual);
+    updateStatsStrip();
+
     lucide.createIcons();
     initPanZoom();
+    openDeepLink();
   } catch (e) {
-    mount.innerHTML = '<p style="color:#f87171;padding:20px">Failed to load floorplan.</p>';
+    mount.innerHTML = '<p style="color:#f87171;padding:20px">Floorplan could not be loaded. Please refresh.</p>';
   }
 }
 
-// ─── Tag Booths ───────────────────────────────────────────────────────────────
-const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
-
-// Tap detection helper — fires callback only if pointer moved < 10px (tap, not pan)
-// Uses pointer events to seamlessly support both mouse (desktop) and touch (iPad)
+// Fires callback only when the pointer barely moved, so panning never selects.
 function addTapListener(el, callback) {
-  let startX, startY;
-  el.addEventListener('pointerdown', e => {
-    startX = e.clientX;
-    startY = e.clientY;
-  });
+  let sx = 0, sy = 0;
+  el.addEventListener('pointerdown', e => { sx = e.clientX; sy = e.clientY; });
   el.addEventListener('pointerup', e => {
-    if (Math.abs(e.clientX - startX) < 10 && Math.abs(e.clientY - startY) < 10) {
+    if (Math.abs(e.clientX - sx) < 10 && Math.abs(e.clientY - sy) < 10) {
       e.stopPropagation();
       callback();
     }
   });
 }
 
+// Booth numbers are still positional until real numbers are extracted from the
+// plan. Once that lands, data-booth carries the printed stand number instead
+// and this ordering assumption disappears.
 function tagBooths() {
-  const availEls = svgDoc.querySelectorAll('.cls-13');
-  const takenEls = svgDoc.querySelectorAll('.cls-11, .cls-14');
+  const avail = svgDoc.querySelectorAll('.cls-13');
+  const taken = svgDoc.querySelectorAll('.cls-11, .cls-14');
   let idx = 1;
 
-  availEls.forEach(el => {
-    const id = `booth-${String(idx).padStart(3,'0')}`;
-    const bd = boothData[id];
-    el.setAttribute('data-id', id);
-    el.classList.add('booth-interactive', 'booth-available');
-
-    booths[id] = {
-      id, status: 'available', company: null,
-      sqm:   bd?.sqm   ?? estimateSqm(el),
-      price: bd?.price ?? estimateSqm(el) * PRICE_PER_SQM,
-      viewers: 0
-    };
-
-    // Hover events (desktop)
-    el.addEventListener('mouseenter', e => showTooltip(e, id));
+  const wire = (el, defaultStatus) => {
+    const n = String(idx).padStart(3, '0');
+    el.setAttribute('data-booth', n);
+    el.classList.add('booth-interactive');
+    booths[n] = booths[n] || { boothNumber: n, status: defaultStatus, sqm: 0, viewers: 0, interest: 0 };
+    el.addEventListener('mouseenter', e => showTooltip(e, n));
     el.addEventListener('mousemove',  e => moveTooltip(e));
-    el.addEventListener('mouseleave', () => hideTooltip());
-    
-    // Unified tap/click listener (handles both desktop mouse click and iPad touch)
-    addTapListener(el, () => { hideTooltip(); selectBooth(id); });
+    el.addEventListener('mouseleave', hideTooltip);
+    addTapListener(el, () => { hideTooltip(); selectBooth(n); });
     idx++;
-  });
+  };
 
-  takenEls.forEach(el => {
-    const id = `booth-${String(idx).padStart(3,'0')}`;
-    el.setAttribute('data-id', id);
-    el.classList.add('booth-taken-orig', 'booth-sold');
-    booths[id] = { id, status: 'sold', company: 'Reserved', sqm: estimateSqm(el), price: 0, viewers: 0 };
-    el.addEventListener('mouseenter', e => showTooltip(e, id));
-    el.addEventListener('mousemove',  e => moveTooltip(e));
-    el.addEventListener('mouseleave', () => hideTooltip());
-    addTapListener(el, () => { hideTooltip(); selectBooth(id); });
-    idx++;
-  });
+  avail.forEach(el => wire(el, 'available'));
+  taken.forEach(el => wire(el, 'taken'));
 }
 
-function estimateSqm(el) {
-  try { const b = el.getBBox(); return Math.max(9, Math.min(300, Math.round((b.width * b.height) / 283))); }
-  catch { return 18; }
+// ─── Deep link: /floorplan?booth=412 ──────────────────────────────────────────
+// Lets sales send a customer straight to a stand, and gives campaign traffic a
+// trackable entry point.
+function openDeepLink() {
+  const n = new URLSearchParams(location.search).get('booth');
+  if (!n || !booths[n]) return;
+  selectBooth(n);
+  const el = svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`);
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // ─── Tooltip ──────────────────────────────────────────────────────────────────
 const tooltip = document.getElementById('fp-tooltip');
-function showTooltip(e, id) {
-  const b = booths[id];
-  document.getElementById('tt-label').textContent  = `Stand ${id.replace('booth-','')}`;
-  document.getElementById('tt-status').textContent = cap(b.status);
-  document.getElementById('tt-price').textContent  = b.status === 'available' ? `${b.sqm} m²` : '';
+function showTooltip(e, n) {
+  const b = booths[n];
+  document.getElementById('tt-label').textContent  = `Stand ${n}`;
+  document.getElementById('tt-status').textContent = STATUS_LABEL[b.status] || cap(b.status);
+  document.getElementById('tt-price').textContent  = b.status === 'available' && b.sqm ? `${b.sqm} m²` : '';
   tooltip.classList.remove('hidden');
   moveTooltip(e);
 }
 function moveTooltip(e) {
   const r = frame.getBoundingClientRect();
   tooltip.style.left = (e.clientX - r.left + 14) + 'px';
-  tooltip.style.top  = (e.clientY - r.top  - 10) + 'px';
+  tooltip.style.top  = (e.clientY - r.top - 10) + 'px';
 }
 function hideTooltip() { tooltip.classList.add('hidden'); }
 
-// ─── Select Booth ─────────────────────────────────────────────────────────────
-function selectBooth(id) {
+// ─── Selection ────────────────────────────────────────────────────────────────
+function selectBooth(n) {
   if (selectedId) {
-    svgDoc.querySelector(`[data-id="${selectedId}"]`)?.classList.remove('booth-selected');
+    svgDoc.querySelector(`[data-booth="${CSS.escape(selectedId)}"]`)?.classList.remove('booth-selected');
   }
-  selectedId = id;
-  svgDoc.querySelector(`[data-id="${id}"]`)?.classList.add('booth-selected');
-  socket.emit('booth:view', { boothId: id });
-  
-  // Track click with approximate location (timezone)
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-  const loc = tz ? tz.split('/')[1]?.replace('_', ' ') || tz : 'Unknown Location';
-  socket.emit('booth:click', { boothId: id, location: loc });
-  
-  renderPanel(id);
+  selectedId = n;
+  svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`)?.classList.add('booth-selected');
 
-  // On touch (iPad/phone) — scroll panel into view automatically
+  // Location is no longer derived from the browser timezone — the server
+  // resolves it from the request, which is both accurate and unspoofable.
+  emitTracked('booth:view',  { boothNumber: n });
+  emitTracked('booth:click', { boothNumber: n });
+
+  renderPanel(n);
+
   if (window.matchMedia('(pointer: coarse)').matches) {
-    setTimeout(() => {
-      document.getElementById('booth-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 100);
+    setTimeout(() => document.getElementById('booth-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
   }
 }
 
-function renderPanel(id) {
-  const b = booths[id];
-  const panel = document.getElementById('booth-panel');
-  const eq    = document.getElementById('enquiry-card');
+// ─── Shortlist ────────────────────────────────────────────────────────────────
+// A prospect interested in three adjacent stands should send one enquiry, not
+// three.
+function toggleShortlist(n) {
+  const i = shortlist.indexOf(n);
+  if (i > -1) shortlist.splice(i, 1);
+  else if (shortlist.length < 25) shortlist.push(n);
+  renderShortlist();
+  renderPanel(selectedId);
+}
 
-  if (b.status !== 'available') {
-    // Show taken notice
-    panel.classList.remove('hidden');
-    eq.classList.add('hidden');
+function renderShortlist() {
+  const card = document.getElementById('enquiry-card');
+  const box  = document.getElementById('eq-shortlist');
+
+  if (!shortlist.length) { card.classList.add('hidden'); box.innerHTML = ''; return; }
+  if (!submitted) card.classList.remove('hidden');
+
+  box.innerHTML = `
+    <div class="eq-shortlist-lbl">Enquiring about ${shortlist.length} stand${shortlist.length > 1 ? 's' : ''}</div>
+    <div class="eq-chips">
+      ${shortlist.map(n => `
+        <button type="button" class="eq-chip" data-remove="${esc(n)}" aria-label="Remove stand ${esc(n)}">
+          Stand ${esc(n)} <span aria-hidden="true">×</span>
+        </button>`).join('')}
+    </div>`;
+
+  box.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.onclick = () => toggleShortlist(btn.getAttribute('data-remove'));
+  });
+}
+
+// ─── Detail panel ─────────────────────────────────────────────────────────────
+function renderPanel(n) {
+  if (!n) return;
+  const b     = booths[n] || { status: 'taken' };
+  const panel = document.getElementById('booth-panel');
+  panel.classList.remove('hidden');
+
+  const status = b.status || 'taken';
+  const inList = shortlist.includes(n);
+
+  if (status !== 'available') {
     panel.innerHTML = `
       <div class="stand-header">
-        <div class="stand-id">Stand ${id.replace('booth-','')}</div>
-        <div class="stand-badge badge-${b.status}">${cap(b.status)}</div>
+        <div class="stand-id">Stand ${esc(n)}</div>
+        <div class="stand-badge badge-${esc(status)}">${esc(STATUS_LABEL[status] || cap(status))}</div>
       </div>
       <div class="stand-stats">
-        <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm} m²</span></div>
-        <div class="stand-stat"><span class="stand-stat-lbl">Status</span><span class="stand-stat-val">${cap(b.status)}</span></div>
+        <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' m²' : '—'}</span></div>
+        <div class="stand-stat"><span class="stand-stat-lbl">Status</span><span class="stand-stat-val">${esc(STATUS_LABEL[status] || cap(status))}</span></div>
       </div>
       <div class="stand-taken-notice">
         <i data-lucide="lock" style="width:14px;height:14px"></i>
-        This stand is currently ${b.status === 'sold' ? 'booked' : 'on hold'}.
-      </div>`;
+        ${status === 'reserved' ? 'This stand is currently reserved.' : 'This stand has been taken.'}
+      </div>
+      <p class="stand-alt">Interested in something nearby? Select an available stand and we'll suggest alternatives.</p>`;
     lucide.createIcons();
     return;
   }
 
-  // Available booth
-  panel.classList.remove('hidden');
-  eq.classList.remove('hidden');
   panel.innerHTML = `
     <div class="stand-header">
-      <div class="stand-id">Stand ${id.replace('booth-','')}</div>
+      <div class="stand-id">Stand ${esc(n)}</div>
       <div class="stand-badge badge-available">Available</div>
     </div>
     <div class="stand-stats">
-      <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm} m²</span></div>
-      <div class="stand-stat"><span class="stand-stat-lbl">Live Viewers</span><span class="stand-stat-val" id="live-viewers-${id}">${b.viewers}</span></div>
-      <div class="stand-stat"><span class="stand-stat-lbl">Total Clicks</span><span class="stand-stat-val" style="color:var(--orange)">${b.clicks} 🔥</span></div>
+      <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' m²' : '—'}</span></div>
+      <div class="stand-stat"><span class="stand-stat-lbl">Viewing now</span><span class="stand-stat-val">${esc(b.viewers || 0)}</span></div>
+      <div class="stand-stat"><span class="stand-stat-lbl">Interest</span><span class="stand-stat-val" style="color:var(--orange)">${esc(b.interest || 0)}</span></div>
     </div>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:4px">Fill in your details below and our team will contact you with pricing and availability.</p>`;
-  lucide.createIcons();
+    <button type="button" class="btn-shortlist ${inList ? 'in-list' : ''}" id="shortlist-btn">
+      <i data-lucide="${inList ? 'check' : 'plus'}"></i>
+      ${inList ? 'Added to enquiry' : 'Add to enquiry'}
+    </button>
+    <p class="stand-hint">Add the stands you're interested in, then send us one enquiry.</p>`;
 
-  // Wire form
-  const form = document.getElementById('enquiry-form');
-  document.getElementById('hold-btn').onclick = () => {
-    const company = document.getElementById('eq-company').value.trim();
-    if (!company) { document.getElementById('eq-company').focus(); return; }
-    socket.emit('booth:hold', { boothId: id, company });
-  };
-  form.onsubmit = e => {
+  document.getElementById('shortlist-btn').onclick = () => toggleShortlist(n);
+  lucide.createIcons();
+}
+
+// ─── Enquiry submission ───────────────────────────────────────────────────────
+function initForm() {
+  const form    = document.getElementById('enquiry-form');
+  const errBox  = document.getElementById('eq-errors');
+  const success = document.getElementById('eq-success');
+  const submit  = document.getElementById('eq-submit');
+
+  form.onsubmit = (e) => {
     e.preventDefault();
-    const company = document.getElementById('eq-company').value.trim();
-    if (!company) { document.getElementById('eq-company').focus(); return; }
-    socket.emit('booth:book', { boothId: id, company });
+    errBox.classList.add('hidden');
+    errBox.textContent = '';
+
+    const payload = {
+      name:    document.getElementById('eq-contact').value.trim(),
+      email:   document.getElementById('eq-email').value.trim(),
+      company: document.getElementById('eq-company').value.trim(),
+      phone:   document.getElementById('eq-phone').value.trim(),
+      message: document.getElementById('eq-message').value.trim(),
+      website: document.getElementById('eq-website').value,   // honeypot
+      boothNumbers: shortlist.slice(),
+    };
+
+    submit.disabled = true;
+    submit.textContent = 'Sending…';
+
+    // The server is authoritative on validation; this ack carries its verdict.
+    socket.emit('inquiry:submit', payload, (res) => {
+      submit.disabled = false;
+      submit.innerHTML = '<i data-lucide="send"></i> Send enquiry';
+      lucide.createIcons();
+
+      if (res && res.ok) {
+        submitted = true;
+        form.classList.add('hidden');
+        document.getElementById('eq-shortlist').classList.add('hidden');
+        success.classList.remove('hidden');
+        lucide.createIcons();
+        return;
+      }
+      const errors = (res && res.errors) || ['Something went wrong. Please try again.'];
+      errBox.innerHTML = errors.map(x => `<div>${esc(x)}</div>`).join('');
+      errBox.classList.remove('hidden');
+    });
   };
 }
 
-// ─── Socket Events ────────────────────────────────────────────────────────────
-socket.on('state:full', (serverBooths) => {
-  serverBooths.forEach(b => {
-    if (booths[b.boothId]) {
-      booths[b.boothId] = { ...booths[b.boothId], ...b };
-      applyVisual(b.boothId);
-    }
+// ─── Socket events ────────────────────────────────────────────────────────────
+socket.on('state:full', (rows) => {
+  rows.forEach(b => {
+    const n = b.boothNumber;
+    booths[n] = { ...(booths[n] || {}), ...b };
+    applyVisual(n);
   });
+  if (selectedId) renderPanel(selectedId);
   updateStatsStrip();
 });
 
-socket.on('booth:updated', (b) => {
-  if (booths[b.boothId]) {
-    booths[b.boothId] = { ...booths[b.boothId], ...b };
-    applyVisual(b.boothId);
-    if (selectedId === b.boothId) renderPanel(b.boothId);
-    updateStatsStrip();
-  }
-});
-
 socket.on('stats:updated', (stats) => {
-  document.getElementById('avail-count').textContent = stats.availableBooths;
-  document.getElementById('avail-sqm').textContent   = stats.availSqm.toLocaleString();
-  updateStatsStrip(stats);
+  if (stats.availableBooths != null) document.getElementById('avail-count').textContent = stats.availableBooths;
+  if (stats.availSqm != null) document.getElementById('avail-sqm').textContent = stats.availSqm.toLocaleString();
+  updateStatsStrip();
 });
 
 socket.on('viewers:count', (n) => {
   document.getElementById('viewer-count').textContent = n;
 });
 
-socket.on('booth:consolidated', ({ secondary }) => {
-  const el = svgDoc?.querySelector(`[data-id="${secondary}"]`);
-  if (el) el.style.visibility = 'hidden';
-});
+socket.on('error:action', ({ message }) => console.warn(message));
 
-function applyVisual(id) {
-  const el = svgDoc?.querySelector(`[data-id="${id}"]`);
+function applyVisual(n) {
+  const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   if (!el) return;
-  el.classList.remove('booth-available','booth-sold','booth-held');
-  const status = booths[id]?.status || 'available';
-  el.classList.add(`booth-${status}`);
-
-  // Company text overlay
-  let textNode = svgDoc.querySelector(`#text-${id}`);
-  const company = booths[id]?.company;
-
-  if (status !== 'available' && company) {
-    if (!textNode) {
-      textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      textNode.setAttribute('id', `text-${id}`);
-      textNode.setAttribute('text-anchor', 'middle');
-      textNode.setAttribute('dominant-baseline', 'middle');
-      textNode.setAttribute('fill', '#111827');
-      textNode.setAttribute('font-size', '14px');
-      textNode.setAttribute('font-family', 'Plus Jakarta Sans, sans-serif');
-      textNode.setAttribute('font-weight', '700');
-      textNode.style.pointerEvents = 'none';
-      el.parentNode.appendChild(textNode);
-    }
-    const bbox = el.getBBox();
-    textNode.setAttribute('x', bbox.x + bbox.width / 2);
-    textNode.setAttribute('y', bbox.y + bbox.height / 2);
-    
-    // Truncate if very long
-    textNode.textContent = company.length > 20 ? company.substring(0, 18) + '...' : company;
-  } else if (textNode) {
-    textNode.remove();
-  }
+  el.classList.remove('booth-available', 'booth-sold', 'booth-held', 'booth-taken', 'booth-reserved');
+  el.classList.add(`booth-${booths[n]?.status || 'taken'}`);
+  if (shortlist.includes(n)) el.classList.add('booth-shortlisted');
+  else el.classList.remove('booth-shortlisted');
+  // Company names are deliberately not rendered on the public plan — who holds
+  // a stand is commercial information.
 }
 
-function updateStatsStrip(stats) {
-  const all  = Object.values(booths);
+function updateStatsStrip() {
+  const all   = Object.values(booths);
   const avail = all.filter(b => b.status === 'available');
-  const held  = all.filter(b => b.status === 'held');
+  const resv  = all.filter(b => b.status === 'reserved');
   document.getElementById('stat-avail').textContent = avail.length;
-  document.getElementById('stat-sqm').textContent   = avail.reduce((s,b) => s+b.sqm, 0).toLocaleString();
-  document.getElementById('stat-held').textContent  = held.length;
+  document.getElementById('stat-sqm').textContent   = avail.reduce((s, b) => s + (b.sqm || 0), 0).toLocaleString();
+  document.getElementById('stat-held').textContent  = resv.length;
 }
 
-function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
-
+initConsent();
+initForm();
 load();

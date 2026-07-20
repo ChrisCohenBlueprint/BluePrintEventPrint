@@ -98,9 +98,8 @@ function tagAdminBooths(boothData) {
   }
 
   availEls.forEach(el => {
-    const id = `booth-${String(idx).padStart(3, '0')}`;
-    const bd = boothData[id];
-    el.setAttribute('data-id', id);
+    const id = String(idx).padStart(3, '0');
+    el.setAttribute('data-booth', id);
     el.classList.add('booth-interactive');
     applyAdminVisual(el, booths[id]?.status || 'available');
     el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
@@ -111,8 +110,8 @@ function tagAdminBooths(boothData) {
   });
 
   takenEls.forEach(el => {
-    const id = `booth-${String(idx).padStart(3, '0')}`;
-    el.setAttribute('data-id', id);
+    const id = String(idx).padStart(3, '0');
+    el.setAttribute('data-booth', id);
     el.classList.add('booth-taken-orig');
     applyAdminVisual(el, booths[id]?.status || 'sold');
     el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
@@ -127,9 +126,9 @@ function applyAdminVisual(el, status) {
   el.classList.remove('booth-available', 'booth-sold', 'booth-held');
   el.classList.add(`booth-${status}`);
 
-  const id = el.getAttribute('data-id');
+  const id = el.getAttribute('data-booth');
   let textNode = svgDoc.querySelector(`#admin-text-${id}`);
-  const company = booths[id]?.company;
+  const company = dealOf(booths[id]).company;
 
   if (status !== 'available' && company) {
     if (!textNode) {
@@ -158,9 +157,9 @@ function applyAdminVisual(el, status) {
 const adminTooltip = document.getElementById('admin-tooltip');
 function showAdminTooltip(e, id) {
   const b = booths[id];
-  document.getElementById('att-label').textContent = `Stand ${id.replace('booth-', '')}`;
+  document.getElementById('att-label').textContent = `Stand ${id}`;
   document.getElementById('att-status').textContent = cap(b?.status || 'unknown');
-  document.getElementById('att-price').textContent = b ? `€${b.price?.toLocaleString()}` : '';
+  document.getElementById('att-price').textContent = b ? `€${b.listPrice?.toLocaleString()}` : '';
   adminTooltip.classList.remove('hidden');
   moveAdminTooltip(e);
 }
@@ -174,102 +173,205 @@ function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 // ─── Admin Select Booth ───────────────────────────────────────────────────────
 function selectAdminBooth(id) {
   if (selectedAdminId) {
-    svgDoc.querySelector(`[data-id="${selectedAdminId}"]`)?.classList.remove('booth-selected');
+    svgDoc.querySelector(`[data-booth="${selectedAdminId}"]`)?.classList.remove('booth-selected');
   }
   selectedAdminId = id;
-  svgDoc.querySelector(`[data-id="${id}"]`)?.classList.add('booth-selected');
+  svgDoc.querySelector(`[data-booth="${id}"]`)?.classList.add('booth-selected');
   renderAdminBoothAction(id);
 }
 
-function renderAdminBoothAction(id) {
-  const b = booths[id];
+// Commercial fields now live under `assignment` on the booth document.
+const dealOf = (b) => (b && b.assignment) || {};
+
+function renderAdminBoothAction(n) {
+  const b = booths[n];
   if (!b) return;
+  const d = dealOf(b);
   const panel = document.getElementById('admin-booth-action');
   panel.classList.remove('hidden');
-  document.getElementById('aba-id').textContent = `Stand ${id.replace('booth-', '')}`;
-  document.getElementById('aba-status').textContent = cap(b.status);
-  document.getElementById('aba-sqm').textContent = `${b.sqm} m²`;
-  document.getElementById('aba-price').textContent = `€${b.price?.toLocaleString()}`;
-  document.getElementById('aba-company').textContent = b.company || '—';
+
+  document.getElementById('aba-id').textContent      = `Stand ${n}`;
+  document.getElementById('aba-status').textContent  = cap(b.status);
+  document.getElementById('aba-sqm').textContent     = `${b.sqm} m²`;
+  document.getElementById('aba-price').textContent   = `€${(b.listPrice || 0).toLocaleString()}`;
+  document.getElementById('aba-company').textContent = d.company || '—';
   document.getElementById('aba-viewers').textContent = b.viewers || 0;
-  document.getElementById('aba-clicks').textContent = b.clicks || 0;
+  document.getElementById('aba-clicks').textContent  = b.clicks || 0;
 
+  // Click history is no longer a 20-entry array on the booth; it comes from the
+  // activity stream, so it survives restarts and is not capped.
   const clickList = document.getElementById('aba-click-list');
-  if (b.clickHistory && b.clickHistory.length > 0) {
-    clickList.innerHTML = b.clickHistory.map(c => `<div>${new Date(c.time).toLocaleTimeString('en-GB')} — ${c.location}</div>`).join('');
-  } else {
-    clickList.innerHTML = '<div>No clicks yet.</div>';
-  }
+  clickList.textContent = 'Loading…';
+  fetch(`/api/booths/${encodeURIComponent(n)}/activity?limit=20`)
+    .then(r => r.ok ? r.json() : [])
+    .then(rows => {
+      clickList.replaceChildren();
+      if (!rows.length) { clickList.textContent = 'No activity yet.'; return; }
+      rows.forEach(r => {
+        const div = document.createElement('div');
+        const country = r.context?.country ? ` · ${r.context.country}` : '';
+        div.textContent = `${new Date(r.ts).toLocaleString('en-GB')} — ${r.type}${country}`;
+        clickList.appendChild(div);
+      });
+    })
+    .catch(() => { clickList.textContent = 'Could not load activity.'; });
 
-  document.getElementById('aba-book').onclick = () => socket.emit('booth:book', { boothId: id, company: prompt('Company name:') || 'Admin' });
-  document.getElementById('aba-hold').onclick = () => socket.emit('booth:hold', { boothId: id, company: prompt('Company name:') || 'Pending' });
-  document.getElementById('aba-release').onclick = () => socket.emit('booth:release', { boothId: id });
-  document.getElementById('aba-export').onclick = () => exportSingleCSV(id);
+  document.getElementById('aba-book').onclick    = () => adminAction('book', n);
+  document.getElementById('aba-hold').onclick    = () => adminAction('hold', n);
+  document.getElementById('aba-release').onclick = () => adminAction('release', n);
+  document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
 
-  // Deal details
-  document.getElementById('aba-actual-price').value = b.actualPrice ?? '';
-  document.getElementById('aba-notes').value = b.notes ?? '';
-  document.getElementById('aba-save-deal').onclick = () => {
+  document.getElementById('aba-actual-price').value = d.actualPrice ?? '';
+  document.getElementById('aba-notes').value        = d.notes ?? '';
+  document.getElementById('aba-save-deal').onclick  = () => {
     const actualPrice = parseFloat(document.getElementById('aba-actual-price').value) || null;
     const notes = document.getElementById('aba-notes').value.trim();
-    socket.emit('booth:update-deal', { boothId: id, actualPrice, notes });
+    socket.emit('booth:update-deal', { boothNumber: n, actualPrice, notes });
     const btn = document.getElementById('aba-save-deal');
     btn.textContent = '✅ Saved!';
     setTimeout(() => { btn.textContent = '💾 Save Deal Details'; }, 2000);
   };
 }
 
-// ─── Bookings Table ───────────────────────────────────────────────────────────
+// ─── Bookings table ───────────────────────────────────────────────────────────
+// Built with DOM nodes rather than an interpolated HTML string. Company names
+// and notes originate from the public enquiry form, so treating them as markup
+// made the admin dashboard executable by anyone who could submit the form.
+function cell(parent, tag = 'td') {
+  const el = document.createElement(tag);
+  parent.appendChild(el);
+  return el;
+}
+
+function actionButton(td, label, cls, action, n) {
+  const btn = document.createElement('button');
+  btn.className = `admin-btn ${cls}`;
+  btn.style.cssText = 'font-size:11px;padding:5px 10px';
+  btn.textContent = label;
+  btn.dataset.action = action;
+  btn.dataset.booth  = n;
+  td.appendChild(btn);
+  return btn;
+}
+
 function renderBookingsTable() {
-  const tbody = document.getElementById('bookings-tbody');
+  const tbody  = document.getElementById('bookings-tbody');
   const search = document.getElementById('bookings-search').value.toLowerCase();
   const filter = document.getElementById('bookings-filter').value;
 
-  let rows = Object.values(booths).filter(b => {
+  const rows = Object.values(booths).filter(b => {
+    const d = dealOf(b);
     const matchFilter = filter === 'all' || b.status === filter;
     const matchSearch = !search ||
-      b.boothId.toLowerCase().includes(search) ||
-      (b.company || '').toLowerCase().includes(search);
+      String(b.boothNumber).toLowerCase().includes(search) ||
+      (d.company || '').toLowerCase().includes(search);
     return matchFilter && matchSearch;
   });
 
-  tbody.innerHTML = rows.map(b => `
-    <tr>
-      <td><strong>Stand ${b.boothId.replace('booth-', '')}</strong></td>
-      <td>${b.sqm} m²</td>
-      <td>€${b.price?.toLocaleString()}</td>
-      <td>
-        <input type="number" class="admin-input" placeholder="Price..." value="${b.actualPrice || ''}" style="width:80px; padding:4px 8px; font-size:12px; background:var(--bg);" onchange="inlineUpdateDeal('${b.boothId}', 'price', this.value)">
-      </td>
-      <td><span class="status-pill pill-${b.status}">${cap(b.status)}</span></td>
-      <td>${b.company || '<span style="color:var(--muted)">—</span>'}</td>
-      <td>
-        <input type="text" class="admin-input" placeholder="Notes..." value="${b.notes || ''}" style="width:140px; padding:4px 8px; font-size:12px; background:var(--bg);" onchange="inlineUpdateDeal('${b.boothId}', 'notes', this.value)">
-      </td>
-      <td style="display:flex;gap:6px;flex-wrap:wrap;">
-        ${b.status !== 'sold' ? `<button class="admin-btn success" style="font-size:11px;padding:5px 10px" onclick="adminAction('book','${b.boothId}')">Book</button>` : ''}
-        ${b.status === 'available' ? `<button class="admin-btn warning" style="font-size:11px;padding:5px 10px" onclick="adminAction('hold','${b.boothId}')">Hold</button>` : ''}
-        ${b.status !== 'available' ? `<button class="admin-btn" style="font-size:11px;padding:5px 10px" onclick="adminAction('release','${b.boothId}')">Release</button>` : ''}
-        <button class="admin-btn" style="font-size:11px;padding:5px 10px;background:var(--glass-bg);border:1px solid var(--border);" onclick="exportSingleCSV('${b.boothId}')">⬇️ CSV</button>
-      </td>
-    </tr>`).join('');
+  tbody.replaceChildren();
+
+  rows.forEach(b => {
+    const d  = dealOf(b);
+    const n  = b.boothNumber;
+    const tr = document.createElement('tr');
+
+    const stand = cell(tr);
+    const strong = document.createElement('strong');
+    strong.textContent = `Stand ${n}`;
+    stand.appendChild(strong);
+
+    cell(tr).textContent = `${b.sqm} m²`;
+    cell(tr).textContent = `€${(b.listPrice || 0).toLocaleString()}`;
+
+    const priceTd = cell(tr);
+    const priceIn = document.createElement('input');
+    priceIn.type = 'number';
+    priceIn.className = 'admin-input';
+    priceIn.placeholder = 'Price…';
+    priceIn.value = d.actualPrice ?? '';
+    priceIn.style.cssText = 'width:80px;padding:4px 8px;font-size:12px;background:var(--bg);';
+    priceIn.dataset.field = 'price';
+    priceIn.dataset.booth = n;
+    priceTd.appendChild(priceIn);
+
+    const statusTd = cell(tr);
+    const pill = document.createElement('span');
+    pill.className = `status-pill pill-${b.status}`;
+    pill.textContent = cap(b.status);
+    statusTd.appendChild(pill);
+
+    const companyTd = cell(tr);
+    if (d.company) {
+      companyTd.textContent = d.company;
+    } else {
+      const dash = document.createElement('span');
+      dash.style.color = 'var(--muted)';
+      dash.textContent = '—';
+      companyTd.appendChild(dash);
+    }
+
+    const notesTd = cell(tr);
+    const notesIn = document.createElement('input');
+    notesIn.type = 'text';
+    notesIn.className = 'admin-input';
+    notesIn.placeholder = 'Notes…';
+    notesIn.value = d.notes ?? '';
+    notesIn.style.cssText = 'width:140px;padding:4px 8px;font-size:12px;background:var(--bg);';
+    notesIn.dataset.field = 'notes';
+    notesIn.dataset.booth = n;
+    notesTd.appendChild(notesIn);
+
+    const actions = cell(tr);
+    actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+    if (b.status !== 'sold')      actionButton(actions, 'Book',    'success', 'book',    n);
+    if (b.status === 'available') actionButton(actions, 'Hold',    'warning', 'hold',    n);
+    if (b.status !== 'available') actionButton(actions, 'Release', '',        'release', n);
+    const csv = actionButton(actions, '⬇️ CSV', '', 'csv', n);
+    csv.style.cssText += ';background:var(--glass-bg);border:1px solid var(--border);';
+
+    tbody.appendChild(tr);
+  });
 }
 
-function adminAction(action, boothId) {
-  if (action === 'book') socket.emit('booth:book', { boothId, company: prompt('Company name:') || 'Admin' });
-  if (action === 'hold') socket.emit('booth:hold', { boothId, company: prompt('Company name:') || 'Pending' });
-  if (action === 'release') socket.emit('booth:release', { boothId });
-}
-window.adminAction = adminAction;
+// Delegation, so no handler names are exposed on `window` and no user data is
+// ever interpolated into an attribute.
+document.getElementById('bookings-tbody').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const n = btn.dataset.booth;
+  if (btn.dataset.action === 'csv') exportSingleCSV(n);
+  else adminAction(btn.dataset.action, n);
+});
 
-function inlineUpdateDeal(boothId, field, value) {
-  const b = booths[boothId];
+document.getElementById('bookings-tbody').addEventListener('change', (e) => {
+  const input = e.target.closest('input[data-field]');
+  if (!input) return;
+  inlineUpdateDeal(input.dataset.booth, input.dataset.field, input.value);
+});
+
+function adminAction(action, boothNumber) {
+  if (action === 'book') {
+    const company = prompt('Company name:');
+    if (company === null) return;
+    socket.emit('booth:book', { boothNumber, company: company.trim() || 'Admin' });
+  }
+  if (action === 'hold') {
+    const company = prompt('Company name:');
+    if (company === null) return;
+    const hours = parseFloat(prompt('Hold for how many hours?', '24')) || 24;
+    socket.emit('booth:hold', { boothNumber, company: company.trim() || 'Pending', hours });
+  }
+  if (action === 'release') socket.emit('booth:release', { boothNumber });
+}
+
+function inlineUpdateDeal(boothNumber, field, value) {
+  const b = booths[boothNumber];
   if (!b) return;
-  const actualPrice = field === 'price' ? (parseFloat(value) || null) : b.actualPrice;
-  const notes = field === 'notes' ? value : b.notes;
-  socket.emit('booth:update-deal', { boothId, actualPrice, notes });
+  const d = dealOf(b);
+  const actualPrice = field === 'price' ? (parseFloat(value) || null) : d.actualPrice;
+  const notes       = field === 'notes' ? value : d.notes;
+  socket.emit('booth:update-deal', { boothNumber, actualPrice, notes });
 }
-window.inlineUpdateDeal = inlineUpdateDeal;
 
 // Search/filter live update
 document.getElementById('bookings-search').addEventListener('input', renderBookingsTable);
@@ -280,13 +382,13 @@ function downloadCSV(dataArray, filename) {
   if (!dataArray || dataArray.length === 0) return;
   const headers = ['Stand', 'Size (m2)', 'Listed Price (EUR)', 'Deal Price (EUR)', 'Status', 'Company', 'Notes', 'Live Viewers', 'Total Clicks'];
   const rows = dataArray.map(b => [
-    b.boothId.replace('booth-', ''),
+    b.boothNumber,
     b.sqm,
-    b.price || 0,
-    b.actualPrice ?? '',
+    b.listPrice || 0,
+    dealOf(b).actualPrice ?? '',
     b.status,
-    `"${(b.company || '').replace(/"/g, '""')}"`,
-    `"${(b.notes || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+    `"${(dealOf(b).company || '').replace(/"/g, '""')}"`,
+    `"${(dealOf(b).notes || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
     b.viewers || 0,
     b.clicks || 0
   ]);
@@ -310,15 +412,15 @@ document.getElementById('export-all-csv').onclick = () => {
 
   let rows = Object.values(booths).filter(b => {
     const matchFilter = filter === 'all' || b.status === filter;
-    const matchSearch = !search || b.boothId.toLowerCase().includes(search) || (b.company || '').toLowerCase().includes(search);
+    const matchSearch = !search || b.boothNumber.toLowerCase().includes(search) || (dealOf(b).company || '').toLowerCase().includes(search);
     return matchFilter && matchSearch;
   });
 
   downloadCSV(rows, 'blueprint_stands_export.csv');
 };
 
-function exportSingleCSV(boothId) {
-  if (booths[boothId]) downloadCSV([booths[boothId]], `stand_${boothId.replace('booth-', '')}_export.csv`);
+function exportSingleCSV(boothNumber) {
+  if (booths[boothNumber]) downloadCSV([booths[boothNumber]], `stand_${boothNumber}_export.csv`);
 }
 window.exportSingleCSV = exportSingleCSV;
 
@@ -331,14 +433,14 @@ function populateToolDropdowns() {
     const sel = document.getElementById(id);
     const cur = sel.value;
     sel.innerHTML = '<option value="">Select…</option>' +
-      avail.map(b => `<option value="${b.boothId}">Stand ${b.boothId.replace('booth-', '')}</option>`).join('');
+      avail.map(b => `<option value="${b.boothNumber}">Stand ${b.boothNumber}</option>`).join('');
     sel.value = cur;
   });
 
   const statusStand = document.getElementById('status-stand');
   const cur2 = statusStand.value;
   statusStand.innerHTML = '<option value="">Select…</option>' +
-    all.map(b => `<option value="${b.boothId}">Stand ${b.boothId.replace('booth-', '')}</option>`).join('');
+    all.map(b => `<option value="${b.boothNumber}">Stand ${b.boothNumber}</option>`).join('');
   statusStand.value = cur2;
 }
 
@@ -354,18 +456,19 @@ document.getElementById('consolidation-form').addEventListener('submit', e => {
 // ─── Status Form ──────────────────────────────────────────────────────────────
 document.getElementById('status-form').addEventListener('submit', e => {
   e.preventDefault();
-  const boothId = document.getElementById('status-stand').value;
+  const boothNumber = document.getElementById('status-stand').value;
   const status = document.getElementById('status-new').value;
   const company = document.getElementById('status-company').value.trim();
-  if (!boothId) return;
-  socket.emit('admin:setStatus', { boothId, status, company });
+  if (!boothNumber) return;
+  socket.emit('admin:setStatus', { boothNumber, status, company });
 });
 
 // ─── Reset ────────────────────────────────────────────────────────────────────
-document.getElementById('reset-btn').addEventListener('click', () => {
-  if (!confirm('Reset entire floorplan to original state?')) return;
-  socket.emit('demo:reset');
-});
+// The bulk reset has been removed. It wiped all 272 booths in one call and was
+// reachable from any anonymous browser console. Bookings now live in MongoDB;
+// to reseed geometry run `node scripts/migrate.js`, which preserves commercial
+// state. Individual stands are released from the Bookings table.
+document.getElementById('reset-btn')?.remove();
 
 // ─── Clear Log ────────────────────────────────────────────────────────────────
 document.getElementById('clear-log').addEventListener('click', () => {
@@ -374,28 +477,28 @@ document.getElementById('clear-log').addEventListener('click', () => {
 
 // ─── Socket Events ────────────────────────────────────────────────────────────
 socket.on('state:full', (serverBooths) => {
-  serverBooths.forEach(b => { booths[b.boothId] = b; });
+  serverBooths.forEach(b => { booths[b.boothNumber] = b; });
   updateOverview();
   renderBookingsTable();
   populateToolDropdowns();
   // Update admin SVG if loaded
   if (svgDoc) {
     Object.values(booths).forEach(b => {
-      const el = svgDoc.querySelector(`[data-id="${b.boothId}"]`);
+      const el = svgDoc.querySelector(`[data-booth="${b.boothNumber}"]`);
       if (el) applyAdminVisual(el, b.status);
     });
   }
 });
 
 socket.on('booth:updated', (b) => {
-  booths[b.boothId] = { ...booths[b.boothId], ...b };
+  booths[b.boothNumber] = { ...booths[b.boothNumber], ...b };
   updateOverview();
   renderBookingsTable();
   if (svgDoc) {
-    const el = svgDoc.querySelector(`[data-id="${b.boothId}"]`);
+    const el = svgDoc.querySelector(`[data-booth="${b.boothNumber}"]`);
     if (el) applyAdminVisual(el, b.status);
   }
-  if (selectedAdminId === b.boothId) renderAdminBoothAction(b.boothId);
+  if (selectedAdminId === b.boothNumber) renderAdminBoothAction(b.boothNumber);
 });
 
 socket.on('stats:updated', (stats) => {
@@ -407,7 +510,7 @@ socket.on('booth:consolidated', ({ secondary }) => {
   renderBookingsTable();
   populateToolDropdowns();
   if (svgDoc) {
-    const el = svgDoc.querySelector(`[data-id="${secondary}"]`);
+    const el = svgDoc.querySelector(`[data-booth="${secondary}"]`);
     if (el) el.style.visibility = 'hidden';
   }
 });
@@ -431,10 +534,10 @@ function updateOverview() {
   const availSqm = avail.reduce((s, b) => s + (b.sqm || 0), 0);
   const soldSqm = sold.reduce((s, b) => s + (b.sqm || 0), 0);
   const heldSqm = held.reduce((s, b) => s + (b.sqm || 0), 0);
-  const earnedRev = sold.reduce((s, b) => s + (b.price || 0), 0);
-  const availRev = avail.reduce((s, b) => s + (b.price || 0), 0);
-  const heldRev = held.reduce((s, b) => s + (b.price || 0), 0);
-  const totalRev = all.reduce((s, b) => s + (b.price || 0), 0);
+  const earnedRev = sold.reduce((s, b) => s + (b.listPrice || 0), 0);
+  const availRev = avail.reduce((s, b) => s + (b.listPrice || 0), 0);
+  const heldRev = held.reduce((s, b) => s + (b.listPrice || 0), 0);
+  const totalRev = all.reduce((s, b) => s + (b.listPrice || 0), 0);
   const fillPct = totalSqm > 0 ? Math.round(((soldSqm + heldSqm) / totalSqm) * 100) : 0;
   const soldPct = totalSqm > 0 ? Math.round((soldSqm / totalSqm) * 100) : 0;
   const heldPct = totalSqm > 0 ? Math.round((heldSqm / totalSqm) * 100) : 0;

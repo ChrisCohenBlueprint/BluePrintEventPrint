@@ -309,3 +309,84 @@ body {
   .fp-header { padding: 12px 16px; }
   .fp-stats-strip { gap: 12px; padding: 10px 16px; }
 }
+
+/* ─── Enquiry flow ─────────────────────────────────────────────────────────── */
+.eq-opt { color: var(--muted); font-weight: 400; }
+
+.eq-shortlist { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.eq-shortlist-lbl { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.eq-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.eq-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(96,171,191,.14); border: 1px solid rgba(96,171,191,.4);
+  color: #cfeaf1; font-size: 12px; font-weight: 600;
+  padding: 4px 9px; border-radius: 999px; cursor: pointer;
+  font-family: inherit; transition: background .15s, border-color .15s;
+}
+.eq-chip:hover, .eq-chip:focus-visible { background: rgba(239,68,68,.18); border-color: rgba(239,68,68,.5); }
+.eq-chip span { opacity: .7; font-size: 14px; line-height: 1; }
+
+/* Honeypot — off-screen rather than display:none, which some bots skip */
+.eq-hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+.eq-errors {
+  background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35);
+  color: #fca5a5; font-size: 12.5px; line-height: 1.5;
+  padding: 9px 12px; border-radius: 8px; margin-bottom: 12px;
+}
+.eq-errors div + div { margin-top: 3px; }
+
+.eq-privacy { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+
+.eq-success { text-align: center; padding: 26px 16px; }
+.eq-success svg { width: 34px; height: 34px; color: #4ade80; margin-bottom: 10px; }
+.eq-success h4 { font-size: 16px; margin-bottom: 6px; }
+.eq-success p  { font-size: 13px; color: var(--muted); line-height: 1.55; }
+
+.btn-shortlist {
+  width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: rgba(96,171,191,.16); border: 1px solid rgba(96,171,191,.45);
+  color: #cfeaf1; font-family: inherit; font-size: 13.5px; font-weight: 600;
+  padding: 11px 14px; border-radius: 10px; cursor: pointer;
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.btn-shortlist:hover { background: rgba(96,171,191,.26); }
+.btn-shortlist:active { transform: translateY(1px); }
+.btn-shortlist svg { width: 15px; height: 15px; }
+.btn-shortlist.in-list { background: rgba(74,222,128,.16); border-color: rgba(74,222,128,.45); color: #bbf7d0; }
+
+.stand-hint, .stand-alt { font-size: 11.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+
+.badge-reserved { background: rgba(249,115,22,.18); color: #fdba74; }
+.badge-taken    { background: rgba(234,179,8,.16);  color: #fde047; }
+
+.booth-reserved { fill: rgba(249,115,22,.55) !important; }
+.booth-taken    { fill: rgba(234,179,8,.30)  !important; }
+.booth-shortlisted {
+  stroke: #4ade80 !important; stroke-width: 3px !important;
+  fill: rgba(74,222,128,.35) !important;
+}
+
+/* ─── Consent bar ──────────────────────────────────────────────────────────── */
+.consent-bar {
+  position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 200;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px;
+  background: rgba(17,24,33,.97); border: 1px solid rgba(255,255,255,.14);
+  border-radius: 14px; padding: 15px 18px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.5); backdrop-filter: blur(12px);
+}
+@media (min-width: 720px) { .consent-bar { left: auto; right: 20px; max-width: 560px; } }
+.consent-text { font-size: 12.5px; color: var(--muted); line-height: 1.55; flex: 1 1 260px; }
+.consent-text strong { display: block; color: #e8eef4; font-size: 13px; margin-bottom: 3px; font-weight: 600; }
+.consent-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.consent-btn {
+  font-family: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 8px 15px; border-radius: 8px; cursor: pointer; border: 1px solid transparent;
+  transition: background .15s, border-color .15s;
+}
+.consent-btn.ghost  { background: transparent; border-color: rgba(255,255,255,.18); color: var(--muted); }
+.consent-btn.ghost:hover { border-color: rgba(255,255,255,.34); color: #e8eef4; }
+.consent-btn.accept { background: #60abbf; color: #08222b; }
+.consent-btn.accept:hover { background: #7cc2d4; }
+
+.hidden { display: none !important; }

@@ -12,6 +12,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/panzoom@9.4.0/dist/panzoom.min.js"></script>
   <link rel="stylesheet" href="floorplan.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%2360abbf%27/%3E%3Crect x=%277%27 y=%277%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3Crect x=%2717%27 y=%277%27 width=%278%27 height=%2718%27 fill=%27%230b2027%27/%3E%3Crect x=%277%27 y=%2717%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3C/svg%3E">
 </head>
 <body>
   <div class="bg-glow g1"></div>
@@ -45,8 +46,8 @@
       <div class="fp-map-toolbar">
         <div class="fp-legend">
           <div class="leg-item"><span class="leg-dot white"></span> Available</div>
+          <div class="leg-item"><span class="leg-dot orange"></span> Reserved</div>
           <div class="leg-item"><span class="leg-dot yellow"></span> Taken</div>
-          <div class="leg-item"><span class="leg-dot orange"></span> On Hold</div>
         </div>
         <div class="fp-zoom-controls">
           <button id="zoom-in"    class="zoom-btn" title="Zoom In"><i data-lucide="zoom-in"></i></button>
@@ -86,31 +87,57 @@
         </div>
       </div>
 
-      <!-- Enquiry form (hidden until a stand is clicked) -->
+      <!-- Enquiry form (hidden until a stand is shortlisted) -->
       <div class="fp-side-card enquiry-card hidden" id="enquiry-card">
         <div id="stand-details"></div>
-        <form id="enquiry-form" class="eq-form">
+
+        <div class="eq-shortlist" id="eq-shortlist" aria-live="polite"></div>
+
+        <form id="enquiry-form" class="eq-form" novalidate>
           <div class="eq-field">
-            <label for="eq-company">Company Name</label>
-            <input type="text" id="eq-company" placeholder="e.g. Shell UK Ltd" required>
-          </div>
-          <div class="eq-field">
-            <label for="eq-contact">Contact Name</label>
-            <input type="text" id="eq-contact" placeholder="e.g. James Smith" required>
+            <label for="eq-contact">Your name</label>
+            <input type="text" id="eq-contact" name="name" autocomplete="name" placeholder="James Smith" required>
           </div>
           <div class="eq-field">
             <label for="eq-email">Email</label>
-            <input type="email" id="eq-email" placeholder="james@company.com" required>
+            <input type="email" id="eq-email" name="email" autocomplete="email" placeholder="james@company.com" required>
           </div>
+          <div class="eq-field">
+            <label for="eq-company">Company</label>
+            <input type="text" id="eq-company" name="organization" autocomplete="organization" placeholder="Shell UK Ltd">
+          </div>
+          <div class="eq-field">
+            <label for="eq-phone">Phone <span class="eq-opt">(optional)</span></label>
+            <input type="tel" id="eq-phone" name="tel" autocomplete="tel" placeholder="+44 7700 900000">
+          </div>
+          <div class="eq-field">
+            <label for="eq-message">Anything we should know? <span class="eq-opt">(optional)</span></label>
+            <textarea id="eq-message" rows="3" placeholder="Stand size, budget, preferred hall…"></textarea>
+          </div>
+
+          <!-- Honeypot: hidden from people, tempting to bots -->
+          <div class="eq-hp" aria-hidden="true">
+            <label for="eq-website">Website</label>
+            <input type="text" id="eq-website" tabindex="-1" autocomplete="off">
+          </div>
+
+          <div class="eq-errors hidden" id="eq-errors" role="alert"></div>
+
           <div class="eq-actions">
-            <button type="button" id="hold-btn" class="btn-hold">
-              <i data-lucide="clock"></i> Hold (24h)
-            </button>
-            <button type="submit" class="btn-book">
-              <i data-lucide="check-circle"></i> Book Now
+            <button type="submit" class="btn-book" id="eq-submit">
+              <i data-lucide="send"></i> Send enquiry
             </button>
           </div>
+          <p class="eq-privacy">
+            We'll only use these details to respond to your enquiry.
+          </p>
         </form>
+
+        <div class="eq-success hidden" id="eq-success">
+          <i data-lucide="check-circle"></i>
+          <h4>Enquiry sent</h4>
+          <p>Thanks — our team will be in touch shortly about the stands you selected.</p>
+        </div>
       </div>
 
       <!-- Quick stats strip -->
@@ -125,11 +152,23 @@
         </div>
         <div class="stat-chip">
           <span class="chip-val" id="stat-held">—</span>
-          <span class="chip-lbl">On Hold</span>
+          <span class="chip-lbl">Reserved</span>
         </div>
       </div>
     </aside>
   </main>
+
+  <!-- Analytics consent. Behavioural tracking stays off until this is accepted. -->
+  <div class="consent-bar hidden" id="consent-bar" role="dialog" aria-label="Analytics consent">
+    <div class="consent-text">
+      <strong>We'd like to measure how this floorplan is used.</strong>
+      This helps us understand which stands attract interest. No advertising, no third parties.
+    </div>
+    <div class="consent-actions">
+      <button class="consent-btn ghost"  id="consent-decline">Decline</button>
+      <button class="consent-btn accept" id="consent-accept">Accept</button>
+    </div>
+  </div>
 
   <script src="floorplan.js"></script>
   <script>lucide.createIcons();</script>
