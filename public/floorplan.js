@@ -247,6 +247,7 @@ function renderShortlist() {
   box.querySelectorAll('[data-remove-sponsor]').forEach(btn => {
     btn.onclick = () => toggleSponsor(btn.getAttribute('data-remove-sponsor'));
   });
+  matchSponsorHeight();   // the enquiry column height changed; re-level the columns
 }
 
 // ─── Recommended sponsorship ────────────────────────────────────────────────
@@ -292,6 +293,23 @@ function updatePanelWidth() {
   const showing = !document.getElementById('fp-sponsors').classList.contains('hidden');
   side.classList.toggle('has-selection', showing);
 }
+
+// Cap the sponsorship column to the enquiry column's height so the two end on
+// the same line rather than the sponsorship list being cut off early. Below the
+// wide-panel breakpoint the columns stack, so the cap is removed.
+function matchSponsorHeight() {
+  const sponsors = document.getElementById('fp-sponsors');
+  const col = document.querySelector('.fp-enquiry-col');
+  if (!sponsors || !col) return;
+  if (window.innerWidth <= 1024) { sponsors.style.maxHeight = ''; return; }
+  // Measure on the next frame so the enquiry column has settled after any
+  // shortlist or form change.
+  requestAnimationFrame(() => {
+    const h = col.offsetHeight;
+    if (h > 0) sponsors.style.maxHeight = h + 'px';
+  });
+}
+window.addEventListener('resize', matchSponsorHeight);
 
 // Reveal the panel for a given spend. Renders instantly if preloaded.
 async function showSponsorRecos(sqm) {
@@ -384,6 +402,7 @@ function renderSponsors(list) {
     box.appendChild(card);
   });
   lucide.createIcons();
+  matchSponsorHeight();
 }
 
 function toggleSponsor(key) {
