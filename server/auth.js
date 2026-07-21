@@ -46,14 +46,32 @@ function parseCookies(header = '') {
   }, {});
 }
 
+// ─── Session cookie ───────────────────────────────────────────────────────────
+function setSessionCookie(res, user) {
+  const token = signToken({ user: user.username, role: user.role || 'admin', exp: Date.now() + config.adminTokenTtlMs });
+  const attrs = `HttpOnly; SameSite=Lax; Path=/; Max-Age=${config.adminTokenTtlMs / 1000}${config.isProd ? '; Secure' : ''}`;
+  res.setHeader('Set-Cookie', `${COOKIE}=${token}; ${attrs}`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
+function sessionUser(req) {
+  const cookies = parseCookies(req.headers.cookie || '');
+  return verifyToken(cookies[COOKIE]);   // null if absent, tampered or expired
+}
+
 // ─── Express: protect admin surfaces ──────────────────────────────────────────
+// Auth is now a session cookie set by the login flow, replacing the shared
+// HTTP Basic Auth. A page request without a valid session is redirected to the
+// login page; an API or asset request gets a 401.
 const ADMIN_PATHS = ['/admin.html', '/admin.js', '/admin.css'];
 
 function adminAuth(req, res, next) {
   // Express matches routes case-insensitively and express.static resolves
-  // percent-encoding, so the guard has to normalise both before comparing.
-  // Without this, /API/booths served every negotiated price unauthenticated and
-  // /ADMIN served the whole dashboard.
+  // percent-encoding, so the guard normalises both before comparing. Without
+  // this, /API/booths and /ADMIN were reachable unauthenticated.
   let p = req.path;
   try { p = decodeURIComponent(p); } catch { /* malformed escape: match on raw */ }
   p = p.toLowerCase().replace(/\/{2,}/g, '/');
@@ -62,32 +80,16 @@ function adminAuth(req, res, next) {
   const isAdminPath = p === '/admin' || p.startsWith('/admin/') || ADMIN_PATHS.includes(p) ||
                       p.startsWith('/admin.');
   const isApiPath   = p === '/api' || p.startsWith('/api/');
-
-  // /api/* previously sat outside this check and served deal prices, company
-  // names and internal notes to anyone who asked.
   if (!isAdminPath && !isApiPath) return next();
 
-  const b64 = (req.headers.authorization || '').split(' ')[1] || '';
-  const [login, password] = Buffer.from(b64, 'base64').toString().split(':');
+  const session = sessionUser(req);
+  if (session) { req.admin = { user: session.user }; return next(); }
 
-  const ok = login && password &&
-             safeEqual(login, config.adminUser) &&
-             safeEqual(password, config.adminPass);
-
-  if (!ok) {
-    res.set('WWW-Authenticate', 'Basic realm="BluePrint Admin"');
-    return res.status(401).send('Authentication required.');
-  }
-
-  // Issue the token the socket layer checks. HttpOnly so page scripts can't
-  // read it; the browser attaches it to the websocket handshake automatically.
-  const token = signToken({ user: login, role: 'admin', exp: Date.now() + config.adminTokenTtlMs });
-  res.cookie
-    ? res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: config.isProd, maxAge: config.adminTokenTtlMs })
-    : res.setHeader('Set-Cookie', `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${config.adminTokenTtlMs / 1000}${config.isProd ? '; Secure' : ''}`);
-
-  req.admin = { user: login };
-  next();
+  // Not authenticated. HTML page requests go to the login screen; everything
+  // else (XHR, assets) gets a clean 401.
+  const wantsHtml = (req.headers.accept || '').includes('text/html') && req.method === 'GET';
+  if (wantsHtml) return res.redirect(`/login?next=${encodeURIComponent(req.originalUrl)}`);
+  return res.status(401).json({ error: 'Authentication required.' });
 }
 
 // ─── Socket.IO: identify admins at handshake ──────────────────────────────────
@@ -136,4 +138,20 @@ function requireAdmin(socket, type, handler) {
   };
 }
 
-module.exports = { adminAuth, socketAuth, requireAdmin, signToken, verifyToken, COOKIE };
+// ─── Pending-login token ──────────────────────────────────────────────────────
+// Carries state between the password step and the 2FA step without a session
+// store. Signed with SESSION_SECRET, short-lived, and NOT an auth cookie — it
+// only proves the password was accepted and the user still owes a code.
+function signPending(username, purpose) {
+  return signToken({ pending: username, purpose, exp: Date.now() + 5 * 60 * 1000 });
+}
+function verifyPending(token, purpose) {
+  const p = verifyToken(token);
+  if (!p || !p.pending || p.purpose !== purpose) return null;
+  return p.pending;
+}
+
+module.exports = {
+  adminAuth, socketAuth, requireAdmin, signToken, verifyToken, COOKIE,
+  setSessionCookie, clearSessionCookie, sessionUser, signPending, verifyPending,
+};

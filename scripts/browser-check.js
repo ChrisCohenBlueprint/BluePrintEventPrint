@@ -117,14 +117,16 @@ const check = (name, ok, detail = '') => {
 
   check('no uncaught JS errors on public page', errors.length === 0, errors.slice(0, 2).join(' | '));
 
+  // Log in through the real 2FA flow and reuse the session cookie for the admin
+  // work below.
+  const { loginForTest } = require('./lib/test-login');
+  const MONGO = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
+  const cookie = await loginForTest(BASE, { username: USER, password: PASS, mongoUri: MONGO });
+
   // ── Seed a hostile booking so the admin assertions are self-contained ───────
   const XSS_COMPANY = `<img src=x onerror="window.__pwned=1">Hostile & Co`;
   {
     const { io } = require('socket.io-client');
-    const res = await fetch(`${BASE}/admin`, {
-      headers: { Authorization: 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64') },
-    });
-    const cookie = res.headers.get('set-cookie').split(';')[0];
     const s = io(BASE, { transports: ['websocket'], extraHeaders: { Cookie: cookie } });
     await new Promise(ok => s.on('connect', ok));
     const state = await new Promise(ok => s.once('state:full', ok));
@@ -138,10 +140,11 @@ const check = (name, ok, detail = '') => {
 
   // ── Admin dashboard ─────────────────────────────────────────────────────────
   console.log('\nAdmin dashboard:');
-  const adm = await browser.newContext({
-    httpCredentials: { username: USER, password: PASS },
-    viewport: { width: 1500, height: 950 },
-  });
+  const adm = await browser.newContext({ viewport: { width: 1500, height: 950 } });
+  // Inject the session cookie so the context is authenticated without the login UI.
+  const url = new URL(BASE);
+  await adm.addCookies([{ name: cookie.split('=')[0], value: cookie.split('=').slice(1).join('='),
+                          domain: url.hostname, path: '/' }]);
   const apage = await adm.newPage();
   const aerrors = [];
   apage.on('pageerror', e => aerrors.push(e.message));

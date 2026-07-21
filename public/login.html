@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in | BluePrint EventPrint</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%2360abbf%27/%3E%3Crect x=%277%27 y=%277%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3Crect x=%2717%27 y=%277%27 width=%278%27 height=%2718%27 fill=%27%230b2027%27/%3E%3Crect x=%277%27 y=%2717%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #0a0e17; --panel: rgba(17,24,39,.72); --border: rgba(255,255,255,.09);
+      --text: #f3f4f6; --muted: #8b93a1; --accent: #60abbf; --accent-ink: #06222c;
+      --err: #f87171; --err-bg: rgba(248,113,113,.12); --ok: #4ade80;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Raleway', sans-serif; background: var(--bg); color: var(--text);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .glow { position: fixed; border-radius: 50%; filter: blur(130px); pointer-events: none; z-index: 0; }
+    .g1 { width: 500px; height: 500px; background: radial-gradient(circle, rgba(96,171,191,.14), transparent 70%); top: -150px; left: -120px; }
+    .g2 { width: 420px; height: 420px; background: radial-gradient(circle, rgba(99,102,241,.10), transparent 70%); bottom: -140px; right: -100px; }
+
+    .card {
+      position: relative; z-index: 1; width: 100%; max-width: 400px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 34px 30px; backdrop-filter: blur(20px); box-shadow: 0 24px 60px rgba(0,0,0,.5);
+    }
+    .brand { text-align: center; margin-bottom: 26px; }
+    .brand h1 { font-size: 17px; font-weight: 800; letter-spacing: 1.5px; }
+    .brand h1 span { color: var(--accent); }
+    .brand p { font-size: 12px; color: var(--muted); margin-top: 4px; letter-spacing: .5px; }
+
+    .step-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .step-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
+
+    label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 6px; }
+    input {
+      width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+      border-radius: 9px; padding: 11px 13px; color: var(--text); font-family: inherit; font-size: 14px;
+      outline: none; transition: border-color .15s;
+    }
+    input:focus { border-color: var(--accent); }
+    .field { margin-bottom: 16px; }
+    .field-code input { text-align: center; letter-spacing: .5em; font-size: 22px; font-weight: 700; padding: 12px; }
+
+    button.primary {
+      width: 100%; background: var(--accent); color: var(--accent-ink); border: none;
+      border-radius: 9px; padding: 12px; font-family: inherit; font-size: 14px; font-weight: 700;
+      cursor: pointer; transition: background .15s; margin-top: 4px;
+    }
+    button.primary:hover { background: #7cc2d4; }
+    button.primary:disabled { opacity: .6; cursor: default; }
+
+    .err { background: var(--err-bg); border: 1px solid rgba(248,113,113,.3); color: var(--err);
+      font-size: 12.5px; padding: 9px 12px; border-radius: 8px; margin-bottom: 16px; line-height: 1.45; }
+    .hidden { display: none !important; }
+
+    .enrol-qr { display: flex; flex-direction: column; align-items: center; gap: 14px; margin-bottom: 18px; }
+    .enrol-qr img { width: 200px; height: 200px; border-radius: 10px; background: #fff; padding: 8px; }
+    .secret { font-size: 12px; color: var(--muted); text-align: center; word-break: break-all; }
+    .secret code { font-family: ui-monospace, Menlo, monospace; color: var(--text); background: rgba(255,255,255,.06);
+      padding: 3px 7px; border-radius: 5px; letter-spacing: .05em; }
+
+    .recovery { background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px; margin-bottom: 18px; }
+    .recovery h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 4px; }
+    .recovery p { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-bottom: 10px; }
+    .recovery-codes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px;
+      font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--text); }
+    .link-btn { background: none; border: none; color: var(--muted); font-family: inherit; font-size: 12px;
+      cursor: pointer; text-decoration: underline; margin-top: 14px; display: block; width: 100%; text-align: center; }
+    .link-btn:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="glow g1"></div>
+  <div class="glow g2"></div>
+
+  <div class="card">
+    <div class="brand">
+      <h1>BLUEPRINT <span>EVENTPRINT</span></h1>
+      <p>Administrator sign in</p>
+    </div>
+
+    <div class="err hidden" id="err" role="alert"></div>
+
+    <!-- Step 1: password -->
+    <form id="form-password">
+      <div class="field">
+        <label for="username">Username</label>
+        <input type="text" id="username" autocomplete="username" autocapitalize="none" autofocus required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="primary" id="btn-password">Continue</button>
+    </form>
+
+    <!-- Step 2: enrol (first time) -->
+    <form id="form-enrol" class="hidden">
+      <div class="step-title">Set up two-factor authentication</div>
+      <div class="step-sub">Scan this with Google Authenticator, Authy, 1Password or any authenticator app, then enter the 6-digit code it shows.</div>
+      <div class="enrol-qr">
+        <img id="enrol-qr-img" alt="Authenticator QR code">
+        <div class="secret">or enter this key manually:<br><code id="enrol-secret"></code></div>
+      </div>
+      <div class="recovery">
+        <h3>Recovery codes</h3>
+        <p>Save these somewhere safe. Each lets you sign in once if you lose your phone.</p>
+        <div class="recovery-codes" id="recovery-codes"></div>
+      </div>
+      <div class="field field-code">
+        <label for="enrol-code">6-digit code from your app</label>
+        <input type="text" id="enrol-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
+      </div>
+      <button type="submit" class="primary" id="btn-enrol">Confirm &amp; sign in</button>
+    </form>
+
+    <!-- Step 2: verify (returning) -->
+    <form id="form-verify" class="hidden">
+      <div class="step-title">Enter your code</div>
+      <div class="step-sub" id="verify-sub">Enter the 6-digit code from your authenticator app.</div>
+      <div class="field field-code">
+        <label for="verify-code" id="verify-label">Authentication code</label>
+        <input type="text" id="verify-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" autofocus>
+      </div>
+      <button type="submit" class="primary" id="btn-verify">Sign in</button>
+      <button type="button" class="link-btn" id="use-recovery">Lost your phone? Use a recovery code</button>
+    </form>
+  </div>
+
+  <script src="login.js"></script>
+</body>
+</html>

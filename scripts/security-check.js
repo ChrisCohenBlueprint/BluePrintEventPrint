@@ -42,13 +42,11 @@ function stateOnce(s) {
   return new Promise(r => s.once('state:full', r));
 }
 
+const { loginForTest } = require('./lib/test-login');
+const MONGO = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
+
 async function adminCookie() {
-  const res = await fetch(`${BASE}/admin`, {
-    headers: { Authorization: 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64') },
-  });
-  const raw = res.headers.get('set-cookie');
-  if (!raw) throw new Error('no admin cookie issued');
-  return raw.split(';')[0];
+  return loginForTest(BASE, { username: USER, password: PASS, mongoUri: MONGO });
 }
 
 async function main() {
@@ -95,7 +93,7 @@ async function main() {
   // ── 3. Verify nothing was actually written ────────────────────────────────
   const cookie = await adminCookie();
   const check  = await fetch(`${BASE}/api/booths`, {
-    headers: { Authorization: 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64') },
+    headers: { Cookie: cookie },
   }).then(r => r.json());
 
   const victim = check.find(b => b.boothNumber === target.boothNumber);
@@ -112,13 +110,13 @@ async function main() {
   await wait(900);
 
   const post = await fetch(`${BASE}/api/booths`, {
-    headers: { Authorization: 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64') },
+    headers: { Cookie: cookie },
   }).then(r => r.json());
   const heldBooth = post.find(b => b.boothNumber === target.boothNumber);
   heldBooth.status === 'held' ? pass('admin hold succeeded') : fail('admin hold succeeded', `status=${heldBooth.status}`);
 
   const holdDocs = await fetch(`${BASE}/api/holds`, {
-    headers: { Authorization: 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64') },
+    headers: { Cookie: cookie },
   }).then(r => r.json());
   const h = holdDocs.find(x => x.boothNumber === target.boothNumber);
   h && new Date(h.expiresAt) > new Date()

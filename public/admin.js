@@ -1,6 +1,9 @@
 // ─── BluePrint EventPrint — Admin Dashboard JS ────────────────────────────────
 const socket = io();
 
+// Show who is signed in.
+fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u)document.getElementById('nav-username').textContent=u.user;}).catch(()=>{});
+
 let booths = {};  // live state
 let svgDoc = null;
 let selectedAdminId = null;

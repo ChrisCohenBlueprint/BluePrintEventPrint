@@ -7,11 +7,19 @@ const config  = require('./server/config');
 const db      = require('./server/db');
 const { adminAuth } = require('./server/auth');
 const sockets = require('./server/sockets');
-const apiRoutes = require('./server/routes/api');
-const tracking  = require('./server/services/tracking');
+const apiRoutes  = require('./server/routes/api');
+const authRoutes = require('./server/routes/auth-routes');
+const users      = require('./server/models/users');
+const tracking   = require('./server/services/tracking');
 
 async function start() {
   await db.connect();
+
+  // Admin accounts + first-run bootstrap. If no account exists yet, seed one
+  // from ADMIN_USER / ADMIN_PASS so the existing Render credentials keep working
+  // — 2FA is then set up on that account's first login.
+  await users.ensureIndexes();
+  await users.bootstrap({ username: config.adminUser, password: config.adminPass });
 
   const app    = express();
   const server = http.createServer(app);
@@ -27,7 +35,11 @@ async function start() {
 
   app.get('/', (_, res) => res.redirect('/floorplan'));
 
-  // Guards /admin* and /api/* — both now, where /api/* was previously open.
+  // Login flow, mounted BEFORE adminAuth so /login, /login/*, /logout and
+  // /api/me stay reachable without a session.
+  app.use(authRoutes);
+
+  // Guards /admin* and /api/* — redirects page requests to /login, 401s the rest.
   app.use(adminAuth);
 
   app.use('/api', apiRoutes);
