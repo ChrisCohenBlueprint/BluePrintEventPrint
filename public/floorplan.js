@@ -267,6 +267,10 @@ let shownRecoSqm = null;          // the spend the visible recommendations are f
 const recosCache = {};            // sqm → resolved list
 const recosInflight = {};         // sqm → in-flight promise
 
+// Below this width the panel stacks: enquiry first, sponsors compact below.
+// Must match the CSS breakpoint.
+const WIDE_BREAKPOINT = 1200;
+
 function totalShortlistSqm() {
   return shortlist.reduce((sum, n) => sum + (booths[n]?.sqm || 0), 0);
 }
@@ -301,7 +305,7 @@ function matchSponsorHeight() {
   const sponsors = document.getElementById('fp-sponsors');
   const col = document.querySelector('.fp-enquiry-col');
   if (!sponsors || !col) return;
-  if (window.innerWidth <= 1024) { sponsors.style.maxHeight = ''; return; }
+  if (window.innerWidth <= WIDE_BREAKPOINT) { sponsors.style.maxHeight = ''; return; }
   // Measure on the next frame so the enquiry column has settled after any
   // shortlist or form change.
   requestAnimationFrame(() => {
@@ -347,27 +351,48 @@ function renderSponsors(list) {
   box.replaceChildren();
   if (!list.length) { box.innerHTML = '<div class="sponsor-recos-empty">No sponsorship options available.</div>'; return; }
 
+  // On a tight screen the columns stack and the enquiry comes first, so the
+  // sponsor cards start collapsed to a compact header — tap to open one. Added
+  // options stay open so their remove control is reachable.
+  const compact = window.innerWidth <= WIDE_BREAKPOINT;
+
   list.forEach(s => {
     sponsorCache[s.key] = s;
     const inList = sponsorShortlist.includes(s.key);
 
     const card = document.createElement('div');
     card.className = `sponsor-card tier-${esc(s.tier || 'silver')}`;
+    const collapsed = compact && !inList;
+    if (collapsed) card.classList.add('collapsed');
 
-    const head = document.createElement('div');
+    // Header — always visible, toggles the body open/closed.
+    const head = document.createElement('button');
+    head.type = 'button';
     head.className = 'sc-head';
     const name = document.createElement('div'); name.className = 'sc-name'; name.textContent = s.name;
+    const right = document.createElement('div'); right.className = 'sc-head-right';
+    if (inList) { const chk = document.createElement('span'); chk.className = 'sc-added-dot'; right.appendChild(chk); }
     const tier = document.createElement('span'); tier.className = 'sc-tier'; tier.textContent = s.tier || '';
-    head.append(name, tier);
+    const chev = document.createElement('i'); chev.className = 'sc-chevron'; chev.setAttribute('data-lucide', 'chevron-down');
+    right.append(tier, chev);
+    head.append(name, right);
+    head.onclick = () => {
+      card.classList.toggle('collapsed');
+      matchSponsorHeight();
+    };
     card.appendChild(head);
+
+    // Body — collapsible.
+    const body = document.createElement('div');
+    body.className = 'sc-body';
 
     if (s.availability) {
       const av = document.createElement('div'); av.className = 'sc-avail'; av.textContent = s.availability;
-      card.appendChild(av);
+      body.appendChild(av);
     }
     if (s.blurb) {
       const bl = document.createElement('div'); bl.className = 'sc-blurb'; bl.textContent = s.blurb;
-      card.appendChild(bl);
+      body.appendChild(bl);
     }
 
     // Media: video takes precedence over image if both are set.
@@ -383,13 +408,13 @@ function renderSponsors(list) {
         img.onerror = () => media.remove();
         media.appendChild(img);
       }
-      card.appendChild(media);
+      body.appendChild(media);
     }
 
     if (Array.isArray(s.perks) && s.perks.length) {
       const ul = document.createElement('ul'); ul.className = 'sc-perks';
       s.perks.slice(0, 5).forEach(p => { const li = document.createElement('li'); li.textContent = p; ul.appendChild(li); });
-      card.appendChild(ul);
+      body.appendChild(ul);
     }
 
     const add = document.createElement('button');
@@ -397,8 +422,9 @@ function renderSponsors(list) {
     add.className = `sc-add ${inList ? 'in-list' : ''}`;
     add.innerHTML = `<i data-lucide="${inList ? 'check' : 'plus'}"></i> ${inList ? 'Added to enquiry' : 'Add to enquiry'}`;
     add.onclick = () => toggleSponsor(s.key);
-    card.appendChild(add);
+    body.appendChild(add);
 
+    card.appendChild(body);
     box.appendChild(card);
   });
   lucide.createIcons();
