@@ -235,10 +235,18 @@ body {
 
 /* Admin booth action panel */
 .admin-booth-action {
-  position: absolute; bottom: 16px; right: 16px;
+  /* Anchored to the viewport, not the map frame. The map frame is taller than
+     the screen, so an absolute bottom:16px put the action buttons below the
+     fold and forced a scroll to reach them. Fixed positioning keeps the whole
+     panel in view; max-height + overflow means a very tall panel scrolls inside
+     itself rather than pushing anything off-screen. */
+  position: fixed; bottom: 20px; right: 20px;
+  max-height: calc(100vh - 40px); overflow-y: auto;
+  width: 300px;
   background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 18px; min-width: 260px;
+  border-radius: var(--radius); padding: 18px;
   backdrop-filter: blur(20px); z-index: 150;
+  box-shadow: 0 16px 48px rgba(0,0,0,.5);
 }
 .admin-booth-action.hidden { display: none; }
 .aba-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
