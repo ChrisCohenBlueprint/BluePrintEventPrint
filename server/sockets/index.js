@@ -215,7 +215,11 @@ function register(io) {
       const ms = Number(hours) > 0 ? Number(hours) * 3600_000 : config.defaultHoldMs;
       const r  = await holdsSvc.create({ boothNumber: n, company: company || 'Pending',
                                          durationMs: ms, actor: socket.data.user });
-      if (!r.ok) return socket.emit('error:action', { message: `Cannot hold stand ${n} — ${r.reason}` });
+      if (!r.ok) {
+        const reason = r.reason === 'not_available' ? 'it is not available' : r.reason;
+        socket.emit('error:action', { message: `Cannot hold stand ${n} — ${reason}` });
+        return { ok: false, error: `Stand ${n} could not be held — ${reason}.` };
+      }
       await refresh(); broadcastState(io);
       log(io, `⏳ Stand ${escapeHtml(n)} held for ${escapeHtml(company || 'Pending')} until ${r.expiresAt.toLocaleString('en-GB')}`, 'hold');
     }));
@@ -269,6 +273,31 @@ function register(io) {
               meta: { from: r.before.status, to: status, forced: true } });
       await refresh(); broadcastState(io);
       log(io, `🛠 Admin set Stand ${escapeHtml(n)} → ${escapeHtml(status)}`, 'admin');
+    }));
+
+    // Merge two stands into one. The admin client emitted this for a long time
+    // with no server handler at all, so the button did nothing.
+    socket.on('booth:consolidate', requireAdmin(socket, 'booth:consolidate', async ({ primary, secondary }) => {
+      const p = stand(primary), s = stand(secondary);
+      const r = await booths.consolidate(p, s, { actor: socket.data.user });
+      if (!r.ok) return { ok: false, error: `Could not merge — ${r.reason}` };
+      track({ type: 'booth.consolidate', boothNumber: p, socket, meta: { secondary: s } });
+      await refresh();
+      io.to(ADMIN_ROOM).emit('booth:consolidated', { primary: p, secondary: s });
+      broadcastState(io);
+      log(io, `🔗 Stand ${escapeHtml(s)} merged into ${escapeHtml(p)}`, 'admin');
+    }));
+
+    // Divide one stand into equal parts — the inverse of consolidate, and the
+    // manual fix for stands the artwork drew as a single block.
+    socket.on('booth:split', requireAdmin(socket, 'booth:split', async ({ boothNumber, parts, axis }) => {
+      const n = stand(boothNumber);
+      const r = await booths.split(n, { parts, axis, actor: socket.data.user });
+      if (!r.ok) return { ok: false, error: `Could not split — ${r.reason}` };
+      track({ type: 'booth.split', boothNumber: n, socket, meta: { parts, axis, created: r.created } });
+      await refresh(); broadcastState(io);
+      log(io, `✂️ Stand ${escapeHtml(n)} split into ${r.created.length + 1} — added ${r.created.map(escapeHtml).join(', ')}`, 'admin');
+      return { ok: true, created: r.created };
     }));
 
     // demo:reset is gone. It wiped all 272 booths and was reachable from any

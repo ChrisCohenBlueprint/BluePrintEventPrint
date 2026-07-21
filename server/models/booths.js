@@ -91,4 +91,84 @@ async function stats() {
   return { ...base, ...rest };
 }
 
-module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, incrementClicks, stats };
+/**
+ * Merge `secondary` into `primary`: the primary absorbs the combined area, list
+ * price and footprint, and the secondary is deleted. The geometry becomes the
+ * bounding box of the two, so the merged stand still maps onto the plan.
+ */
+async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
+  const a = await get(primaryNum);
+  const b = await get(secondaryNum);
+  if (!a || !b) return { ok: false, reason: 'missing_booth' };
+  if (primaryNum === secondaryNum) return { ok: false, reason: 'same_booth' };
+
+  const g1 = a.geometry, g2 = b.geometry;
+  const box = (g1 && g2) ? {
+    x: Math.min(g1.x, g2.x), y: Math.min(g1.y, g2.y),
+    w: Math.max(g1.x + g1.w, g2.x + g2.w) - Math.min(g1.x, g2.x),
+    h: Math.max(g1.y + g1.h, g2.y + g2.h) - Math.min(g1.y, g2.y),
+  } : g1;
+
+  await col().updateOne(
+    { showId: config.showId, boothNumber: primaryNum },
+    { $set: {
+        sqm: (a.sqm || 0) + (b.sqm || 0),
+        listPrice: (a.listPrice || 0) + (b.listPrice || 0),
+        geometry: box,
+        mergedFrom: [...(a.mergedFrom || []), secondaryNum],
+        updatedAt: new Date(), updatedBy: actor,
+    } }
+  );
+  await col().deleteOne({ showId: config.showId, boothNumber: secondaryNum });
+  return { ok: true, primary: await get(primaryNum) };
+}
+
+/**
+ * Split one stand into `parts` equal columns (or rows). The original keeps the
+ * first cell and its commercial state; the rest become new available stands
+ * numbered `<n>-2`, `<n>-3`, … The area and list price divide evenly.
+ */
+async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = {}) {
+  const b = await get(boothNum);
+  if (!b) return { ok: false, reason: 'missing_booth' };
+  const n = Math.max(2, Math.min(6, parts | 0));
+  const g = b.geometry;
+  if (!g) return { ok: false, reason: 'no_geometry' };
+
+  const vertical = axis === 'vertical';   // side by side
+  const cellW = vertical ? g.w / n : g.w;
+  const cellH = vertical ? g.h : g.h / n;
+  const sqm   = Math.max(1, Math.round((b.sqm || 0) / n));
+  const price = Math.round((b.listPrice || 0) / n);
+
+  const cellGeom = (i) => ({
+    x: vertical ? g.x + i * cellW : g.x,
+    y: vertical ? g.y : g.y + i * cellH,
+    w: cellW, h: cellH,
+  });
+
+  // First cell stays on the original record.
+  await col().updateOne(
+    { showId: config.showId, boothNumber: boothNum },
+    { $set: { geometry: cellGeom(0), sqm, listPrice: price, updatedAt: new Date(), updatedBy: actor } }
+  );
+
+  const created = [];
+  for (let i = 1; i < n; i++) {
+    const num = `${boothNum}-${i + 1}`;
+    if (await get(num)) return { ok: false, reason: 'suffix_exists' };
+    await col().insertOne({
+      showId: config.showId, boothNumber: num,
+      svgElementId: null, geometry: cellGeom(i),
+      sqm, sqmSource: 'split', listPrice: price, status: 'available',
+      assignment: { company: null, contactId: null, actualPrice: null, notes: '' },
+      clicks: 0, splitFrom: boothNum,
+      createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
+    });
+    created.push(num);
+  }
+  return { ok: true, created };
+}
+
+module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal,
+                   incrementClicks, stats, consolidate, split };

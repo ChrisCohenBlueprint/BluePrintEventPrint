@@ -43,6 +43,10 @@ async function create({ name, email, phone, company, message, boothNumbers = [],
 
   track({ type: 'inquiry.submit', meta: { booths: doc.boothsOfInterest, email: contact.email }, sessionId });
 
+  // Fire the outbound notification without blocking the response. Its own error
+  // handling ensures a webhook failure never affects the enquiry.
+  require('../services/notify').newInquiry(doc);
+
   // Retroactively attach every event this visitor generated before identifying
   // themselves, so the lead arrives with its full browsing history (plan §04).
   const linked = await attributeSession(sessionId, insertedId);

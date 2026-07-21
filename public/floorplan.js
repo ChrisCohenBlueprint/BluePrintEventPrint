@@ -48,6 +48,9 @@ let selectedId  = null;
 let shortlist   = [];      // boothNumbers the visitor wants to enquire about
 let svgDoc      = null;
 let submitted   = false;
+let svgReady    = false;
+let stateReady  = false;
+let tagged      = false;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -95,17 +98,11 @@ async function load() {
     svgDoc = mount.querySelector('svg');
     svgDoc.setAttribute('width', '100%');
     svgDoc.setAttribute('height', '100%');
+    svgReady = true;
     tagBooths();
-
-    // The socket connects while the 2.1 MB SVG is still downloading, so the
-    // first state:full almost always lands before there are any elements to
-    // paint. Re-apply it now that the plan is in the DOM.
-    Object.keys(booths).forEach(applyVisual);
-    updateStatsStrip();
 
     lucide.createIcons();
     initPanZoom();
-    openDeepLink();
   } catch (e) {
     mount.innerHTML = '<p style="color:#f87171;padding:20px">Floorplan could not be loaded. Please refresh.</p>';
   }
@@ -123,28 +120,39 @@ function addTapListener(el, callback) {
   });
 }
 
-// Booth numbers are still positional until real numbers are extracted from the
-// plan. Once that lands, data-booth carries the printed stand number instead
-// and this ordering assumption disappears.
+/**
+ * Bind every server booth to a shape on the plan.
+ *
+ * Runs once both the SVG and the first state broadcast have arrived, in either
+ * order — the 2.1 MB plan usually finishes downloading after the socket
+ * connects, so neither can be assumed to be ready first.
+ *
+ * Identity comes from BoothMap's geometry matching. The old approach numbered
+ * rectangles by their order in the file, which disagreed with the server for
+ * most stands and broke completely whenever the plan was re-exported.
+ */
 function tagBooths() {
-  const avail = svgDoc.querySelectorAll('.cls-13');
-  const taken = svgDoc.querySelectorAll('.cls-11, .cls-14');
-  let idx = 1;
+  if (!svgReady || !stateReady || tagged) return;
+  tagged = true;
 
-  const wire = (el, defaultStatus) => {
-    const n = String(idx).padStart(3, '0');
-    el.setAttribute('data-booth', n);
-    el.classList.add('booth-interactive');
-    booths[n] = booths[n] || { boothNumber: n, status: defaultStatus, sqm: 0, viewers: 0, interest: 0 };
-    el.addEventListener('mouseenter', e => showTooltip(e, n));
-    el.addEventListener('mousemove',  e => moveTooltip(e));
-    el.addEventListener('mouseleave', hideTooltip);
-    addTapListener(el, () => { hideTooltip(); selectBooth(n); });
-    idx++;
-  };
+  const list = Object.values(booths).filter(b => b.geometry);
+  const res = BoothMap.attach(svgDoc, list, {
+    onTag(el, n) {
+      el.classList.add('booth-interactive');
+      el.addEventListener('mouseenter', e => showTooltip(e, n));
+      el.addEventListener('mousemove',  e => moveTooltip(e));
+      el.addEventListener('mouseleave', hideTooltip);
+      addTapListener(el, () => { hideTooltip(); selectBooth(n); });
+    },
+  });
 
-  avail.forEach(el => wire(el, 'available'));
-  taken.forEach(el => wire(el, 'sold'));
+  if (res.unplaced.length) {
+    console.warn(`${res.unplaced.length} stands could not be placed on the plan`);
+  }
+
+  Object.keys(booths).forEach(applyVisual);
+  updateStatsStrip();
+  openDeepLink();
 }
 
 // ─── Deep link: /floorplan?booth=412 ──────────────────────────────────────────
@@ -327,8 +335,13 @@ socket.on('state:full', (rows) => {
   rows.forEach(b => {
     const n = b.boothNumber;
     booths[n] = { ...(booths[n] || {}), ...b };
-    applyVisual(n);
   });
+  stateReady = true;
+
+  // First broadcast may arrive before the plan has finished downloading.
+  if (!tagged) { tagBooths(); return; }
+
+  rows.forEach(b => applyVisual(b.boothNumber));
   if (selectedId) renderPanel(selectedId);
   updateStatsStrip();
 });

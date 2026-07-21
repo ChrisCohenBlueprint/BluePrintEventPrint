@@ -6,7 +6,7 @@
   <title>Admin Dashboard | BluePrint EventPrint</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@latest"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/panzoom@9.4.0/dist/panzoom.min.js"></script>
@@ -29,6 +29,8 @@
       <li class="nav-link active" data-section="overview"><i data-lucide="layout-dashboard"></i> Overview</li>
       <li class="nav-link" data-section="floorplan"><i data-lucide="map"></i> Floorplan</li>
       <li class="nav-link" data-section="bookings"><i data-lucide="book-open"></i> Bookings</li>
+      <li class="nav-link" data-section="leads"><i data-lucide="inbox"></i> Leads <span class="nav-badge hidden" id="leads-badge">0</span></li>
+      <li class="nav-link" data-section="analytics"><i data-lucide="bar-chart-3"></i> Analytics</li>
       <li class="nav-link" data-section="tools"><i data-lucide="wrench"></i> Tools</li>
       <li class="nav-link" data-section="log"><i data-lucide="activity"></i> Activity Log</li>
     </ul>
@@ -48,9 +50,6 @@
           <span class="conn-dot"></span>
           <span id="conn-count">—</span> live viewers
         </div>
-        <button id="reset-btn" class="admin-btn danger">
-          <i data-lucide="rotate-ccw"></i> Reset Floorplan
-        </button>
       </div>
     </header>
 
@@ -234,6 +233,56 @@
       </div>
     </section>
 
+    <!-- ═══ SECTION: LEADS ═══════════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-leads">
+      <div class="leads-layout">
+        <div class="leads-list-panel">
+          <div class="leads-list-head">
+            <span id="leads-count">0 enquiries</span>
+            <button class="admin-btn" id="leads-refresh" style="font-size:12px;padding:5px 10px"><i data-lucide="refresh-cw"></i></button>
+          </div>
+          <div class="leads-list" id="leads-list"></div>
+        </div>
+        <div class="lead-detail-panel" id="lead-detail">
+          <div class="lead-empty">
+            <i data-lucide="inbox"></i>
+            <p>Select an enquiry to see the contact and their browsing history.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: ANALYTICS ═══════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-analytics">
+      <div class="analytics-toolbar">
+        <label>Period</label>
+        <select id="analytics-days" class="admin-select" style="width:auto">
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+        <button class="admin-btn" id="analytics-refresh" style="font-size:12px;padding:6px 12px"><i data-lucide="refresh-cw"></i> Refresh</button>
+      </div>
+
+      <div class="funnel-card">
+        <h3>Conversion funnel</h3>
+        <div class="funnel" id="funnel"></div>
+      </div>
+
+      <div class="demand-card">
+        <div class="demand-head">
+          <h3>Stand demand</h3>
+          <span class="demand-sub">Most-viewed stands by unique visitors</span>
+        </div>
+        <div class="demand-table-wrap">
+          <table class="demand-table" id="demand-table">
+            <thead><tr><th>Stand</th><th>Unique visitors</th><th>Clicks</th><th>Views</th><th>Dwell</th><th></th></tr></thead>
+            <tbody id="demand-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <!-- ═══ SECTION: TOOLS ═══════════════════════════════════════════════════ -->
     <section class="admin-section" id="section-tools">
       <div class="tools-grid">
@@ -258,6 +307,41 @@
             </div>
             <button type="submit" class="admin-btn success full">
               <i data-lucide="combine"></i> Consolidate Stands
+            </button>
+          </form>
+        </div>
+
+        <!-- Split tool -->
+        <div class="tool-card">
+          <div class="tool-header">
+            <i data-lucide="split"></i>
+            <h3>Split Stand</h3>
+          </div>
+          <p>Divide one stand into equal parts — the manual fix where the artwork drew several stands as a single block.</p>
+          <form id="split-form" class="tool-form">
+            <div class="tool-field">
+              <label>Stand</label>
+              <select id="split-stand" class="admin-select"><option value="">Select…</option></select>
+            </div>
+            <div class="tool-form-row">
+              <div class="tool-field">
+                <label>Into</label>
+                <select id="split-parts" class="admin-select">
+                  <option value="2">2 parts</option>
+                  <option value="3">3 parts</option>
+                  <option value="4">4 parts</option>
+                </select>
+              </div>
+              <div class="tool-field">
+                <label>Direction</label>
+                <select id="split-axis" class="admin-select">
+                  <option value="vertical">Side by side</option>
+                  <option value="horizontal">Stacked</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit" class="admin-btn success full">
+              <i data-lucide="split"></i> Split Stand
             </button>
           </form>
         </div>
@@ -308,6 +392,7 @@
 
   </div><!-- /admin-body -->
 
+  <script src="booth-map.js"></script>
   <script src="admin.js"></script>
   <script>lucide.createIcons();</script>
 </body>

@@ -105,21 +105,33 @@ function socketAuth(socket, next) {
 // Wraps a handler so it only runs for authenticated admins. Rejected attempts
 // are recorded — an attacker probing admin events is worth knowing about.
 function requireAdmin(socket, type, handler) {
-  return async (payload = {}) => {
+  // Socket.IO passes a callback as the final argument when the client uses
+  // socket.emit(event, payload, cb). Surfacing it lets a handler confirm success
+  // or failure back to the specific caller, so the admin UI can stop reporting
+  // "saved" before the write has actually happened.
+  return async (payload = {}, ack) => {
+    if (typeof payload === 'function') { ack = payload; payload = {}; }
+
     if (!socket.data.isAdmin) {
       console.warn(`⚠  Denied ${type} from unauthenticated socket ${socket.id}`);
       socket.emit('error:auth', { event: type, message: 'Administrator access required.' });
       const { track } = require('./services/tracking');
       track({ type: 'security.denied', meta: { event: type }, socket });
+      if (typeof ack === 'function') ack({ ok: false, error: 'Administrator access required.' });
       return;
     }
     // Async handler rejections would otherwise surface as an unhandled promise
     // rejection with no link back to the event that caused it.
     try {
-      return await handler(payload);
+      // The handler's return value is its acknowledgement. Returning
+      // { ok: false, error } reports a business-rule failure; returning nothing
+      // is treated as success. Either way the caller always gets a response.
+      const result = await handler(payload);
+      if (typeof ack === 'function') ack({ ok: true, ...(result || {}) });
     } catch (e) {
       console.error(`✗ ${type} failed:`, e.stack || e.message);
       socket.emit('error:action', { event: type, message: 'That action could not be completed.' });
+      if (typeof ack === 'function') ack({ ok: false, error: 'That action could not be completed.' });
     }
   };
 }

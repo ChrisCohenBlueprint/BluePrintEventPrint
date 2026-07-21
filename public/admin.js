@@ -10,6 +10,8 @@ const sectionTitles = {
   overview: 'Overview',
   floorplan: 'Floorplan',
   bookings: 'Bookings',
+  leads: 'Leads',
+  analytics: 'Analytics',
   tools: 'Tools',
   log: 'Activity Log'
 };
@@ -26,6 +28,8 @@ document.querySelectorAll('.nav-link').forEach(link => {
     if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
     if (sec === 'bookings') renderBookingsTable();
     if (sec === 'tools') populateToolDropdowns();
+    if (sec === 'leads') loadLeads();
+    if (sec === 'analytics') loadAnalytics();
   });
 });
 
@@ -58,19 +62,19 @@ function initAdminPanZoom() {
 }
 
 // ─── Load Admin SVG ───────────────────────────────────────────────────────────
+let adminSvgReady = false;
+let adminTagged = false;
+
 async function loadAdminSVG() {
   const mount = document.getElementById('admin-svg-mount');
   try {
-    const [bdRes, svgRes] = await Promise.all([
-      fetch('/booth_data.json'),
-      fetch('/LEX26_Floorplan_Web-Format_57.svg')
-    ]);
-    const boothData = await bdRes.json();
+    const svgRes = await fetch('/LEX26_Floorplan_Web-Format_57.svg');
     mount.innerHTML = await svgRes.text();
     svgDoc = mount.querySelector('svg');
     svgDoc.setAttribute('width', '100%');
     svgDoc.setAttribute('height', '100%');
-    tagAdminBooths(boothData);
+    adminSvgReady = true;
+    tagAdminBooths();
     lucide.createIcons();
     initAdminPanZoom();
   } catch (e) {
@@ -78,47 +82,34 @@ async function loadAdminSVG() {
   }
 }
 
-function tagAdminBooths(boothData) {
-  const availEls = svgDoc.querySelectorAll('.cls-13');
-  const takenEls = svgDoc.querySelectorAll('.cls-11, .cls-14');
-  let idx = 1;
-
-  function addAdminTap(el, callback) {
-    let startX, startY;
-    el.addEventListener('pointerdown', e => {
-      startX = e.clientX;
-      startY = e.clientY;
-    });
-    el.addEventListener('pointerup', e => {
-      if (Math.abs(e.clientX - startX) < 10 && Math.abs(e.clientY - startY) < 10) {
-        e.stopPropagation();
-        callback();
-      }
-    });
-  }
-
-  availEls.forEach(el => {
-    const id = String(idx).padStart(3, '0');
-    el.setAttribute('data-booth', id);
-    el.classList.add('booth-interactive');
-    applyAdminVisual(el, booths[id]?.status || 'available');
-    el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
-    el.addEventListener('mousemove', e => moveAdminTooltip(e));
-    el.addEventListener('mouseleave', () => hideAdminTooltip());
-    addAdminTap(el, () => selectAdminBooth(id));
-    idx++;
+function addAdminTap(el, callback) {
+  let startX, startY;
+  el.addEventListener('pointerdown', e => { startX = e.clientX; startY = e.clientY; });
+  el.addEventListener('pointerup', e => {
+    if (Math.abs(e.clientX - startX) < 10 && Math.abs(e.clientY - startY) < 10) {
+      e.stopPropagation();
+      callback();
+    }
   });
+}
 
-  takenEls.forEach(el => {
-    const id = String(idx).padStart(3, '0');
-    el.setAttribute('data-booth', id);
-    el.classList.add('booth-taken-orig');
-    applyAdminVisual(el, booths[id]?.status || 'sold');
-    el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
-    el.addEventListener('mousemove', e => moveAdminTooltip(e));
-    el.addEventListener('mouseleave', () => hideAdminTooltip());
-    addAdminTap(el, () => selectAdminBooth(id));
-    idx++;
+// Identity comes from booth geometry via the shared BoothMap, exactly as on the
+// public page. The old version numbered rectangles by document order, which
+// disagreed with the server for most stands — so the admin floorplan tab showed
+// the wrong company on the wrong stand, or nothing at all.
+function tagAdminBooths() {
+  if (!adminSvgReady || !Object.keys(booths).length || adminTagged) return;
+  adminTagged = true;
+
+  BoothMap.attach(svgDoc, Object.values(booths).filter(b => b.geometry), {
+    onTag(el, id) {
+      el.classList.add('booth-interactive');
+      applyAdminVisual(el, booths[id]?.status || 'sold');
+      el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
+      el.addEventListener('mousemove', e => moveAdminTooltip(e));
+      el.addEventListener('mouseleave', () => hideAdminTooltip());
+      addAdminTap(el, () => selectAdminBooth(id));
+    },
   });
 }
 
@@ -226,10 +217,20 @@ function renderAdminBoothAction(n) {
   document.getElementById('aba-save-deal').onclick  = () => {
     const actualPrice = parseFloat(document.getElementById('aba-actual-price').value) || null;
     const notes = document.getElementById('aba-notes').value.trim();
-    socket.emit('booth:update-deal', { boothNumber: n, actualPrice, notes });
     const btn = document.getElementById('aba-save-deal');
-    btn.textContent = '✅ Saved!';
-    setTimeout(() => { btn.textContent = '💾 Save Deal Details'; }, 2000);
+    btn.disabled = true; btn.textContent = 'Saving…';
+    // Confirm from the server rather than claiming success on emit. Previously
+    // this showed "✅ Saved!" even when the write failed.
+    socket.emit('booth:update-deal', { boothNumber: n, actualPrice, notes }, (res) => {
+      btn.disabled = false;
+      if (res && res.ok) {
+        btn.textContent = '✅ Saved!';
+        setTimeout(() => { btn.textContent = '💾 Save Deal Details'; }, 2000);
+      } else {
+        btn.textContent = '💾 Save Deal Details';
+        adminToast((res && res.error) || 'Could not save deal details.', 'error');
+      }
+    });
   };
 }
 
@@ -350,18 +351,41 @@ document.getElementById('bookings-tbody').addEventListener('change', (e) => {
 });
 
 function adminAction(action, boothNumber) {
+  const done = (verb) => (res) => {
+    if (res && res.ok) adminToast(`Stand ${boothNumber} ${verb}.`, 'ok');
+    else adminToast((res && res.error) || `Could not ${action} stand ${boothNumber}.`, 'error');
+  };
   if (action === 'book') {
     const company = prompt('Company name:');
     if (company === null) return;
-    socket.emit('booth:book', { boothNumber, company: company.trim() || 'Admin' });
+    socket.emit('booth:book', { boothNumber, company: company.trim() || 'Admin' }, done('booked'));
   }
   if (action === 'hold') {
     const company = prompt('Company name:');
     if (company === null) return;
     const hours = parseFloat(prompt('Hold for how many hours?', '24')) || 24;
-    socket.emit('booth:hold', { boothNumber, company: company.trim() || 'Pending', hours });
+    socket.emit('booth:hold', { boothNumber, company: company.trim() || 'Pending', hours }, done('held'));
   }
-  if (action === 'release') socket.emit('booth:release', { boothNumber });
+  if (action === 'release') socket.emit('booth:release', { boothNumber }, done('released'));
+}
+
+// ─── Toast ──────────────────────────────────────────────────────────────────
+// Transient confirmation or error. Server actions used to fail silently, so an
+// admin had no way to tell a rejected hold from a successful one.
+let toastTimer = null;
+function adminToast(message, kind = 'ok') {
+  let el = document.getElementById('admin-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'admin-toast';
+    el.className = 'admin-toast';
+    el.setAttribute('role', 'status');
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.className = `admin-toast show ${kind}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'admin-toast'; }, 4000);
 }
 
 function inlineUpdateDeal(boothNumber, field, value) {
@@ -426,14 +450,16 @@ window.exportSingleCSV = exportSingleCSV;
 
 // ─── Populate Tool Dropdowns ──────────────────────────────────────────────────
 function populateToolDropdowns() {
-  const avail = Object.values(booths).filter(b => b.status === 'available');
   const all = Object.values(booths);
 
-  ['merge-1', 'merge-2'].forEach(id => {
+  // Merge and split operate on all stands, not only available ones — you may
+  // need to reshape a stand regardless of its booking status.
+  ['merge-1', 'merge-2', 'split-stand'].forEach(id => {
     const sel = document.getElementById(id);
+    if (!sel) return;
     const cur = sel.value;
     sel.innerHTML = '<option value="">Select…</option>' +
-      avail.map(b => `<option value="${b.boothNumber}">Stand ${b.boothNumber}</option>`).join('');
+      all.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(b.boothNumber)}</option>`).join('');
     sel.value = cur;
   });
 
@@ -449,8 +475,25 @@ document.getElementById('consolidation-form').addEventListener('submit', e => {
   e.preventDefault();
   const p = document.getElementById('merge-1').value;
   const s = document.getElementById('merge-2').value;
-  if (!p || !s || p === s) return alert('Select two different available stands.');
-  socket.emit('booth:consolidate', { primary: p, secondary: s });
+  if (!p || !s || p === s) return adminToast('Select two different stands to merge.', 'error');
+  socket.emit('booth:consolidate', { primary: p, secondary: s }, (res) => {
+    adminToast(res && res.ok ? `Stand ${s} merged into ${p}.` : (res && res.error) || 'Merge failed.',
+               res && res.ok ? 'ok' : 'error');
+  });
+});
+
+// ─── Split Form ───────────────────────────────────────────────────────────────
+document.getElementById('split-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const boothNumber = document.getElementById('split-stand').value;
+  const parts = parseInt(document.getElementById('split-parts').value, 10);
+  const axis = document.getElementById('split-axis').value;
+  if (!boothNumber) return adminToast('Select a stand to split.', 'error');
+  socket.emit('booth:split', { boothNumber, parts, axis }, (res) => {
+    adminToast(res && res.ok ? `Stand ${boothNumber} split into ${(res.created || []).length + 1} — added ${(res.created || []).join(', ')}.`
+                             : (res && res.error) || 'Split failed.',
+               res && res.ok ? 'ok' : 'error');
+  });
 });
 
 // ─── Status Form ──────────────────────────────────────────────────────────────
@@ -460,7 +503,10 @@ document.getElementById('status-form').addEventListener('submit', e => {
   const status = document.getElementById('status-new').value;
   const company = document.getElementById('status-company').value.trim();
   if (!boothNumber) return;
-  socket.emit('admin:setStatus', { boothNumber, status, company });
+  socket.emit('admin:setStatus', { boothNumber, status, company }, (res) => {
+    if (res && res.ok) adminToast(`Stand ${boothNumber} set to ${status}.`, 'ok');
+    else adminToast((res && res.error) || 'Status update failed.', 'error');
+  });
 });
 
 // ─── Reset ────────────────────────────────────────────────────────────────────
@@ -481,14 +527,21 @@ socket.on('state:full', (serverBooths) => {
   updateOverview();
   renderBookingsTable();
   populateToolDropdowns();
-  // Update admin SVG if loaded
+
+  // Tag on the first state if the floorplan tab is already open; otherwise
+  // loadAdminSVG() tags when the tab is first shown.
+  if (adminSvgReady && !adminTagged) tagAdminBooths();
   if (svgDoc) {
     Object.values(booths).forEach(b => {
-      const el = svgDoc.querySelector(`[data-booth="${b.boothNumber}"]`);
+      const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
       if (el) applyAdminVisual(el, b.status);
     });
   }
 });
+
+// Rejected holds, failed merges and denied actions used to disappear silently.
+socket.on('error:action', ({ message }) => adminToast(message || 'That action could not be completed.', 'error'));
+socket.on('error:auth',   ({ message }) => adminToast(message || 'Administrator access required.', 'error'));
 
 socket.on('booth:updated', (b) => {
   booths[b.boothNumber] = { ...booths[b.boothNumber], ...b };
@@ -593,4 +646,225 @@ function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB'
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function el(id) { return document.getElementById(id); }
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// ─── Leads ──────────────────────────────────────────────────────────────────
+// Enquiries captured from the public floorplan, each shown with the browsing
+// history that led to it. Built with DOM nodes — the fields are visitor input.
+let leadCache = [];
+
+async function loadLeads() {
+  const listEl = document.getElementById('leads-list');
+  listEl.textContent = 'Loading…';
+  try {
+    leadCache = await fetch('/api/inquiries?limit=200').then(r => r.ok ? r.json() : []);
+    renderLeadsList();
+  } catch {
+    listEl.textContent = 'Could not load enquiries.';
+  }
+}
+
+function renderLeadsList() {
+  const listEl = document.getElementById('leads-list');
+  document.getElementById('leads-count').textContent =
+    `${leadCache.length} ${leadCache.length === 1 ? 'enquiry' : 'enquiries'}`;
+
+  const newCount = leadCache.filter(l => l.status === 'new').length;
+  const badge = document.getElementById('leads-badge');
+  badge.textContent = newCount;
+  badge.classList.toggle('hidden', newCount === 0);
+
+  listEl.replaceChildren();
+  if (!leadCache.length) {
+    const empty = document.createElement('div');
+    empty.className = 'leads-empty-row';
+    empty.textContent = 'No enquiries yet.';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  leadCache.forEach(l => {
+    const row = document.createElement('button');
+    row.className = 'lead-row';
+    row.dataset.id = l._id;
+
+    const name = document.createElement('div');
+    name.className = 'lead-row-name';
+    name.textContent = l.contact?.name || '(no name)';
+    if (l.status === 'new') {
+      const dot = document.createElement('span');
+      dot.className = 'lead-new-dot';
+      name.prepend(dot);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'lead-row-meta';
+    const booths = (l.boothsOfInterest || []).join(', ');
+    meta.textContent = `${l.contact?.company || l.contact?.email || ''}${booths ? ' · stands ' + booths : ''}`;
+
+    const time = document.createElement('div');
+    time.className = 'lead-row-time';
+    time.textContent = l.createdAt ? new Date(l.createdAt).toLocaleDateString('en-GB') : '';
+
+    row.append(name, meta, time);
+    row.onclick = () => { document.querySelectorAll('.lead-row').forEach(r => r.classList.remove('active')); row.classList.add('active'); openLead(l._id); };
+    listEl.appendChild(row);
+  });
+}
+
+const EVENT_LABEL = {
+  'session.start': 'Arrived', 'booth.view': 'Viewed stand', 'booth.click': 'Clicked stand',
+  'booth.dwell': 'Spent time on stand', 'plan.zoom': 'Zoomed the plan',
+  'inquiry.submit': 'Sent this enquiry', 'consent.granted': 'Accepted tracking',
+};
+
+async function openLead(id) {
+  const panel = document.getElementById('lead-detail');
+  panel.textContent = 'Loading…';
+  let lead;
+  try { lead = await fetch(`/api/inquiries/${encodeURIComponent(id)}`).then(r => r.ok ? r.json() : null); }
+  catch { lead = null; }
+  if (!lead) { panel.textContent = 'Could not load this enquiry.'; return; }
+
+  panel.replaceChildren();
+
+  const head = document.createElement('div');
+  head.className = 'lead-detail-head';
+  const h = document.createElement('h2');
+  h.textContent = lead.contact?.name || '(no name)';
+  head.appendChild(h);
+  panel.appendChild(head);
+
+  const contact = document.createElement('div');
+  contact.className = 'lead-contact-grid';
+  const field = (label, value, href) => {
+    const wrap = document.createElement('div');
+    const l = document.createElement('span'); l.className = 'lead-field-label'; l.textContent = label;
+    const v = href ? document.createElement('a') : document.createElement('span');
+    v.className = 'lead-field-value'; v.textContent = value || '—';
+    if (href && value) { v.href = href; }
+    wrap.append(l, v); return wrap;
+  };
+  contact.append(
+    field('Email', lead.contact?.email, lead.contact?.email ? `mailto:${lead.contact.email}` : null),
+    field('Phone', lead.contact?.phone, lead.contact?.phone ? `tel:${lead.contact.phone}` : null),
+    field('Company', lead.contact?.company),
+    field('Stands of interest', (lead.boothsOfInterest || []).join(', ')),
+  );
+  panel.appendChild(contact);
+
+  if (lead.message) {
+    const msg = document.createElement('div');
+    msg.className = 'lead-message';
+    msg.textContent = lead.message;
+    panel.appendChild(msg);
+  }
+
+  // Browsing history — the retroactive session join in action.
+  const histHead = document.createElement('h3');
+  histHead.className = 'lead-hist-head';
+  histHead.textContent = 'Before they enquired';
+  panel.appendChild(histHead);
+
+  const history = (lead.history || []).filter(e => EVENT_LABEL[e.type]);
+  if (!history.length) {
+    const none = document.createElement('p');
+    none.className = 'lead-hist-none';
+    none.textContent = 'No tracked activity — this visitor did not accept analytics, or arrived straight to the form.';
+    panel.appendChild(none);
+  } else {
+    const tl = document.createElement('div');
+    tl.className = 'lead-timeline';
+    history.forEach(e => {
+      const item = document.createElement('div');
+      item.className = 'lead-tl-item';
+      const t = document.createElement('span'); t.className = 'lead-tl-time';
+      t.textContent = new Date(e.ts).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const d = document.createElement('span'); d.className = 'lead-tl-desc';
+      d.textContent = EVENT_LABEL[e.type] + (e.boothNumber ? ` ${e.boothNumber}` : '') +
+        (e.type === 'booth.dwell' && e.meta?.ms ? ` (${Math.round(e.meta.ms / 1000)}s)` : '');
+      item.append(t, d); tl.appendChild(item);
+    });
+    panel.appendChild(tl);
+  }
+}
+
+// ─── Analytics ──────────────────────────────────────────────────────────────
+async function loadAnalytics() {
+  const days = document.getElementById('analytics-days').value;
+  try {
+    const [funnel, demand] = await Promise.all([
+      fetch(`/api/analytics/funnel?days=${days}`).then(r => r.json()),
+      fetch(`/api/analytics/demand?days=${days}`).then(r => r.json()),
+    ]);
+    renderFunnel(funnel);
+    renderDemand(demand);
+  } catch {
+    document.getElementById('funnel').textContent = 'Could not load analytics.';
+  }
+}
+
+function renderFunnel(data) {
+  const el = document.getElementById('funnel');
+  el.replaceChildren();
+  const steps = data.steps || [];
+  const top = Math.max(1, steps[0]?.count || 1);
+  steps.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'funnel-step';
+    const label = document.createElement('div'); label.className = 'funnel-label';
+    label.textContent = s.step;
+    const barWrap = document.createElement('div'); barWrap.className = 'funnel-bar-wrap';
+    const bar = document.createElement('div'); bar.className = 'funnel-bar';
+    bar.style.width = Math.round((s.count / top) * 100) + '%';
+    const count = document.createElement('span'); count.className = 'funnel-count';
+    const prev = i > 0 ? steps[i - 1].count : null;
+    const pct = prev ? ` (${Math.round((s.count / prev) * 100)}%)` : '';
+    count.textContent = `${s.count}${pct}`;
+    bar.appendChild(count); barWrap.appendChild(bar);
+    row.append(label, barWrap); el.appendChild(row);
+  });
+}
+
+function renderDemand(data) {
+  const tb = document.getElementById('demand-tbody');
+  tb.replaceChildren();
+  const rows = (data.booths || []).slice(0, 40);
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td'); td.colSpan = 6; td.className = 'demand-empty';
+    td.textContent = 'No stand activity in this period yet.';
+    tr.appendChild(td); tb.appendChild(tr); return;
+  }
+  const maxU = Math.max(...rows.map(r => r.uniqueSessions || 0), 1);
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    const cell = (v) => { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); return td; };
+    cell(r.boothNumber);
+    cell(r.uniqueSessions || 0);
+    cell(r.clicks || 0);
+    cell(r.views || 0);
+    cell(r.dwellMs ? `${Math.round(r.dwellMs / 1000)}s` : '—');
+    const barTd = document.createElement('td'); barTd.className = 'demand-bar-cell';
+    const bar = document.createElement('div'); bar.className = 'demand-bar';
+    bar.style.width = Math.round(((r.uniqueSessions || 0) / maxU) * 100) + '%';
+    barTd.appendChild(bar); tr.appendChild(barTd);
+    tb.appendChild(tr);
+  });
+}
+
+document.getElementById('analytics-refresh')?.addEventListener('click', loadAnalytics);
+document.getElementById('analytics-days')?.addEventListener('change', loadAnalytics);
+document.getElementById('leads-refresh')?.addEventListener('click', loadLeads);
+
+// A new enquiry arriving live bumps the Leads badge and refreshes the list if
+// it is open.
+socket.on('inquiry:new', () => {
+  const badge = document.getElementById('leads-badge');
+  const n = (parseInt(badge.textContent, 10) || 0) + 1;
+  badge.textContent = n; badge.classList.remove('hidden');
+  if (document.getElementById('section-leads').classList.contains('active')) loadLeads();
+  adminToast('New enquiry received.', 'ok');
+});
 

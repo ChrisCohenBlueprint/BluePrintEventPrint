@@ -45,4 +45,8 @@ module.exports = {
   activityRetentionDays: Number(process.env.ACTIVITY_RETENTION_DAYS || 730),
 
   trackingFlushMs: 3000,
+
+  // Optional. A webhook URL that receives each new enquiry as JSON — point it at
+  // Zapier / Make / Slack / your CRM to turn enquiries into emails or tasks.
+  notifyWebhook: process.env.NOTIFY_WEBHOOK || null,
 };
