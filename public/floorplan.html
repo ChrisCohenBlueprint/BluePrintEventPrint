@@ -83,8 +83,23 @@
       </footer>
     </section>
 
-    <!-- Side panel -->
-    <aside class="fp-side">
+    <!-- Side panel. Widens into two columns — sponsorship left, enquiry right —
+         when an available stand is selected. -->
+    <aside class="fp-side" id="fp-side">
+     <div class="fp-selection" id="fp-selection">
+
+      <!-- LEFT column: recommended sponsorship, ranked to the stand's size.
+           No prices shown — sales cover cost during follow-up. -->
+      <div class="fp-sponsors hidden" id="fp-sponsors">
+        <div class="sp-head">
+          <div class="sp-title">Recommended sponsorship</div>
+          <p class="sp-sub">Amplify your presence beyond the stand. Our team will talk you through the options and pricing.</p>
+        </div>
+        <div class="sponsor-recos" id="sponsor-recos"></div>
+      </div>
+
+      <!-- RIGHT column: stand details + enquiry -->
+      <div class="fp-enquiry-col">
       <!-- Default empty state -->
       <div class="fp-side-card" id="booth-panel">
         <div class="empty-state" id="empty-state">
@@ -143,9 +158,11 @@
         <div class="eq-success hidden" id="eq-success">
           <i data-lucide="check-circle"></i>
           <h4>Enquiry sent</h4>
-          <p>Thanks — our team will be in touch shortly about the stands you selected.</p>
+          <p>Thanks — our team will be in touch shortly about the stands and options you selected.</p>
         </div>
       </div>
+      </div><!-- /.fp-enquiry-col -->
+     </div><!-- /.fp-selection -->
 
       <!-- Quick stats strip -->
       <div class="fp-stats-strip">

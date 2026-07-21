@@ -14,7 +14,7 @@ const clean = (v, max) => typeof v === 'string' ? v.trim().slice(0, max) : '';
  * away — booth:book only ever transmitted `company`. This is the first point at
  * which those details are actually persisted.
  */
-async function create({ name, email, phone, company, message, boothNumbers = [], sessionId = null }) {
+async function create({ name, email, phone, company, message, boothNumbers = [], sponsorKeys = [], sessionId = null }) {
   const contact = {
     name:    clean(name, 120),
     email:   clean(email, 200).toLowerCase(),
@@ -33,6 +33,7 @@ async function create({ name, email, phone, company, message, boothNumbers = [],
     sessionId,
     contact,
     boothsOfInterest: boothNumbers.slice(0, 25).map(String),
+    sponsorsOfInterest: Array.isArray(sponsorKeys) ? sponsorKeys.slice(0, 25).map(String) : [],
     message: clean(message, 2000),
     source:  'floorplan',
     status:  'new',

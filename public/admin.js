@@ -4,6 +4,11 @@ const socket = io();
 // Show who is signed in.
 fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u)document.getElementById('nav-username').textContent=u.user;}).catch(()=>{});
 
+// Prime the sponsor catalogue so lead detail can name sponsorship interests
+// without waiting for the Sponsors tab to be opened.
+let sponsorAdminCache = [];
+fetch('/api/sponsors').then(r=>r.ok?r.json():[]).then(list=>{sponsorAdminCache=list||[];}).catch(()=>{});
+
 let booths = {};  // live state
 let svgDoc = null;
 let selectedAdminId = null;
@@ -15,6 +20,7 @@ const sectionTitles = {
   bookings: 'Bookings',
   leads: 'Leads',
   analytics: 'Analytics',
+  sponsors: 'Sponsors',
   tools: 'Tools',
   log: 'Activity Log'
 };
@@ -33,6 +39,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
     if (sec === 'tools') populateToolDropdowns();
     if (sec === 'leads') loadLeads();
     if (sec === 'analytics') loadAnalytics();
+    if (sec === 'sponsors') loadSponsorsAdmin();
   });
 });
 
@@ -749,11 +756,16 @@ async function openLead(id) {
     if (href && value) { v.href = href; }
     wrap.append(l, v); return wrap;
   };
+  // Map sponsor keys to their names for a readable label.
+  const sponsorNames = (lead.sponsorsOfInterest || [])
+    .map(k => (sponsorAdminCache.find(s => s.key === k) || {}).name || k);
+
   contact.append(
     field('Email', lead.contact?.email, lead.contact?.email ? `mailto:${lead.contact.email}` : null),
     field('Phone', lead.contact?.phone, lead.contact?.phone ? `tel:${lead.contact.phone}` : null),
     field('Company', lead.contact?.company),
     field('Stands of interest', (lead.boothsOfInterest || []).join(', ')),
+    field('Sponsorship interest', sponsorNames.join(', ')),
   );
   panel.appendChild(contact);
 
@@ -855,6 +867,67 @@ function renderDemand(data) {
     barTd.appendChild(bar); tr.appendChild(barTd);
     tb.appendChild(tr);
   });
+}
+
+// ─── Sponsors (admin — with prices) ──────────────────────────────────────────
+async function loadSponsorsAdmin() {
+  const tbody = document.getElementById('sponsors-admin-tbody');
+  tbody.replaceChildren();
+  try {
+    sponsorAdminCache = await fetch('/api/sponsors').then(r => r.ok ? r.json() : []);
+  } catch { sponsorAdminCache = []; }
+
+  const TIER_RANK = { platinum: 0, gold: 1, silver: 2 };
+  sponsorAdminCache.sort((a, b) => (TIER_RANK[a.tier] ?? 9) - (TIER_RANK[b.tier] ?? 9) || (b.price || 0) - (a.price || 0));
+
+  sponsorAdminCache.forEach(s => {
+    const tr = document.createElement('tr');
+    if (s.active === false) tr.classList.add('sponsor-inactive');
+
+    const nameTd = document.createElement('td');
+    const nm = document.createElement('strong'); nm.textContent = s.name;
+    const bl = document.createElement('div'); bl.className = 'sp-admin-blurb'; bl.textContent = s.blurb || '';
+    nameTd.append(nm, bl);
+    tr.appendChild(nameTd);
+
+    const tierTd = document.createElement('td');
+    const pill = document.createElement('span'); pill.className = `sp-tier-pill tier-${s.tier}`; pill.textContent = s.tier;
+    tierTd.appendChild(pill);
+    tr.appendChild(tierTd);
+
+    tr.appendChild(sponsorInput(s.key, 'price', s.price ?? '', 'number', '€ POA', 90));
+    tr.appendChild(sponsorInput(s.key, 'availability', s.availability ?? '', 'text', 'e.g. Exclusive', 120));
+    tr.appendChild(sponsorInput(s.key, 'image', s.image ?? '', 'text', '/sponsors/x.jpg or URL', 150));
+    tr.appendChild(sponsorInput(s.key, 'video', s.video ?? '', 'text', 'URL', 130));
+
+    const activeTd = document.createElement('td');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = s.active !== false;
+    cb.onchange = () => saveSponsor(s.key, { active: cb.checked });
+    activeTd.appendChild(cb);
+    tr.appendChild(activeTd);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function sponsorInput(key, field, value, type, placeholder, width) {
+  const td = document.createElement('td');
+  const inp = document.createElement('input');
+  inp.type = type; inp.className = 'admin-input'; inp.value = value; inp.placeholder = placeholder;
+  inp.style.cssText = `width:${width}px;padding:5px 8px;font-size:12px;background:var(--bg);`;
+  inp.onchange = () => saveSponsor(key, { [field]: type === 'number' ? (inp.value === '' ? null : Number(inp.value)) : inp.value });
+  td.appendChild(inp);
+  return td;
+}
+
+async function saveSponsor(key, fields) {
+  try {
+    const res = await fetch(`/api/sponsors/${encodeURIComponent(key)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
+    });
+    adminToast(res.ok ? 'Sponsor updated.' : 'Could not save sponsor.', res.ok ? 'ok' : 'error');
+    if (res.ok && 'active' in fields) loadSponsorsAdmin();
+  } catch { adminToast('Could not save sponsor.', 'error'); }
 }
 
 document.getElementById('analytics-refresh')?.addEventListener('click', loadAnalytics);

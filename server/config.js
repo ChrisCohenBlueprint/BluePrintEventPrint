@@ -30,6 +30,10 @@ module.exports = {
   // can be added without a schema change.
   showId:    process.env.SHOW_ID   || 'LEX26',
 
+  // €/m², used to derive a booth's list price and to size sponsorship
+  // recommendations against the buyer's likely budget.
+  ratePerSqm: Number(process.env.RATE_PER_SQM || 600),
+
   adminUser: process.env.ADMIN_USER || 'admin',
   adminPass: process.env.ADMIN_PASS || 'password',
 

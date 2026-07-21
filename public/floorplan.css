@@ -423,3 +423,74 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .sponsor-logos a { transition: none; }
 }
+
+/* ─── Wide selection panel: sponsorship (left) + enquiry (right) ────────────── */
+/* The side panel stays narrow until an available stand is selected, then widens
+   to fit the two columns. The map (flex:1) yields the space. */
+.fp-side.has-selection { width: 680px; max-width: 60vw; }
+.fp-selection { display: flex; gap: 14px; align-items: flex-start; }
+.fp-enquiry-col { flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.fp-sponsors { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 12px;
+  max-height: calc(100vh - 160px); overflow-y: auto; padding-right: 4px; }
+.fp-sponsors.hidden { display: none; }
+
+.sp-head { position: sticky; top: 0; background: rgba(10,14,23,.9); backdrop-filter: blur(8px);
+  padding-bottom: 8px; z-index: 2; }
+.sp-title { font-size: 15px; font-weight: 700; }
+.sp-sub { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+
+.sponsor-recos { display: flex; flex-direction: column; gap: 10px; }
+
+/* Tier drives the accent. platinum > gold > silver conveys weight without a price. */
+.sponsor-card {
+  --tier: #9fb0bf;
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--tier); border-radius: 10px; padding: 14px 15px;
+  backdrop-filter: blur(12px);
+}
+.sponsor-card.tier-platinum { --tier: #cbd5e1; }
+.sponsor-card.tier-gold     { --tier: #f5c94a; }
+.sponsor-card.tier-silver   { --tier: #9fb0bf; }
+
+.sc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.sc-name { font-size: 14.5px; font-weight: 700; line-height: 1.2; }
+.sc-tier { flex-shrink: 0; font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--tier); border: 1px solid var(--tier); border-radius: 20px; padding: 3px 9px; opacity: .95; }
+.sc-avail { font-size: 10.5px; color: var(--muted); margin-bottom: 8px; }
+.sc-blurb { font-size: 12.5px; color: #c7ccd4; line-height: 1.5; margin-bottom: 10px; }
+
+.sc-media { margin-bottom: 10px; border-radius: 8px; overflow: hidden; background: rgba(0,0,0,.25); }
+.sc-media img, .sc-media video { display: block; width: 100%; max-height: 150px; object-fit: cover; }
+
+.sc-perks { list-style: none; display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.sc-perks li { position: relative; padding-left: 16px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.sc-perks li::before { content: ''; position: absolute; left: 2px; top: 7px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--tier); opacity: .8; }
+
+.sc-add {
+  width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  background: rgba(96,171,191,.14); border: 1px solid rgba(96,171,191,.4); color: #cfeaf1;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; padding: 9px 12px; border-radius: 8px;
+  cursor: pointer; transition: background .15s, border-color .15s;
+}
+.sc-add:hover { background: rgba(96,171,191,.24); }
+.sc-add.in-list { background: rgba(74,222,128,.16); border-color: rgba(74,222,128,.45); color: #bbf7d0; }
+.sc-add svg { width: 14px; height: 14px; }
+
+.sponsor-recos-empty { font-size: 12.5px; color: var(--muted); padding: 8px 2px; }
+
+/* Sponsor chips in the enquiry summary */
+.eq-sponsor-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.eq-sponsor-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600;
+  background: rgba(245,201,74,.12); border: 1px solid rgba(245,201,74,.35); color: #f5d67a;
+  border-radius: 999px; padding: 4px 9px; cursor: pointer; font-family: inherit; }
+.eq-sponsor-chip:hover { background: rgba(239,68,68,.18); border-color: rgba(239,68,68,.5); }
+.eq-sponsor-chip span { opacity: .7; font-size: 13px; line-height: 1; }
+
+@media (max-width: 1024px) {
+  .fp-side.has-selection { width: 380px; max-width: 85vw; }
+  .fp-selection { flex-direction: column; }
+  .fp-enquiry-col { flex: 1 1 auto; width: 100%; order: 2; }
+  .fp-sponsors { order: 1; max-height: none; width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .sc-add { transition: none; } }

@@ -439,3 +439,19 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
   padding: 8px 10px; border-radius: 8px; transition: background .15s, color .15s; }
 .nav-logout:hover { background: rgba(248,113,113,.1); color: #f87171; }
 .nav-logout svg { width: 15px; height: 15px; }
+
+/* ─── Sponsors admin ────────────────────────────────────────────────────────── */
+.sponsors-intro { font-size: 13px; color: var(--muted); line-height: 1.55; max-width: 70ch; margin-bottom: 18px; }
+.sponsors-admin-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.sponsors-admin-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 860px; }
+.sponsors-admin-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); font-weight: 600; padding: 11px 14px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.sponsors-admin-table td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.sponsors-admin-table tr:last-child td { border-bottom: none; }
+.sponsors-admin-table tr.sponsor-inactive { opacity: .5; }
+.sp-admin-blurb { font-size: 11px; color: var(--muted); margin-top: 2px; max-width: 220px; }
+.sp-tier-pill { font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 20px; border: 1px solid currentColor; }
+.sp-tier-pill.tier-platinum { color: #cbd5e1; }
+.sp-tier-pill.tier-gold     { color: #f5c94a; }
+.sp-tier-pill.tier-silver   { color: #9fb0bf; }

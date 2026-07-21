@@ -4,10 +4,25 @@ const { ObjectId } = require('mongodb');
 const config    = require('../config');
 const booths    = require('../models/booths');
 const inquiries = require('../models/inquiries');
+const sponsors  = require('../models/sponsors');
 const holds     = require('../services/holds');
 const { getDb } = require('../db');
 
 const router = express.Router();
+
+// ─── Sponsors (admin — includes price) ────────────────────────────────────────
+router.get('/sponsors', async (_req, res, next) => {
+  try { res.json(await sponsors.all()); } catch (e) { next(e); }
+});
+
+router.patch('/sponsors/:key', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    if ('price' in body) body.price = body.price === '' || body.price == null ? null : Number(body.price);
+    if ('active' in body) body.active = !!body.active;
+    res.json(await sponsors.setFields(req.params.key, body));
+  } catch (e) { next(e); }
+});
 
 // Everything here sits behind adminAuth, applied in server.js before the
 // router is mounted. These endpoints return company names, negotiated prices

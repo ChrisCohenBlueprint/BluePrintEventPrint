@@ -218,21 +218,143 @@ function renderShortlist() {
   const card = document.getElementById('enquiry-card');
   const box  = document.getElementById('eq-shortlist');
 
-  if (!shortlist.length) { card.classList.add('hidden'); box.innerHTML = ''; return; }
+  if (!shortlist.length && !sponsorShortlist.length) { card.classList.add('hidden'); box.innerHTML = ''; return; }
   if (!submitted) card.classList.remove('hidden');
 
-  box.innerHTML = `
-    <div class="eq-shortlist-lbl">Enquiring about ${shortlist.length} stand${shortlist.length > 1 ? 's' : ''}</div>
-    <div class="eq-chips">
-      ${shortlist.map(n => `
-        <button type="button" class="eq-chip" data-remove="${esc(n)}" aria-label="Remove stand ${esc(n)}">
-          Stand ${esc(n)} <span aria-hidden="true">×</span>
-        </button>`).join('')}
-    </div>`;
+  const standChips = shortlist.map(n => `
+    <button type="button" class="eq-chip" data-remove-booth="${esc(n)}" aria-label="Remove stand ${esc(n)}">
+      Stand ${esc(n)} <span aria-hidden="true">×</span>
+    </button>`).join('');
 
-  box.querySelectorAll('[data-remove]').forEach(btn => {
-    btn.onclick = () => toggleShortlist(btn.getAttribute('data-remove'));
+  const sponsorChips = sponsorShortlist.map(k => `
+    <button type="button" class="eq-sponsor-chip" data-remove-sponsor="${esc(k)}" aria-label="Remove ${esc(sponsorCache[k]?.name || k)}">
+      ${esc(sponsorCache[k]?.name || k)} <span aria-hidden="true">×</span>
+    </button>`).join('');
+
+  const parts = [];
+  if (shortlist.length) parts.push(`${shortlist.length} stand${shortlist.length > 1 ? 's' : ''}`);
+  if (sponsorShortlist.length) parts.push(`${sponsorShortlist.length} sponsorship option${sponsorShortlist.length > 1 ? 's' : ''}`);
+
+  box.innerHTML = `
+    <div class="eq-shortlist-lbl">Enquiring about ${parts.join(' + ')}</div>
+    <div class="eq-chips">${standChips}</div>
+    ${sponsorChips ? `<div class="eq-sponsor-chips">${sponsorChips}</div>` : ''}`;
+
+  box.querySelectorAll('[data-remove-booth]').forEach(btn => {
+    btn.onclick = () => toggleShortlist(btn.getAttribute('data-remove-booth'));
   });
+  box.querySelectorAll('[data-remove-sponsor]').forEach(btn => {
+    btn.onclick = () => toggleSponsor(btn.getAttribute('data-remove-sponsor'));
+  });
+}
+
+// ─── Recommended sponsorship ────────────────────────────────────────────────
+// Shown to the left of the enquiry when an available stand is selected. Options
+// are ranked server-side by fit to the stand's size; prices are never sent to
+// the browser (sales cover cost during follow-up).
+let sponsorShortlist = [];        // sponsor keys the buyer added
+let sponsorCache = {};            // key → sponsor, for chip labels
+let currentSponsorList = [];      // the list currently rendered, for re-render
+let sponsorReqId = 0;
+
+function updatePanelWidth() {
+  const side = document.getElementById('fp-side');
+  const showing = !document.getElementById('fp-sponsors').classList.contains('hidden');
+  side.classList.toggle('has-selection', showing);
+}
+
+async function loadSponsorRecos(sqm) {
+  const box = document.getElementById('sponsor-recos');
+  const panel = document.getElementById('fp-sponsors');
+  panel.classList.remove('hidden');
+  updatePanelWidth();
+
+  const myReq = ++sponsorReqId;
+  box.innerHTML = '<div class="sponsor-recos-empty">Finding the best fit…</div>';
+  try {
+    const res = await fetch(`/sponsors/recommend?sqm=${encodeURIComponent(sqm || 0)}`);
+    const data = res.ok ? await res.json() : { sponsors: [] };
+    if (myReq !== sponsorReqId) return;   // a newer selection superseded this
+    renderSponsors(data.sponsors || []);
+  } catch {
+    if (myReq === sponsorReqId) box.innerHTML = '<div class="sponsor-recos-empty">Sponsorship options are unavailable right now.</div>';
+  }
+}
+
+function hideSponsors() {
+  document.getElementById('fp-sponsors').classList.add('hidden');
+  updatePanelWidth();
+}
+
+function renderSponsors(list) {
+  currentSponsorList = list;
+  const box = document.getElementById('sponsor-recos');
+  box.replaceChildren();
+  if (!list.length) { box.innerHTML = '<div class="sponsor-recos-empty">No sponsorship options available.</div>'; return; }
+
+  list.forEach(s => {
+    sponsorCache[s.key] = s;
+    const inList = sponsorShortlist.includes(s.key);
+
+    const card = document.createElement('div');
+    card.className = `sponsor-card tier-${esc(s.tier || 'silver')}`;
+
+    const head = document.createElement('div');
+    head.className = 'sc-head';
+    const name = document.createElement('div'); name.className = 'sc-name'; name.textContent = s.name;
+    const tier = document.createElement('span'); tier.className = 'sc-tier'; tier.textContent = s.tier || '';
+    head.append(name, tier);
+    card.appendChild(head);
+
+    if (s.availability) {
+      const av = document.createElement('div'); av.className = 'sc-avail'; av.textContent = s.availability;
+      card.appendChild(av);
+    }
+    if (s.blurb) {
+      const bl = document.createElement('div'); bl.className = 'sc-blurb'; bl.textContent = s.blurb;
+      card.appendChild(bl);
+    }
+
+    // Media: video takes precedence over image if both are set.
+    if (s.video || s.image) {
+      const media = document.createElement('div'); media.className = 'sc-media';
+      if (s.video) {
+        const v = document.createElement('video');
+        v.src = s.video; v.controls = true; v.preload = 'metadata'; v.playsInline = true;
+        media.appendChild(v);
+      } else {
+        const img = document.createElement('img');
+        img.src = s.image; img.alt = s.name; img.loading = 'lazy';
+        img.onerror = () => media.remove();
+        media.appendChild(img);
+      }
+      card.appendChild(media);
+    }
+
+    if (Array.isArray(s.perks) && s.perks.length) {
+      const ul = document.createElement('ul'); ul.className = 'sc-perks';
+      s.perks.slice(0, 5).forEach(p => { const li = document.createElement('li'); li.textContent = p; ul.appendChild(li); });
+      card.appendChild(ul);
+    }
+
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = `sc-add ${inList ? 'in-list' : ''}`;
+    add.innerHTML = `<i data-lucide="${inList ? 'check' : 'plus'}"></i> ${inList ? 'Added to enquiry' : 'Add to enquiry'}`;
+    add.onclick = () => toggleSponsor(s.key);
+    card.appendChild(add);
+
+    box.appendChild(card);
+  });
+  lucide.createIcons();
+}
+
+function toggleSponsor(key) {
+  const i = sponsorShortlist.indexOf(key);
+  if (i > -1) sponsorShortlist.splice(i, 1);
+  else if (sponsorShortlist.length < 25) sponsorShortlist.push(key);
+  renderShortlist();
+  renderSponsors(currentSponsorList);   // refresh the Added/Add button states
 }
 
 // ─── Detail panel ─────────────────────────────────────────────────────────────
@@ -244,6 +366,11 @@ function renderPanel(n) {
 
   const status = b.status || 'sold';
   const inList = shortlist.includes(n);
+
+  // Sponsorship recommendations only make sense for a stand you can actually
+  // take, so they appear for available stands and hide otherwise.
+  if (status === 'available') loadSponsorRecos(b.sqm);
+  else hideSponsors();
 
   if (status !== 'available') {
     panel.innerHTML = `
@@ -304,6 +431,7 @@ function initForm() {
       message: document.getElementById('eq-message').value.trim(),
       website: document.getElementById('eq-website').value,   // honeypot
       boothNumbers: shortlist.slice(),
+      sponsorKeys: sponsorShortlist.slice(),
     };
 
     submit.disabled = true;

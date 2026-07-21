@@ -7,9 +7,10 @@ const config  = require('./server/config');
 const db      = require('./server/db');
 const { adminAuth } = require('./server/auth');
 const sockets = require('./server/sockets');
-const apiRoutes  = require('./server/routes/api');
-const authRoutes = require('./server/routes/auth-routes');
-const users      = require('./server/models/users');
+const apiRoutes    = require('./server/routes/api');
+const authRoutes   = require('./server/routes/auth-routes');
+const publicRoutes = require('./server/routes/public');
+const users        = require('./server/models/users');
 const tracking   = require('./server/services/tracking');
 
 async function start() {
@@ -38,6 +39,9 @@ async function start() {
   // Login flow, mounted BEFORE adminAuth so /login, /login/*, /logout and
   // /api/me stay reachable without a session.
   app.use(authRoutes);
+
+  // Public endpoints (price-free sponsor recommendations) — also before adminAuth.
+  app.use(publicRoutes);
 
   // Guards /admin* and /api/* — redirects page requests to /login, 401s the rest.
   app.use(adminAuth);
