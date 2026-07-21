@@ -47,14 +47,20 @@ function parseCookies(header = '') {
 }
 
 // ─── Session cookie ───────────────────────────────────────────────────────────
+// The Secure flag has to be identical when setting and clearing, or the browser
+// treats them as different cookies and sign-out fails to clear the session on
+// the live HTTPS site (it works locally over HTTP precisely because neither has
+// Secure). Keep both through this one attribute string.
+const cookieAttrs = () =>
+  `HttpOnly; SameSite=Lax; Path=/${config.isProd ? '; Secure' : ''}`;
+
 function setSessionCookie(res, user) {
   const token = signToken({ user: user.username, role: user.role || 'admin', exp: Date.now() + config.adminTokenTtlMs });
-  const attrs = `HttpOnly; SameSite=Lax; Path=/; Max-Age=${config.adminTokenTtlMs / 1000}${config.isProd ? '; Secure' : ''}`;
-  res.setHeader('Set-Cookie', `${COOKIE}=${token}; ${attrs}`);
+  res.setHeader('Set-Cookie', `${COOKIE}=${token}; ${cookieAttrs()}; Max-Age=${config.adminTokenTtlMs / 1000}`);
 }
 
 function clearSessionCookie(res) {
-  res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+  res.setHeader('Set-Cookie', `${COOKIE}=; ${cookieAttrs()}; Max-Age=0`);
 }
 
 function sessionUser(req) {
