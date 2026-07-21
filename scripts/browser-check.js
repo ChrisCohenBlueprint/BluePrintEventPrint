@@ -7,6 +7,14 @@
  */
 const { chromium } = require('playwright-core');
 
+// Guard: this seeds a hostile-test booking, so it must never run against a
+// production Atlas database.
+if ((process.env.MONGO_URI || '').includes('mongodb+srv')) {
+  console.error('Refusing to run: MONGO_URI points at a hosted (Atlas) database.');
+  console.error('Run against local Mongo only. Unset the Atlas MONGO_URI first.');
+  process.exit(2);
+}
+
 const BASE   = process.env.BASE || 'http://127.0.0.1:3000';
 const USER   = process.env.ADMIN_USER || 'admin';
 const PASS   = process.env.ADMIN_PASS || 'localdev-change-me';

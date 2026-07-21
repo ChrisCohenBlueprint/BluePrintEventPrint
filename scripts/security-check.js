@@ -7,6 +7,15 @@
  */
 const { io } = require('socket.io-client');
 
+// Guard: these checks mutate booth state, so they must never run against a
+// production Atlas database. A test run once leaked a hostile-test booking onto
+// the live floorplan for exactly this reason.
+if ((process.env.MONGO_URI || '').includes('mongodb+srv')) {
+  console.error('Refusing to run: MONGO_URI points at a hosted (Atlas) database.');
+  console.error('Run against local Mongo only. Unset the Atlas MONGO_URI first.');
+  process.exit(2);
+}
+
 const BASE  = process.argv[2] || 'http://127.0.0.1:3000';
 const USER  = process.env.ADMIN_USER || 'admin';
 const PASS  = process.env.ADMIN_PASS || 'localdev-change-me';
