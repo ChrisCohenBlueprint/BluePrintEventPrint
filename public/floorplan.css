@@ -281,34 +281,11 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── iPad / tablet ─────────────────────────────────────────────────────────── */
-@media (max-width: 1024px) {
-  .fp-layout {
-    flex-direction: column;
-    height: auto;
-    overflow: visible;
-  }
-  .fp-map {
-    height: 60vh;
-    min-height: 400px;
-    flex: none;
-  }
-  .fp-side {
-    width: 100%;
-    height: auto;
-    max-height: none;
-    overflow-y: visible;
-    border-left: none;
-    border-top: 1px solid var(--border);
-  }
-  body { overflow: auto; }
-}
-
-/* ── Phone ─────────────────────────────────────────────────────────────────── */
-@media (max-width: 600px) {
-  .fp-map { height: 50vh; }
-  .fp-header { padding: 12px 16px; }
-  .fp-stats-strip { gap: 12px; padding: 10px 16px; }
-}
+/* Responsive layout lives in one consolidated block near the end of this file
+   (search "Responsive layout"). The previous rules here targeted class names
+   (.fp-layout, .fp-map) that don't exist in the markup, so the only rule that
+   applied was one that set the side panel to 100% width — which crushed the map
+   to zero. */
 
 /* ─── Enquiry flow ─────────────────────────────────────────────────────────── */
 .eq-opt { color: var(--muted); font-weight: 400; }
@@ -499,13 +476,35 @@ body {
 .eq-sponsor-chip:hover { background: rgba(239,68,68,.18); border-color: rgba(239,68,68,.5); }
 .eq-sponsor-chip span { opacity: .7; font-size: 13px; line-height: 1; }
 
-/* Tight screens: stack with the ENQUIRY FIRST so it's never buried, and the
-   sponsor list below as compact tap-to-open cards. Must match WIDE_BREAKPOINT. */
+/* ─── Responsive layout ─────────────────────────────────────────────────────
+   Order matters: these run wide → narrow, and later blocks override earlier
+   ones for overlapping widths.
+
+   1200 and below — keep the map and side panel side by side, but stack the
+   selection panel internally: the enquiry comes first and the sponsor list sits
+   below it as compact, tap-to-open cards. */
 @media (max-width: 1200px) {
-  .fp-side.has-selection { width: 420px; max-width: 88vw; }
+  .fp-side.has-selection { width: 420px; max-width: 46vw; }
   .fp-selection { flex-direction: column; }
   .fp-enquiry-col { flex: 1 1 auto; width: 100%; order: 0; }
   .fp-sponsors { order: 1; max-height: none !important; width: 100%; overflow: visible; }
   .sp-head { position: static; }
 }
+
+/* 900 and below — not enough width for two panels, so stack the whole page:
+   the map on top, the controls beneath it at full width. This is what the old,
+   broken rule was meant to do. */
+@media (max-width: 900px) {
+  .fp-main { flex-direction: column; height: auto; min-height: 100vh; }
+  .fp-map-panel { height: 62vh; min-height: 360px; flex: none; }
+  .fp-side,
+  .fp-side.has-selection { width: 100%; max-width: none; height: auto; max-height: none;
+    overflow-y: visible; border-left: none; border-top: 1px solid var(--border); }
+  body { overflow: auto; }
+}
+@media (max-width: 600px) {
+  .fp-map-panel { height: 52vh; min-height: 300px; }
+  .fp-header { padding: 0 14px; }
+}
+
 @media (prefers-reduced-motion: reduce) { .sc-add, .sc-chevron { transition: none; } }
