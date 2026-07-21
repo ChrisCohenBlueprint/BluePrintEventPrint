@@ -211,6 +211,7 @@ function toggleShortlist(n) {
   if (i > -1) shortlist.splice(i, 1);
   else if (shortlist.length < 25) shortlist.push(n);
   renderShortlist();
+  syncSponsorPanel();          // reveal / re-rank / hide sponsorship on commitment
   renderPanel(selectedId);
 }
 
@@ -249,13 +250,42 @@ function renderShortlist() {
 }
 
 // ─── Recommended sponsorship ────────────────────────────────────────────────
-// Shown to the left of the enquiry when an available stand is selected. Options
-// are ranked server-side by fit to the stand's size; prices are never sent to
-// the browser (sales cover cost during follow-up).
+// Recommendations are ranked server-side by fit to the buyer's floor spend, and
+// prices are never sent to the browser (sales cover cost during follow-up).
+//
+// They are fetched in the background as soon as a stand is looked at, but only
+// revealed once the buyer commits — i.e. adds a stand to their enquiry. Showing
+// it earlier pitches to someone who hasn't decided; showing it on commitment
+// reaches someone who has, and the preload makes it appear instantly.
 let sponsorShortlist = [];        // sponsor keys the buyer added
 let sponsorCache = {};            // key → sponsor, for chip labels
 let currentSponsorList = [];      // the list currently rendered, for re-render
-let sponsorReqId = 0;
+let sponsorShowToken = 0;         // guards against stale async renders
+let shownRecoSqm = null;          // the spend the visible recommendations are for
+
+const recosCache = {};            // sqm → resolved list
+const recosInflight = {};         // sqm → in-flight promise
+
+function totalShortlistSqm() {
+  return shortlist.reduce((sum, n) => sum + (booths[n]?.sqm || 0), 0);
+}
+
+function fetchRecos(sqm) {
+  sqm = Number(sqm) || 0;
+  if (sqm <= 0) return Promise.resolve([]);
+  if (recosCache[sqm]) return Promise.resolve(recosCache[sqm]);
+  if (!recosInflight[sqm]) {
+    recosInflight[sqm] = fetch(`/sponsors/recommend?sqm=${encodeURIComponent(sqm)}`)
+      .then(r => r.ok ? r.json() : { sponsors: [] })
+      .then(d => (recosCache[sqm] = d.sponsors || []))
+      .catch(() => (recosCache[sqm] = []))
+      .finally(() => { delete recosInflight[sqm]; });
+  }
+  return recosInflight[sqm];
+}
+
+// Warm the cache silently — no UI change.
+function preloadSponsorRecos(sqm) { fetchRecos(sqm); }
 
 function updatePanelWidth() {
   const side = document.getElementById('fp-side');
@@ -263,27 +293,34 @@ function updatePanelWidth() {
   side.classList.toggle('has-selection', showing);
 }
 
-async function loadSponsorRecos(sqm) {
-  const box = document.getElementById('sponsor-recos');
+// Reveal the panel for a given spend. Renders instantly if preloaded.
+async function showSponsorRecos(sqm) {
+  sqm = Number(sqm) || 0;
   const panel = document.getElementById('fp-sponsors');
+  const box = document.getElementById('sponsor-recos');
+  const token = ++sponsorShowToken;
   panel.classList.remove('hidden');
   updatePanelWidth();
 
-  const myReq = ++sponsorReqId;
+  if (recosCache[sqm]) { renderSponsors(recosCache[sqm]); return; }
   box.innerHTML = '<div class="sponsor-recos-empty">Finding the best fit…</div>';
-  try {
-    const res = await fetch(`/sponsors/recommend?sqm=${encodeURIComponent(sqm || 0)}`);
-    const data = res.ok ? await res.json() : { sponsors: [] };
-    if (myReq !== sponsorReqId) return;   // a newer selection superseded this
-    renderSponsors(data.sponsors || []);
-  } catch {
-    if (myReq === sponsorReqId) box.innerHTML = '<div class="sponsor-recos-empty">Sponsorship options are unavailable right now.</div>';
-  }
+  const list = await fetchRecos(sqm);
+  if (token === sponsorShowToken) renderSponsors(list);
 }
 
 function hideSponsors() {
   document.getElementById('fp-sponsors').classList.add('hidden');
   updatePanelWidth();
+}
+
+// Keep the sponsorship panel in step with the enquiry: shown once at least one
+// stand is committed, hidden otherwise, and re-ranked when the total spend
+// changes.
+function syncSponsorPanel() {
+  if (!shortlist.length) { hideSponsors(); shownRecoSqm = null; return; }
+  const total = totalShortlistSqm();
+  if (total !== shownRecoSqm) { shownRecoSqm = total; showSponsorRecos(total); }
+  else { document.getElementById('fp-sponsors').classList.remove('hidden'); updatePanelWidth(); }
 }
 
 function renderSponsors(list) {
@@ -367,10 +404,12 @@ function renderPanel(n) {
   const status = b.status || 'sold';
   const inList = shortlist.includes(n);
 
-  // Sponsorship recommendations only make sense for a stand you can actually
-  // take, so they appear for available stands and hide otherwise.
-  if (status === 'available') loadSponsorRecos(b.sqm);
-  else hideSponsors();
+  // Warm the recommendations in the background as soon as an available stand is
+  // looked at — including the spend it would add to the current shortlist — so
+  // they appear instantly if and when the buyer commits. They are only shown by
+  // syncSponsorPanel() once a stand is actually added to the enquiry.
+  if (status === 'available') preloadSponsorRecos(totalShortlistSqm() + (b.sqm || 0));
+  syncSponsorPanel();
 
   if (status !== 'available') {
     panel.innerHTML = `
