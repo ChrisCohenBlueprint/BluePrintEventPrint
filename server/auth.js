@@ -65,7 +65,13 @@ function clearSessionCookie(res) {
 
 function sessionUser(req) {
   const cookies = parseCookies(req.headers.cookie || '');
-  return verifyToken(cookies[COOKIE]);   // null if absent, tampered or expired
+  const payload = verifyToken(cookies[COOKIE]);   // null if absent, tampered or expired
+  // Only a fully-authenticated session token grants access. Pending-login
+  // tokens are signed with the same secret but only prove the password step —
+  // they carry a `purpose`/`pending` marker and no admin role. Accepting them
+  // here would let anyone with the password skip 2FA entirely.
+  if (!payload || payload.pending || payload.purpose || payload.role !== 'admin') return null;
+  return payload;
 }
 
 // ─── Express: protect admin surfaces ──────────────────────────────────────────
