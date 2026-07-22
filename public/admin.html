@@ -302,17 +302,31 @@
       <!-- Partner logos shown on the public floorplan strip -->
       <div class="partners-card">
         <h3>Sponsorship logo</h3>
-        <p>Shown in the sidebar here and in the “In partnership with” strip on the public floorplan. Upload a logo (16:9 works best) and, optionally, the link it should open.</p>
+        <p>Shown in the sidebar here and in the “In partnership with” strip on the public floorplan. Drop in a logo (16:9 works best) and, optionally, the link it should open.</p>
         <form id="partner-add-form" class="partner-form">
-          <input type="text" id="partner-name"  class="admin-input" placeholder="Name (e.g. Castrol)">
-          <input type="file" id="partner-file" accept="image/*" class="admin-input partner-file">
-          <input type="text" id="partner-image" class="admin-input" placeholder="…or paste an image URL">
-          <input type="text" id="partner-url"   class="admin-input" placeholder="Link (optional) https://…">
-          <button type="submit" class="admin-btn success"><i data-lucide="plus"></i> Add logo</button>
+          <!-- Drop zone: drag a file on, click to browse, or paste from the
+               clipboard. The file input stays in the DOM (visually hidden) so
+               the click-to-browse path and form semantics still work. -->
+          <div class="dropzone" id="partner-drop" tabindex="0" role="button"
+               aria-label="Drop a logo here, or click to choose a file">
+            <img class="dropzone-preview hidden" id="partner-preview" alt="">
+            <div class="dropzone-prompt" id="partner-drop-prompt">
+              <i data-lucide="image-up"></i>
+              <strong>Drag &amp; drop a logo</strong>
+              <span>or click to choose · PNG, JPG or SVG · 16:9</span>
+            </div>
+            <input type="file" id="partner-file" accept="image/*" class="visually-hidden">
+          </div>
+          <div class="partner-fields">
+            <input type="text" id="partner-name"  class="admin-input" placeholder="Name (e.g. Castrol)">
+            <input type="text" id="partner-url"   class="admin-input" placeholder="Link (optional) https://…">
+            <input type="text" id="partner-image" class="admin-input" placeholder="…or paste an image URL">
+            <button type="submit" class="admin-btn success"><i data-lucide="plus"></i> Add logo</button>
+          </div>
         </form>
         <div class="partners-table-wrap">
           <table class="partners-table">
-            <thead><tr><th>Logo</th><th>Name</th><th>Replace image</th><th>Link</th><th>Shown</th><th></th></tr></thead>
+            <thead><tr><th>Logo</th><th>Name</th><th>Link</th><th>Shown</th><th></th></tr></thead>
             <tbody id="partners-tbody"></tbody>
           </table>
         </div>

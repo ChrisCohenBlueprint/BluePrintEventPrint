@@ -548,3 +548,55 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .nav-partners-logos img { height: auto; width: 100%; max-width: 100%; max-height: 100%; object-fit: contain; }
 .partner-file, .partner-file-row { font-size: 11.5px; color: var(--muted); padding: 6px; }
 .partner-file-row { width: 190px; }
+
+/* ─── Sponsorship logo drop zone ──────────────────────────────────────────── */
+/* Kept in the DOM (not display:none) so click-to-browse and form semantics
+   still work — a hidden input can't be opened by a label click in every
+   browser, but an off-screen one can. */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.partner-form { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.partner-fields { display: flex; flex-direction: column; gap: 8px; min-width: 260px; }
+
+.dropzone {
+  position: relative; flex-shrink: 0;
+  width: 232px; aspect-ratio: 16 / 9;      /* the shape the logo should be */
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px dashed rgba(255,255,255,.16); border-radius: var(--radius);
+  background: rgba(255,255,255,.02);
+  cursor: pointer; text-align: center; padding: 10px;
+  transition: border-color .18s, background .18s, transform .18s;
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: rgba(99,102,241,.5); background: rgba(99,102,241,.06); outline: none; }
+.dropzone.dragging {
+  border-color: var(--accent); background: rgba(99,102,241,.14);
+  transform: scale(1.015);
+}
+.dropzone.has-image { border-style: solid; border-color: var(--border); background: rgba(255,255,255,.04); }
+.dropzone-prompt { display: flex; flex-direction: column; align-items: center; gap: 5px; pointer-events: none; }
+.dropzone-prompt svg { width: 22px; height: 22px; color: var(--accent); }
+.dropzone-prompt strong { font-size: 12.5px; font-weight: 600; }
+.dropzone-prompt span { font-size: 10.5px; color: var(--muted); line-height: 1.4; }
+.dropzone-preview { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; }
+.dropzone-preview.hidden, .dropzone-prompt.hidden { display: none; }
+
+/* Each row's thumbnail is itself a drop target for replacing that logo. */
+.partner-thumb-zone {
+  position: relative; width: 76px; aspect-ratio: 16 / 9;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed transparent; border-radius: 6px;
+  background: rgba(255,255,255,.06); cursor: pointer; transition: border-color .18s, background .18s;
+}
+.partner-thumb-zone:hover, .partner-thumb-zone:focus-visible { border-color: rgba(99,102,241,.5); outline: none; }
+.partner-thumb-zone.dragging { border-color: var(--accent); background: rgba(99,102,241,.16); }
+.partner-thumb-hint {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  background: rgba(7,11,19,.78); border-radius: 6px; opacity: 0; transition: opacity .18s;
+  pointer-events: none;
+}
+.partner-thumb-zone:hover .partner-thumb-hint,
+.partner-thumb-zone.dragging .partner-thumb-hint { opacity: 1; }

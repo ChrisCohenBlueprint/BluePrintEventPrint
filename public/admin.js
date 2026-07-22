@@ -1055,8 +1055,8 @@ async function loadPartners() {
 
   if (!list.length) {
     const tr = document.createElement('tr');
-    const td = document.createElement('td'); td.colSpan = 6; td.className = 'partners-empty';
-    td.textContent = 'No partner logos yet — add one above and it appears on the public floorplan.';
+    const td = document.createElement('td'); td.colSpan = 5; td.className = 'partners-empty';
+    td.textContent = 'No sponsorship logos yet — drop one in above and it appears on the public floorplan.';
     tr.appendChild(td); tbody.appendChild(tr); return;
   }
 
@@ -1064,24 +1064,25 @@ async function loadPartners() {
     const tr = document.createElement('tr');
     if (p.active === false) tr.classList.add('partner-hidden');
 
+    // The thumbnail doubles as a drop target, so replacing a logo is the same
+    // gesture as adding one — drop a new file on the old logo.
     const prev = document.createElement('td');
+    const zone = document.createElement('div');
+    zone.className = 'partner-thumb-zone'; zone.tabIndex = 0; zone.role = 'button';
+    zone.title = 'Drop a new logo here, or click to choose one';
     const img = document.createElement('img');
     img.className = 'partner-thumb'; img.src = p.image; img.alt = p.name || 'logo';
     img.onerror = () => { img.replaceWith(Object.assign(document.createElement('span'), { className: 'partner-broken', textContent: 'broken' })); };
-    prev.appendChild(img); tr.appendChild(prev);
+    const rep = document.createElement('input');
+    rep.type = 'file'; rep.accept = 'image/*'; rep.className = 'visually-hidden';
+    zone.append(img, rep, Object.assign(document.createElement('span'), { className: 'partner-thumb-hint', textContent: 'Replace' }));
+    initDropzone(zone, async (file) => {
+      try { await savePartner(p._id, { image: await fileToDataUrl(file) }); }
+      catch (err) { adminToast(err.message, 'error'); }
+    }, { input: rep });
+    prev.appendChild(zone); tr.appendChild(prev);
 
     tr.appendChild(partnerInput(p._id, 'name',  p.name  || '', 'Name', 130));
-    const imgTd = document.createElement('td');
-    const rep = document.createElement('input');
-    rep.type = 'file'; rep.accept = 'image/*'; rep.className = 'partner-file-row';
-    rep.onchange = async () => {
-      if (!rep.files?.length) return;
-      try { await savePartner(p._id, { image: await fileToDataUrl(rep.files[0]) }); }
-      catch (err) { adminToast(err.message, 'error'); }
-      rep.value = '';
-    };
-    imgTd.appendChild(rep);
-    tr.appendChild(imgTd);
     tr.appendChild(partnerInput(p._id, 'url',   p.url   || '', 'Link (optional)', 200));
 
     const shown = document.createElement('td');
@@ -1155,16 +1156,80 @@ function fileToDataUrl(file, maxWidth = 640) {
   });
 }
 
+/**
+ * Wire an element up as a drag-and-drop target for a single image.
+ *
+ * Also handles click-to-browse and clipboard paste, because "drop a file" is
+ * only one of the ways a logo actually arrives — people just as often have it
+ * copied from a design tool or sitting in a folder.
+ *
+ * `onFile` receives the raw File; it decides what to do with it.
+ */
+function initDropzone(el, onFile, { input = null } = {}) {
+  const take = (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return adminToast('That file is not an image.', 'error');
+    onFile(file);
+  };
+
+  // dragover must be cancelled or the browser navigates to the dropped file.
+  ['dragenter', 'dragover'].forEach(evt => el.addEventListener(evt, e => {
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; el.classList.add('dragging');
+  }));
+  ['dragleave', 'dragend'].forEach(evt => el.addEventListener(evt, () => el.classList.remove('dragging')));
+  el.addEventListener('drop', e => {
+    e.preventDefault(); el.classList.remove('dragging');
+    take(e.dataTransfer?.files?.[0]);
+  });
+
+  if (input) {
+    el.addEventListener('click', () => input.click());
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+    });
+    input.addEventListener('change', () => { take(input.files?.[0]); input.value = ''; });
+    el.addEventListener('paste', e => {
+      const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+      if (item) { e.preventDefault(); take(item.getAsFile()); }
+    });
+  }
+}
+
+// The logo chosen for the add form, held until "Add logo" is pressed.
+let pendingPartnerImage = '';
+
+(function initPartnerDropzone() {
+  const zone = document.getElementById('partner-drop');
+  if (!zone) return;
+  const preview = document.getElementById('partner-preview');
+  const prompt  = document.getElementById('partner-drop-prompt');
+
+  initDropzone(zone, async (file) => {
+    try {
+      pendingPartnerImage = await fileToDataUrl(file);
+      preview.src = pendingPartnerImage;
+      preview.classList.remove('hidden');
+      prompt.classList.add('hidden');
+      zone.classList.add('has-image');
+    } catch (err) { adminToast(err.message, 'error'); }
+  }, { input: document.getElementById('partner-file') });
+})();
+
+/** Return the add form to its empty state after a logo is saved. */
+function resetPartnerDropzone() {
+  pendingPartnerImage = '';
+  const zone = document.getElementById('partner-drop');
+  if (!zone) return;
+  zone.classList.remove('has-image');
+  document.getElementById('partner-preview').classList.add('hidden');
+  document.getElementById('partner-drop-prompt').classList.remove('hidden');
+}
+
 document.getElementById('partner-add-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const fileInput = document.getElementById('partner-file');
-  let image = document.getElementById('partner-image').value.trim();
-  // An uploaded file wins over a pasted URL.
-  if (fileInput?.files?.length) {
-    try { image = await fileToDataUrl(fileInput.files[0]); }
-    catch (err) { return adminToast(err.message, 'error'); }
-  }
-  if (!image) return adminToast('Choose a file to upload, or paste an image URL.', 'error');
+  // A dropped file wins over a pasted URL.
+  const image = pendingPartnerImage || document.getElementById('partner-image').value.trim();
+  if (!image) return adminToast('Drop in a logo, or paste an image URL.', 'error');
 
   const body = {
     name:  document.getElementById('partner-name').value.trim(),
@@ -1179,7 +1244,7 @@ document.getElementById('partner-add-form')?.addEventListener('submit', async (e
     if (res.ok) {
       adminToast('Logo added.', 'ok');
       ['partner-name', 'partner-image', 'partner-url'].forEach(i => { document.getElementById(i).value = ''; });
-      if (fileInput) fileInput.value = '';
+      resetPartnerDropzone();
       loadPartners(); loadNavPartners();
     } else adminToast(d.error || 'Could not add logo.', 'error');
   } catch { adminToast('Could not add logo.', 'error'); }
