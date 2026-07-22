@@ -109,8 +109,11 @@
       // artwork uses for every other stand. Without this the new cell is an
       // invisible, untrackable box.
       if (b.splitFrom) {
-        overlay.setAttribute('stroke', '#111827');
-        overlay.setAttribute('stroke-width', '1.6');
+        // .75px is the stroke the artwork uses for every stand rectangle
+        // (.cls-8/9/10/11/12/13/14), so the split edge matches the rest of the
+        // plan rather than reading as a heavier line.
+        overlay.setAttribute('stroke', '#000');
+        overlay.setAttribute('stroke-width', '.75');
         overlay.setAttribute('stroke-linejoin', 'miter');
 
         var label = document.createElementNS(SVG_NS, 'text');
