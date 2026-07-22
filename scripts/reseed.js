@@ -40,19 +40,42 @@ async function main() {
   const carried = oldBooths.filter(hasState);
   console.log(`Stands carrying commercial state: ${carried.length}`);
 
-  // ── Match old -> new by position ───────────────────────────────────────────
+  // ── Match old -> new by position AND size ──────────────────────────────────
+  // Centre alone is not enough: a resized or split stand can share a centre with
+  // a different new stand, carrying a booking onto the wrong footprint. Require
+  // the size to be close too, and pick the best (nearest) match rather than the
+  // first hit.
+  const sizeClose = (a, b) => Math.abs(a.w - b.w) < TOL * 4 && Math.abs(a.h - b.h) < TOL * 4;
   const matches = [];
   const orphans = [];
   for (const o of carried) {
     if (!o.geometry) { orphans.push(o); continue; }
     const oc = centre(o.geometry);
-    const hit = fresh.find(f => near(centre({ x: f.x, y: f.y, w: f.w, h: f.h }), oc));
-    if (hit) matches.push({ old: o, next: hit });
+    const cands = fresh
+      .filter(f => near(centre({ x: f.x, y: f.y, w: f.w, h: f.h }), oc) && sizeClose(o.geometry, f))
+      .map(f => ({ f, d: Math.abs(centre({ x: f.x, y: f.y, w: f.w, h: f.h }).x - oc.x) +
+                          Math.abs(centre({ x: f.x, y: f.y, w: f.w, h: f.h }).y - oc.y) }))
+      .sort((p, q) => p.d - q.d);
+    if (cands.length) matches.push({ old: o, next: cands[0].f });
     else orphans.push(o);
   }
 
-  console.log(`  matched to a new stand : ${matches.length}`);
+  // A new stand must not receive two different old bookings. If two old stands
+  // both match one new stand, keep the nearest and orphan the rest for manual
+  // re-assignment rather than silently overwriting one booking with another.
+  const byNew = new Map();
+  for (const m of matches) {
+    const key = m.next.boothId;
+    const prev = byNew.get(key);
+    if (!prev) { byNew.set(key, m); continue; }
+    console.log(`  ⚠ two old stands (${prev.old.boothNumber}, ${m.old.boothNumber}) map to new ${key}`);
+    orphans.push(m.old);   // keep prev, orphan the later one
+  }
+  const dedupedMatches = [...byNew.values()];
+
+  console.log(`  matched to a new stand : ${dedupedMatches.length}`);
   console.log(`  no positional match    : ${orphans.length}`);
+  matches.length = 0; matches.push(...dedupedMatches);
 
   for (const m of matches) {
     const a = m.old.assignment || {};
