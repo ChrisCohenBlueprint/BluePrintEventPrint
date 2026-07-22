@@ -1071,7 +1071,17 @@ async function loadPartners() {
     prev.appendChild(img); tr.appendChild(prev);
 
     tr.appendChild(partnerInput(p._id, 'name',  p.name  || '', 'Name', 130));
-    tr.appendChild(partnerInput(p._id, 'image', p.image || '', 'Image URL', 220));
+    const imgTd = document.createElement('td');
+    const rep = document.createElement('input');
+    rep.type = 'file'; rep.accept = 'image/*'; rep.className = 'partner-file-row';
+    rep.onchange = async () => {
+      if (!rep.files?.length) return;
+      try { await savePartner(p._id, { image: await fileToDataUrl(rep.files[0]) }); }
+      catch (err) { adminToast(err.message, 'error'); }
+      rep.value = '';
+    };
+    imgTd.appendChild(rep);
+    tr.appendChild(imgTd);
     tr.appendChild(partnerInput(p._id, 'url',   p.url   || '', 'Link (optional)', 200));
 
     const shown = document.createElement('td');
@@ -1116,11 +1126,49 @@ async function savePartner(id, fields) {
   } catch { adminToast('Could not save.', 'error'); }
 }
 
+/**
+ * Turn a chosen file into an inline data URI, downscaled so the stored logo
+ * stays small. Render's filesystem is wiped on every deploy, so the image is
+ * kept in the database rather than written to disk. SVGs pass through untouched
+ * to keep them vector.
+ */
+function fileToDataUrl(file, maxWidth = 640) {
+  return new Promise((resolve, reject) => {
+    if (file.size > 5 * 1024 * 1024) return reject(new Error('Image must be under 5 MB.'));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read that file.'));
+    reader.onload = () => {
+      if (file.type === 'image/svg+xml') return resolve(reader.result);
+      const img = new Image();
+      img.onerror = () => reject(new Error('That file is not a readable image.'));
+      img.onload = () => {
+        const scale = Math.min(1, maxWidth / img.width);
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.width * scale));
+        c.height = Math.max(1, Math.round(img.height * scale));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/png'));   // PNG keeps logo transparency
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 document.getElementById('partner-add-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const fileInput = document.getElementById('partner-file');
+  let image = document.getElementById('partner-image').value.trim();
+  // An uploaded file wins over a pasted URL.
+  if (fileInput?.files?.length) {
+    try { image = await fileToDataUrl(fileInput.files[0]); }
+    catch (err) { return adminToast(err.message, 'error'); }
+  }
+  if (!image) return adminToast('Choose a file to upload, or paste an image URL.', 'error');
+
   const body = {
     name:  document.getElementById('partner-name').value.trim(),
-    image: document.getElementById('partner-image').value.trim(),
+    image,
     url:   document.getElementById('partner-url').value.trim(),
   };
   try {
@@ -1131,6 +1179,7 @@ document.getElementById('partner-add-form')?.addEventListener('submit', async (e
     if (res.ok) {
       adminToast('Logo added.', 'ok');
       ['partner-name', 'partner-image', 'partner-url'].forEach(i => { document.getElementById(i).value = ''; });
+      if (fileInput) fileInput.value = '';
       loadPartners(); loadNavPartners();
     } else adminToast(d.error || 'Could not add logo.', 'error');
   } catch { adminToast('Could not add logo.', 'error'); }

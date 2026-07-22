@@ -34,7 +34,9 @@ async function start() {
   });
 
   app.set('trust proxy', 1);          // Render terminates TLS upstream
-  app.use(express.json({ limit: '32kb' }));
+  // Generous enough for an uploaded logo stored inline; Render's disk is
+  // ephemeral, so images live in the database rather than on the filesystem.
+  app.use(express.json({ limit: '3mb' }));
 
   app.get('/', (_, res) => res.redirect('/floorplan'));
 

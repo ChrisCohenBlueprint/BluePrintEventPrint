@@ -517,7 +517,7 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .partners-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .partners-table tr:last-child td { border-bottom: none; }
 .partners-table tr.partner-hidden { opacity: .45; }
-.partner-thumb { height: 30px; max-width: 110px; object-fit: contain; background: rgba(255,255,255,.06);
+.partner-thumb { height: 34px; aspect-ratio: 16 / 9; object-fit: contain; background: rgba(255,255,255,.06);
   border-radius: 4px; padding: 3px; display: block; }
 .partner-broken { font-size: 11px; color: var(--red); }
 .partners-empty { color: var(--muted); font-size: 12.5px; padding: 14px 12px; }
@@ -538,3 +538,13 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 /* A definite height, not just max-height: an SVG data URI carries no intrinsic
    size, so max-* alone collapses it to nothing. */
 .nav-partners-logos img { height: 20px; width: auto; max-width: 76px; object-fit: contain; display: block; }
+
+/* Sponsorship logo box in the sidebar — fixed 16:9 so any logo sits in a
+   consistent frame. */
+.nav-partners-logos { flex-direction: column; }
+.nav-partners-logos a, .nav-partners-logos span {
+  width: 100%; aspect-ratio: 16 / 9; padding: 6px;
+}
+.nav-partners-logos img { height: auto; width: 100%; max-width: 100%; max-height: 100%; object-fit: contain; }
+.partner-file, .partner-file-row { font-size: 11.5px; color: var(--muted); padding: 6px; }
+.partner-file-row { width: 190px; }

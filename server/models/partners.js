@@ -31,7 +31,7 @@ function safeLink(v) {
  * logo can be pasted directly. Only image MIME types — never data:text/html.
  */
 function safeImage(v) {
-  const s = clean(v, 200000);   // data URIs are long
+  const s = clean(v, 2000000);   // data URIs are long
   if (!s) return '';
   if (/^data:image\/(png|jpe?g|gif|webp|svg\+xml);/i.test(s)) return s;
   return safeLink(s);
