@@ -1282,11 +1282,27 @@ async function loadSponsorsAdmin() {
     tr.appendChild(sponsorInput(s.key, 'image', s.image ?? '', 'text', '/sponsors/x.jpg or URL', 150));
     tr.appendChild(sponsorInput(s.key, 'video', s.video ?? '', 'text', 'URL', 130));
 
+    // Offered and Sold out are two sides of one switch. A sold-out package is
+    // no longer on offer, but unlike an unticked one it stays on the public
+    // floorplan behind a "Sold out" badge — a gone package sells next year.
+    const soldOut = s.soldOut === true;
+    if (soldOut) tr.classList.add('sponsor-soldout');
+
     const activeTd = document.createElement('td');
-    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = s.active !== false;
+    const cb = document.createElement('input'); cb.type = 'checkbox';
+    cb.checked = s.active !== false && !soldOut;
+    cb.disabled = soldOut;
+    cb.title = soldOut ? 'Sold out packages are not on offer.' : '';
     cb.onchange = () => saveSponsor(s.key, { active: cb.checked });
     activeTd.appendChild(cb);
     tr.appendChild(activeTd);
+
+    const soldTd = document.createElement('td');
+    const so = document.createElement('input'); so.type = 'checkbox'; so.checked = soldOut;
+    so.title = 'Withdraw from sale but keep it on the floorplan, marked Sold out.';
+    so.onchange = () => saveSponsor(s.key, { soldOut: so.checked });
+    soldTd.appendChild(so);
+    tr.appendChild(soldTd);
 
     tbody.appendChild(tr);
   });
@@ -1308,7 +1324,7 @@ async function saveSponsor(key, fields) {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
     });
     adminToast(res.ok ? 'Sponsor updated.' : 'Could not save sponsor.', res.ok ? 'ok' : 'error');
-    if (res.ok && 'active' in fields) loadSponsorsAdmin();
+    if (res.ok && ('active' in fields || 'soldOut' in fields)) loadSponsorsAdmin();
   } catch { adminToast('Could not save sponsor.', 'error'); }
 }
 

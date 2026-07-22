@@ -350,6 +350,13 @@ function syncSponsorPanel() {
 
 function renderSponsors(list) {
   currentSponsorList = list;
+  // A package can sell out while someone has it shortlisted. Drop it rather
+  // than sending an enquiry for something that is no longer available.
+  for (const s of list) {
+    if (!s.soldOut) continue;
+    const i = sponsorShortlist.indexOf(s.key);
+    if (i > -1) sponsorShortlist.splice(i, 1);
+  }
   const box = document.getElementById('sponsor-recos');
   box.replaceChildren();
   if (!list.length) { box.innerHTML = '<div class="sponsor-recos-empty">No sponsorship options available.</div>'; return; }
@@ -364,7 +371,7 @@ function renderSponsors(list) {
     const inList = sponsorShortlist.includes(s.key);
 
     const card = document.createElement('div');
-    card.className = `sponsor-card tier-${esc(s.tier || 'silver')}`;
+    card.className = `sponsor-card tier-${esc(s.tier || 'silver')}${s.soldOut ? ' sold-out' : ''}`;
     const collapsed = compact && !inList;
     if (collapsed) card.classList.add('collapsed');
 
@@ -375,6 +382,10 @@ function renderSponsors(list) {
     const name = document.createElement('div'); name.className = 'sc-name'; name.textContent = s.name;
     const right = document.createElement('div'); right.className = 'sc-head-right';
     if (inList) { const chk = document.createElement('span'); chk.className = 'sc-added-dot'; right.appendChild(chk); }
+    if (s.soldOut) {
+      const badge = document.createElement('span'); badge.className = 'sc-soldout'; badge.textContent = 'Sold out';
+      right.appendChild(badge);
+    }
     const tier = document.createElement('span'); tier.className = 'sc-tier'; tier.textContent = s.tier || '';
     const chev = document.createElement('i'); chev.className = 'sc-chevron'; chev.setAttribute('data-lucide', 'chevron-down');
     right.append(tier, chev);
@@ -420,12 +431,21 @@ function renderSponsors(list) {
       body.appendChild(ul);
     }
 
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = `sc-add ${inList ? 'in-list' : ''}`;
-    add.innerHTML = `<i data-lucide="${inList ? 'check' : 'plus'}"></i> ${inList ? 'Added to enquiry' : 'Add to enquiry'}`;
-    add.onclick = () => toggleSponsor(s.key);
-    body.appendChild(add);
+    if (s.soldOut) {
+      // Kept on the plan deliberately: seeing a package gone is what makes the
+      // next one feel scarce. It just can't be added to an enquiry.
+      const gone = document.createElement('div');
+      gone.className = 'sc-soldout-note';
+      gone.textContent = 'Sold out for 2026 — register interest for next year';
+      body.appendChild(gone);
+    } else {
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = `sc-add ${inList ? 'in-list' : ''}`;
+      add.innerHTML = `<i data-lucide="${inList ? 'check' : 'plus'}"></i> ${inList ? 'Added to enquiry' : 'Add to enquiry'}`;
+      add.onclick = () => toggleSponsor(s.key);
+      body.appendChild(add);
+    }
 
     card.appendChild(body);
     box.appendChild(card);
@@ -435,6 +455,7 @@ function renderSponsors(list) {
 }
 
 function toggleSponsor(key) {
+  if (sponsorCache[key]?.soldOut) return;
   const i = sponsorShortlist.indexOf(key);
   if (i > -1) sponsorShortlist.splice(i, 1);
   else if (sponsorShortlist.length < 25) sponsorShortlist.push(key);

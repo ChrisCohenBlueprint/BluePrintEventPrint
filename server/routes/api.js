@@ -81,10 +81,10 @@ router.patch('/sponsors/:key', async (req, res, next) => {
         body.price = n;
       }
     }
-    if ('active' in body) {
-      // Coerce honestly: the strings "false"/"0" are false, not truthy.
-      body.active = body.active === true || body.active === 'true' || body.active === 1 || body.active === '1';
-    }
+    // Coerce honestly: the strings "false"/"0" are false, not truthy.
+    const truthy = v => v === true || v === 'true' || v === 1 || v === '1';
+    if ('active'  in body) body.active  = truthy(body.active);
+    if ('soldOut' in body) body.soldOut = truthy(body.soldOut);
     const updated = await sponsors.setFields(req.params.key, body);
     if (!updated) return res.status(404).json({ error: 'No such sponsor.' });
     res.json(updated);

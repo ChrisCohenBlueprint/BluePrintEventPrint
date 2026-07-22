@@ -600,3 +600,21 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 }
 .partner-thumb-zone:hover .partner-thumb-hint,
 .partner-thumb-zone.dragging .partner-thumb-hint { opacity: 1; }
+
+/* A sold-out package is dimmed in the catalogue so the state reads at a glance
+   without hunting for the tickbox. */
+.sponsor-soldout td { opacity: .6; }
+.sponsor-soldout input[type="checkbox"]:disabled { cursor: not-allowed; }
+
+/* The drop zone fills the card rather than sitting as a small square beside it
+   — the logo is the point of this panel, so it gets the room. */
+.partner-form { flex-wrap: nowrap; align-items: stretch; }
+.dropzone { width: auto; flex: 1; min-width: 240px; aspect-ratio: auto; min-height: 190px; }
+.partner-fields { justify-content: center; width: 300px; flex-shrink: 0; }
+/* The preview still shows in the 16:9 shape the logo is meant to be. */
+.dropzone-preview { aspect-ratio: 16 / 9; width: auto; max-height: 100%; }
+
+@media (max-width: 900px) {
+  .partner-form { flex-wrap: wrap; }
+  .partner-fields { width: 100%; }
+}
