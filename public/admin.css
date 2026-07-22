@@ -494,3 +494,11 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .team-2fa.on  { background: rgba(74,222,128,.16); color: #86efac; }
 .team-2fa.off { background: rgba(249,115,22,.16); color: #fdba74; }
 .team-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ─── Forward a lead to sales ───────────────────────────────────────────────── */
+.lead-forward { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.lead-assign { min-width: 190px; padding: 7px 10px; font-size: 13px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit; }
+.lead-cc-note { font-size: 11.5px; color: var(--muted); }
+.lead-sent-note { font-size: 11.5px; color: var(--muted); margin-bottom: 18px;
+  padding: 7px 11px; background: rgba(255,255,255,.03); border-left: 2px solid rgba(96,171,191,.5); border-radius: 4px; }

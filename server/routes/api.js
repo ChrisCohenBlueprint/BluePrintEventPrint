@@ -6,6 +6,7 @@ const booths    = require('../models/booths');
 const inquiries = require('../models/inquiries');
 const sponsors  = require('../models/sponsors');
 const users     = require('../models/users');
+const salesTeam = require('../data/sales-team');
 const holds     = require('../services/holds');
 const { getDb } = require('../db');
 
@@ -116,6 +117,83 @@ router.get('/inquiries/:id', async (req, res, next) => {
     const row = await inquiries.withHistory(new ObjectId(req.params.id));
     if (!row) return res.status(404).json({ error: 'Not found' });
     res.json(row);
+  } catch (e) { next(e); }
+});
+
+// ─── Forwarding an enquiry to the sales team ──────────────────────────────────
+router.get('/sales-team', (_req, res) => {
+  res.json({ team: salesTeam.TEAM, manager: salesTeam.MANAGER });
+});
+
+router.post('/inquiries/:id/assign', async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
+    const name = req.body?.name;
+    // An empty name clears the assignment.
+    const member = name ? salesTeam.findMember(name) : null;
+    if (name && !member) return res.status(400).json({ error: 'Unknown team member.' });
+    const ok = await inquiries.assign(new ObjectId(req.params.id), member);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true, assignedTo: member } : { error: 'Lead not found.' });
+  } catch (e) { next(e); }
+});
+
+/**
+ * Forward the enquiry. Records the send, fires the notification webhook if one
+ * is configured (that's the hook for real automation later), and returns a
+ * ready-to-open email so it can be sent today with no mail server: the browser
+ * opens it pre-addressed to the assigned person, copying the manager.
+ */
+router.post('/inquiries/:id/send', async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
+    const lead = await inquiries.col().findOne({ _id: new ObjectId(req.params.id) });
+    if (!lead) return res.status(404).json({ error: 'Lead not found.' });
+
+    const member = salesTeam.findMember(req.body?.name) || lead.assignedTo;
+    if (!member) return res.status(400).json({ error: 'Assign this enquiry to someone first.' });
+
+    const c = lead.contact || {};
+    const stands = (lead.boothsOfInterest || []).join(', ') || 'none specified';
+    const sponsorKeys = lead.sponsorsOfInterest || [];
+    let sponsorNames = sponsorKeys;
+    if (sponsorKeys.length) {
+      const rows = await sponsors.col().find({ key: { $in: sponsorKeys } }).project({ key: 1, name: 1 }).toArray();
+      sponsorNames = sponsorKeys.map(k => (rows.find(r => r.key === k) || {}).name || k);
+    }
+
+    const subject = `New ${config.showId} enquiry — ${c.name || 'Unknown'}${c.company ? ` (${c.company})` : ''}`;
+    const body = [
+      `A new enquiry came in from the ${config.showId} floorplan.`,
+      '',
+      `Name:     ${c.name || '—'}`,
+      `Email:    ${c.email || '—'}`,
+      `Phone:    ${c.phone || '—'}`,
+      `Company:  ${c.company || '—'}`,
+      '',
+      `Stands of interest:  ${stands}`,
+      `Sponsorship interest: ${sponsorNames.length ? sponsorNames.join(', ') : 'none'}`,
+      '',
+      `Message: ${lead.message || '—'}`,
+      '',
+      `Received: ${new Date(lead.createdAt).toLocaleString('en-GB')}`,
+      `Assigned to: ${member.name}`,
+    ].join('\n');
+
+    const to = member.email;
+    const cc = salesTeam.MANAGER.email;
+
+    // Fire the webhook if configured — this is where real automation plugs in.
+    if (config.notifyWebhook) {
+      fetch(config.notifyWebhook, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'enquiry.forward', to, cc, subject, body, lead }),
+      }).catch(e => console.error('Forward webhook failed:', e.message));
+    }
+
+    await inquiries.assign(new ObjectId(req.params.id), member);
+    await inquiries.recordSend(new ObjectId(req.params.id), { to, cc, by: req.admin?.user });
+
+    res.json({ ok: true, to, cc, subject, body, webhook: !!config.notifyWebhook });
   } catch (e) { next(e); }
 });
 

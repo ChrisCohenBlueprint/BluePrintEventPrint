@@ -10,6 +10,44 @@ fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u){currentUser=u.user;d
 let sponsorAdminCache = [];
 fetch('/api/sponsors').then(r=>r.ok?r.json():[]).then(list=>{sponsorAdminCache=list||[];}).catch(()=>{});
 
+// The sales team an enquiry can be forwarded to, plus the manager who is copied.
+let salesTeamCache = { team: [], manager: null };
+fetch('/api/sales-team').then(r=>r.ok?r.json():null).then(d=>{if(d)salesTeamCache=d;}).catch(()=>{});
+
+/**
+ * Forward a lead. The server records the send and fires the notification
+ * webhook if one is configured; it also returns a composed email, which we open
+ * in the default mail client so this works today without a mail server.
+ */
+async function sendLead(id, name, btn) {
+  if (!name) return adminToast('Choose a salesperson first.', 'error');
+  const original = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}/send`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'send failed');
+
+    // Open a pre-addressed email so it can be sent immediately.
+    const mailto = `mailto:${encodeURIComponent(d.to)}`
+      + `?cc=${encodeURIComponent(d.cc)}`
+      + `&subject=${encodeURIComponent(d.subject)}`
+      + `&body=${encodeURIComponent(d.body)}`;
+    window.location.href = mailto;
+
+    adminToast(d.webhook
+      ? `Sent to ${name} (and copied to ${salesTeamCache.manager?.name}). Your email client has also opened a copy.`
+      : `Email to ${name} opened, copying ${salesTeamCache.manager?.name}. Send it from your mail client.`, 'ok');
+    loadLeads();
+  } catch (e) {
+    adminToast(e.message || 'Could not send.', 'error');
+  } finally {
+    btn.disabled = false; btn.innerHTML = original; lucide.createIcons();
+  }
+}
+
 let booths = {};  // live state
 let svgDoc = null;
 let selectedAdminId = null;
@@ -778,6 +816,60 @@ async function openLead(id) {
   });
   statusRow.appendChild(btns);
   panel.appendChild(statusRow);
+
+  // ── Forward to a salesperson ────────────────────────────────────────────────
+  const fwd = document.createElement('div');
+  fwd.className = 'lead-forward';
+
+  const fwdLabel = document.createElement('span');
+  fwdLabel.className = 'lead-field-label';
+  fwdLabel.textContent = 'Send to';
+  fwd.appendChild(fwdLabel);
+
+  const select = document.createElement('select');
+  select.className = 'admin-select lead-assign';
+  const none = document.createElement('option'); none.value = ''; none.textContent = 'Choose a salesperson…';
+  select.appendChild(none);
+  (salesTeamCache.team || []).forEach(m => {
+    const o = document.createElement('option');
+    o.value = m.name; o.textContent = m.name;
+    if (lead.assignedTo && lead.assignedTo.name === m.name) o.selected = true;
+    select.appendChild(o);
+  });
+  select.onchange = async () => {
+    try {
+      await fetch(`/api/inquiries/${encodeURIComponent(id)}/assign`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: select.value }),
+      });
+      adminToast(select.value ? `Assigned to ${select.value}.` : 'Assignment cleared.', 'ok');
+    } catch { adminToast('Could not save assignment.', 'error'); }
+  };
+  fwd.appendChild(select);
+
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'admin-btn success';
+  const alreadySent = (lead.sendCount || 0) > 0;
+  sendBtn.innerHTML = `<i data-lucide="send"></i> ${alreadySent ? 'Send again' : 'Send now'}`;
+  sendBtn.onclick = () => sendLead(id, select.value, sendBtn);
+  fwd.appendChild(sendBtn);
+
+  const ccNote = document.createElement('span');
+  ccNote.className = 'lead-cc-note';
+  ccNote.textContent = salesTeamCache.manager
+    ? `${salesTeamCache.manager.name} is copied on every send`
+    : '';
+  fwd.appendChild(ccNote);
+
+  panel.appendChild(fwd);
+
+  if (alreadySent) {
+    const sent = document.createElement('div');
+    sent.className = 'lead-sent-note';
+    sent.textContent = `Sent ${lead.sendCount}× — last to ${lead.lastSentTo || '—'} on ` +
+      new Date(lead.lastSentAt).toLocaleString('en-GB');
+    panel.appendChild(sent);
+  }
 
   const contact = document.createElement('div');
   contact.className = 'lead-contact-grid';

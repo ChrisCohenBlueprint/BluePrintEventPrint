@@ -83,4 +83,22 @@ async function setStatus(id, status) {
   return res.matchedCount ? { ok: true, status } : { ok: false, error: 'Lead not found.' };
 }
 
-module.exports = { col, create, recent, withHistory, setStatus, STATUSES };
+/** Assign a lead to a member of the sales team (or clear the assignment). */
+async function assign(id, member) {
+  const res = await col().updateOne({ _id: id }, {
+    $set: { assignedTo: member ? { name: member.name, email: member.email } : null, updatedAt: new Date() },
+  });
+  return res.matchedCount === 1;
+}
+
+/** Record that the lead was forwarded, so repeat sends are visible. */
+async function recordSend(id, { to, cc, by }) {
+  const res = await col().updateOne({ _id: id }, {
+    $set: { lastSentAt: new Date(), lastSentTo: to, lastSentBy: by || null },
+    $inc: { sendCount: 1 },
+    $push: { sendLog: { at: new Date(), to, cc, by: by || null } },
+  });
+  return res.matchedCount === 1;
+}
+
+module.exports = { col, create, recent, withHistory, setStatus, STATUSES, assign, recordSend };
