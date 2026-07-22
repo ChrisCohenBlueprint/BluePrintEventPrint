@@ -103,6 +103,26 @@
       if (host && host.parentNode) host.parentNode.insertBefore(overlay, host.nextSibling);
       else svgDoc.appendChild(overlay);
 
+      // A stand created by splitting has no printed number of its own, so draw
+      // its boundary and number the way the artwork numbers every other stand
+      // (top-left) — otherwise the new cell is an invisible, untrackable box.
+      if (b.splitFrom) {
+        overlay.setAttribute('stroke', 'rgba(0,0,0,.45)');
+        overlay.setAttribute('stroke-width', '1');
+
+        var label = document.createElementNS(SVG_NS, 'text');
+        label.setAttribute('x', g.x + 5);
+        label.setAttribute('y', g.y + 13);
+        label.setAttribute('fill', '#111827');
+        label.setAttribute('font-size', '11px');
+        label.setAttribute('font-family', 'Raleway, sans-serif');
+        label.setAttribute('font-weight', '700');
+        label.setAttribute('data-split-label', b.boothNumber);
+        label.style.pointerEvents = 'none';
+        label.textContent = b.boothNumber;
+        overlay.parentNode.insertBefore(label, overlay.nextSibling);
+      }
+
       placed[b.boothNumber] = overlay;
       if (opts.onTag) opts.onTag(overlay, b.boothNumber, b);
     });

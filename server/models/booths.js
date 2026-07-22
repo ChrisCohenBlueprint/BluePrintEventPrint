@@ -25,6 +25,7 @@ function toPublic(b) {
     company: b.assignment?.company || null,
     sqm:     b.sqm,
     geometry: b.geometry,
+    splitFrom: b.splitFrom || null,   // lets the client draw + number split cells
     viewers: b.viewers || 0,
     interest: b.clicks || 0,
   };
