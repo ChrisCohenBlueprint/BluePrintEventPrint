@@ -22,10 +22,16 @@ async function create({ name, email, phone, company, message, boothNumbers = [],
     company: clean(company, 160),
   };
 
+  const hasBooths   = Array.isArray(boothNumbers) && boothNumbers.length;
+  const hasSponsors = Array.isArray(sponsorKeys) && sponsorKeys.length;
+
   const errors = [];
   if (!contact.name)                errors.push('Please enter your name.');
   if (!EMAIL_RE.test(contact.email)) errors.push('Please enter a valid email address.');
-  if (!Array.isArray(boothNumbers) || !boothNumbers.length) errors.push('Please select at least one stand.');
+  // A stand or a sponsorship option — either is a valid lead. Requiring a stand
+  // meant that removing the last stand while keeping sponsors left the enquiry
+  // permanently un-submittable.
+  if (!hasBooths && !hasSponsors) errors.push('Please select at least one stand or sponsorship option.');
   if (errors.length) return { ok: false, errors };
 
   const doc = {

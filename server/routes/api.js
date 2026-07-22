@@ -18,9 +18,23 @@ router.get('/sponsors', async (_req, res, next) => {
 router.patch('/sponsors/:key', async (req, res, next) => {
   try {
     const body = req.body || {};
-    if ('price' in body) body.price = body.price === '' || body.price == null ? null : Number(body.price);
-    if ('active' in body) body.active = !!body.active;
-    res.json(await sponsors.setFields(req.params.key, body));
+    if ('price' in body) {
+      if (body.price === '' || body.price == null) body.price = null;
+      else {
+        const n = Number(body.price);
+        // A non-numeric price used to be stored as NaN, corrupting the catalogue
+        // and silently breaking recommendation ranking.
+        if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'Price must be a non-negative number.' });
+        body.price = n;
+      }
+    }
+    if ('active' in body) {
+      // Coerce honestly: the strings "false"/"0" are false, not truthy.
+      body.active = body.active === true || body.active === 'true' || body.active === 1 || body.active === '1';
+    }
+    const updated = await sponsors.setFields(req.params.key, body);
+    if (!updated) return res.status(404).json({ error: 'No such sponsor.' });
+    res.json(updated);
   } catch (e) { next(e); }
 });
 

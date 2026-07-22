@@ -19,7 +19,11 @@ function throttle(ip, max = 10, windowMs = 5 * 60 * 1000) {
   return rec.count <= max;
 }
 
-const safeNext = (v) => (typeof v === 'string' && v.startsWith('/') && !v.startsWith('//')) ? v : '/admin';
+// A safe same-site redirect target: a single leading slash, and no backslash
+// (browsers treat "/\evil.com" as protocol-relative → off-site). Anything else
+// falls back to /admin.
+const safeNext = (v) =>
+  (typeof v === 'string' && /^\/[^/\\]/.test(v)) ? v : '/admin';
 
 // ─── Pages ────────────────────────────────────────────────────────────────────
 router.get('/login', (req, res) => {
@@ -77,6 +81,9 @@ router.post('/login/verify', async (req, res) => {
   if (!username) return res.status(440).json({ ok: false, error: 'Session expired. Please start again.' });
 
   const user = await users.findByUsername(username);
+  // The account can be deleted between the password step and here; without this
+  // guard verifyTotp(null, …) threw and the request hung with no response.
+  if (!user) return res.status(401).json({ ok: false, error: 'Please start again.' });
   const token = String(req.body?.token || '').trim();
 
   const ok = users.verifyTotp(user, token) ||

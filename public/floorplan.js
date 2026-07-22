@@ -281,9 +281,12 @@ function fetchRecos(sqm) {
   if (recosCache[sqm]) return Promise.resolve(recosCache[sqm]);
   if (!recosInflight[sqm]) {
     recosInflight[sqm] = fetch(`/sponsors/recommend?sqm=${encodeURIComponent(sqm)}`)
-      .then(r => r.ok ? r.json() : { sponsors: [] })
+      .then(r => { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
       .then(d => (recosCache[sqm] = d.sponsors || []))
-      .catch(() => (recosCache[sqm] = []))
+      // On a transient failure return an empty list for THIS attempt but do NOT
+      // cache it — otherwise one network blip would leave that spend permanently
+      // showing "no options". The next open retries.
+      .catch(() => [])
       .finally(() => { delete recosInflight[sqm]; });
   }
   return recosInflight[sqm];

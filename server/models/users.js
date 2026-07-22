@@ -22,10 +22,12 @@ function verifyPassword(password, stored) {
 
 // ─── Recovery codes ───────────────────────────────────────────────────────────
 // Shown once at enrolment; each works once if the phone is lost. Stored hashed,
-// so a database leak does not hand over usable codes.
+// so a database leak does not hand over usable codes. 10 random bytes (80 bits)
+// each, so the hashes are not brute-forceable even if the collection leaks —
+// the previous 5 bytes (40 bits) were.
 function makeRecoveryCodes(n = 8) {
   const plain = Array.from({ length: n }, () =>
-    crypto.randomBytes(5).toString('hex').replace(/(.{5})/, '$1-'));
+    crypto.randomBytes(10).toString('hex').replace(/(.{5})(.{5})(.{5})/, '$1-$2-$3'));
   const hashed = plain.map(c => crypto.createHash('sha256').update(c).digest('hex'));
   return { plain, hashed };
 }
