@@ -861,18 +861,36 @@ function renderFunnel(data) {
   steps.forEach((s, i) => {
     const row = document.createElement('div');
     row.className = 'funnel-step';
+
     const label = document.createElement('div'); label.className = 'funnel-label';
     label.textContent = s.step;
+
+    // The bar sits in its own track; the count lives in a fixed column to the
+    // right so it is always fully readable, even when the bar is tiny.
+    const track = document.createElement('div'); track.className = 'funnel-track';
     const barWrap = document.createElement('div'); barWrap.className = 'funnel-bar-wrap';
     const bar = document.createElement('div'); bar.className = 'funnel-bar';
     bar.style.width = Math.round((s.count / top) * 100) + '%';
+    barWrap.appendChild(bar);
+
     const count = document.createElement('span'); count.className = 'funnel-count';
     const prev = i > 0 ? steps[i - 1].count : null;
-    const pct = prev ? ` (${Math.round((s.count / prev) * 100)}%)` : '';
+    const pct = prev != null ? ` (${prev ? Math.round((s.count / prev) * 100) : 0}%)` : '';
     count.textContent = `${s.count}${pct}`;
-    bar.appendChild(count); barWrap.appendChild(bar);
-    row.append(label, barWrap); el.appendChild(row);
+
+    track.append(barWrap, count);
+    row.append(label, track);
+    el.appendChild(row);
   });
+}
+
+// Dwell reads better in minutes once it passes a minute.
+function formatDwell(ms) {
+  if (!ms) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 90) return s + 's';
+  const m = Math.floor(s / 60), rem = s % 60;
+  return rem ? `${m}m ${rem}s` : `${m}m`;
 }
 
 function renderDemand(data) {
@@ -893,7 +911,7 @@ function renderDemand(data) {
     cell(r.uniqueSessions || 0);
     cell(r.clicks || 0);
     cell(r.views || 0);
-    cell(r.dwellMs ? `${Math.round(r.dwellMs / 1000)}s` : '—');
+    cell(formatDwell(r.dwellMs));
     const barTd = document.createElement('td'); barTd.className = 'demand-bar-cell';
     const bar = document.createElement('div'); bar.className = 'demand-bar';
     bar.style.width = Math.round(((r.uniqueSessions || 0) / maxU) * 100) + '%';
