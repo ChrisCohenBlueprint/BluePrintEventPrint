@@ -51,11 +51,16 @@ async function start() {
   app.get('/floorplan', (_, res) => res.sendFile(path.join(__dirname, 'public', 'floorplan.html')));
   app.get('/admin',     (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
-  // The floorplan SVG is 2.1 MB and was re-sent uncompressed on every load.
+  // Caching: the big floorplan SVG never changes, so cache it hard. Everything
+  // else (HTML/CSS/JS) must revalidate on every load — otherwise a deploy's new
+  // markup pairs with a browser's stale stylesheet and the page renders broken
+  // until a manual hard-refresh. `no-cache` still allows an efficient 304 when
+  // the file is unchanged; it just forbids using the cached copy blind.
   app.use(express.static(path.join(__dirname, 'public'), {
-    maxAge: '7d',
+    etag: true,
     setHeaders: (res, p) => {
       if (p.endsWith('.svg')) res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+      else res.setHeader('Cache-Control', 'no-cache');
     },
   }));
 
