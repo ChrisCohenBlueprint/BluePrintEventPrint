@@ -5,3 +5,5 @@ node_modules/
 booth_state.json
 
 booths-backup-*.json
+
+atlas-booths-backup-*.json
