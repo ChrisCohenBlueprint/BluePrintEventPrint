@@ -455,3 +455,14 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .sp-tier-pill.tier-platinum { color: #cbd5e1; }
 .sp-tier-pill.tier-gold     { color: #f5c94a; }
 .sp-tier-pill.tier-silver   { color: #9fb0bf; }
+
+/* ─── Lead status pipeline ──────────────────────────────────────────────────── */
+.lead-status-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+.lead-status-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.lead-status-btn { font-family: inherit; font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 20px;
+  border: 1px solid var(--border); background: rgba(255,255,255,.03); color: var(--muted); cursor: pointer; transition: all .15s; }
+.lead-status-btn:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
+.lead-status-btn.active.st-new       { background: rgba(249,115,22,.18); color: #fdba74; border-color: rgba(249,115,22,.5); }
+.lead-status-btn.active.st-contacted { background: rgba(96,171,191,.18); color: #7dd3e8; border-color: rgba(96,171,191,.5); }
+.lead-status-btn.active.st-won       { background: rgba(74,222,128,.18); color: #86efac; border-color: rgba(74,222,128,.5); }
+.lead-status-btn.active.st-lost      { background: rgba(148,163,184,.16); color: #cbd5e1; border-color: rgba(148,163,184,.4); }

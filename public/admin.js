@@ -746,6 +746,36 @@ async function openLead(id) {
   head.appendChild(h);
   panel.appendChild(head);
 
+  // Pipeline status — sales move a lead new → contacted → won / lost.
+  const statusRow = document.createElement('div');
+  statusRow.className = 'lead-status-row';
+  const label = document.createElement('span'); label.className = 'lead-field-label'; label.textContent = 'Status';
+  statusRow.appendChild(label);
+  const btns = document.createElement('div'); btns.className = 'lead-status-btns';
+  ['new', 'contacted', 'won', 'lost'].forEach(st => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `lead-status-btn st-${st}` + (lead.status === st ? ' active' : '');
+    btn.textContent = st.charAt(0).toUpperCase() + st.slice(1);
+    btn.onclick = async () => {
+      try {
+        const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st }),
+        });
+        if (!res.ok) throw new Error();
+        lead.status = st;
+        statusRow.querySelectorAll('.lead-status-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const cached = leadCache.find(l => l._id === id); if (cached) cached.status = st;
+        renderLeadsList();                       // refresh the list + "new" badge
+        adminToast(`Lead marked ${st}.`, 'ok');
+      } catch { adminToast('Could not update lead status.', 'error'); }
+    };
+    btns.appendChild(btn);
+  });
+  statusRow.appendChild(btns);
+  panel.appendChild(statusRow);
+
   const contact = document.createElement('div');
   contact.className = 'lead-contact-grid';
   const field = (label, value, href) => {

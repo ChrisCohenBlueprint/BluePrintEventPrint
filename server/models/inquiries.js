@@ -68,4 +68,13 @@ async function withHistory(id) {
   return { ...inquiry, history };
 }
 
-module.exports = { col, create, recent, withHistory };
+const STATUSES = ['new', 'contacted', 'won', 'lost'];
+
+/** Move a lead through the sales pipeline. */
+async function setStatus(id, status) {
+  if (!STATUSES.includes(status)) return { ok: false, error: 'Invalid status.' };
+  const res = await col().updateOne({ _id: id }, { $set: { status, updatedAt: new Date() } });
+  return res.matchedCount ? { ok: true, status } : { ok: false, error: 'Lead not found.' };
+}
+
+module.exports = { col, create, recent, withHistory, setStatus, STATUSES };

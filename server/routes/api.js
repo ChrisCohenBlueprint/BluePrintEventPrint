@@ -54,6 +54,15 @@ router.get('/inquiries/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Move a lead through the pipeline: new → contacted → won / lost.
+router.patch('/inquiries/:id', async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
+    const r = await inquiries.setStatus(new ObjectId(req.params.id), req.body?.status);
+    res.status(r.ok ? 200 : 400).json(r);
+  } catch (e) { next(e); }
+});
+
 // Recent activity for one stand — replaces the 20-entry in-memory clickHistory.
 router.get('/booths/:n/activity', async (req, res, next) => {
   try {
