@@ -1,7 +1,14 @@
 const express = require('express');
 const sponsors = require('../models/sponsors');
+const partners = require('../models/partners');
 
 const router = express.Router();
+
+// Partner logos for the "In partnership with" strip. Public and safe: only the
+// image, link and name are exposed.
+router.get('/partners', async (_req, res, next) => {
+  try { res.json({ partners: await partners.publicList() }); } catch (e) { next(e); }
+});
 
 // Public, unauthenticated — mounted before adminAuth. Returns the sponsorship
 // catalogue ranked for a booth of the given size, with NO prices. Ranking is

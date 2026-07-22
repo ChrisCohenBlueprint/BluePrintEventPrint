@@ -628,10 +628,11 @@ function updateStatsStrip() {
 async function loadSponsors() {
   const strip = document.getElementById('sponsor-strip');
   try {
-    const res = await fetch('/sponsors/sponsors.json', { cache: 'no-cache' });
+    // Managed from the admin Sponsors page, so logos change without a deploy.
+    const res = await fetch('/partners', { cache: 'no-cache' });
     if (!res.ok) return;
     const cfg = await res.json();
-    const list = Array.isArray(cfg.sponsors) ? cfg.sponsors.filter(s => s && s.image) : [];
+    const list = Array.isArray(cfg.partners) ? cfg.partners.filter(s => s && s.image) : [];
     if (!list.length) return;                       // no sponsors: strip stays hidden
 
     document.getElementById('sponsor-heading').textContent = cfg.heading || 'In partnership with';

@@ -1012,8 +1012,133 @@ function renderDemand(data) {
   });
 }
 
+/**
+ * Sponsor logos in the admin sidebar. Same list managed under
+ * Sponsors → Partner logos, so updating a logo or its link there changes it
+ * here too. Built with DOM nodes and http(s)-only links (validated server-side).
+ */
+async function loadNavPartners() {
+  const wrap = document.getElementById('nav-partners');
+  const box  = document.getElementById('nav-partners-logos');
+  if (!wrap || !box) return;
+  let list = [];
+  try { list = (await fetch('/partners').then(r => r.ok ? r.json() : {})).partners || []; } catch {}
+
+  box.replaceChildren();
+  if (!list.length) { wrap.classList.add('hidden'); return; }
+
+  list.forEach(p => {
+    const img = document.createElement('img');
+    img.src = p.image; img.alt = p.alt || p.name || 'Partner'; img.loading = 'lazy';
+
+    const holder = p.url ? document.createElement('a') : document.createElement('span');
+    if (p.url) {
+      holder.href = p.url; holder.target = '_blank'; holder.rel = 'noopener noreferrer';
+      holder.title = p.name || '';
+    }
+    // A logo whose file is missing shouldn't leave a broken icon in the nav.
+    img.onerror = () => holder.remove();
+    holder.appendChild(img);
+    box.appendChild(holder);
+  });
+  wrap.classList.remove('hidden');
+}
+loadNavPartners();
+
+// ─── Partner logos (public "In partnership with" strip) ──────────────────────
+async function loadPartners() {
+  const tbody = document.getElementById('partners-tbody');
+  if (!tbody) return;
+  tbody.replaceChildren();
+  let list = [];
+  try { list = await fetch('/api/partners').then(r => r.ok ? r.json() : []); } catch {}
+
+  if (!list.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td'); td.colSpan = 6; td.className = 'partners-empty';
+    td.textContent = 'No partner logos yet — add one above and it appears on the public floorplan.';
+    tr.appendChild(td); tbody.appendChild(tr); return;
+  }
+
+  list.forEach(p => {
+    const tr = document.createElement('tr');
+    if (p.active === false) tr.classList.add('partner-hidden');
+
+    const prev = document.createElement('td');
+    const img = document.createElement('img');
+    img.className = 'partner-thumb'; img.src = p.image; img.alt = p.name || 'logo';
+    img.onerror = () => { img.replaceWith(Object.assign(document.createElement('span'), { className: 'partner-broken', textContent: 'broken' })); };
+    prev.appendChild(img); tr.appendChild(prev);
+
+    tr.appendChild(partnerInput(p._id, 'name',  p.name  || '', 'Name', 130));
+    tr.appendChild(partnerInput(p._id, 'image', p.image || '', 'Image URL', 220));
+    tr.appendChild(partnerInput(p._id, 'url',   p.url   || '', 'Link (optional)', 200));
+
+    const shown = document.createElement('td');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = p.active !== false;
+    cb.onchange = () => savePartner(p._id, { active: cb.checked });
+    shown.appendChild(cb); tr.appendChild(shown);
+
+    const act = document.createElement('td');
+    const del = document.createElement('button');
+    del.className = 'admin-btn danger'; del.style.cssText = 'font-size:11px;padding:5px 10px';
+    del.textContent = 'Remove';
+    del.onclick = async () => {
+      if (!confirm(`Remove "${p.name || 'this logo'}" from the floorplan?`)) return;
+      const res = await fetch(`/api/partners/${p._id}`, { method: 'DELETE' });
+      adminToast(res.ok ? 'Logo removed.' : 'Could not remove.', res.ok ? 'ok' : 'error');
+      if (res.ok) { loadPartners(); loadNavPartners(); }
+    };
+    act.appendChild(del); tr.appendChild(act);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function partnerInput(id, field, value, placeholder, width) {
+  const td = document.createElement('td');
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.className = 'admin-input'; inp.value = value; inp.placeholder = placeholder;
+  inp.style.cssText = `width:${width}px;padding:5px 8px;font-size:12px;background:var(--bg);`;
+  inp.onchange = () => savePartner(id, { [field]: inp.value });
+  td.appendChild(inp);
+  return td;
+}
+
+async function savePartner(id, fields) {
+  try {
+    const res = await fetch(`/api/partners/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
+    });
+    const d = await res.json().catch(() => ({}));
+    adminToast(res.ok ? 'Logo updated.' : (d.error || 'Could not save.'), res.ok ? 'ok' : 'error');
+    if (res.ok) { if ('image' in fields || 'active' in fields) loadPartners(); loadNavPartners(); }
+  } catch { adminToast('Could not save.', 'error'); }
+}
+
+document.getElementById('partner-add-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    name:  document.getElementById('partner-name').value.trim(),
+    image: document.getElementById('partner-image').value.trim(),
+    url:   document.getElementById('partner-url').value.trim(),
+  };
+  try {
+    const res = await fetch('/api/partners', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (res.ok) {
+      adminToast('Logo added.', 'ok');
+      ['partner-name', 'partner-image', 'partner-url'].forEach(i => { document.getElementById(i).value = ''; });
+      loadPartners(); loadNavPartners();
+    } else adminToast(d.error || 'Could not add logo.', 'error');
+  } catch { adminToast('Could not add logo.', 'error'); }
+});
+
 // ─── Sponsors (admin — with prices) ──────────────────────────────────────────
 async function loadSponsorsAdmin() {
+  loadPartners();
   const tbody = document.getElementById('sponsors-admin-tbody');
   tbody.replaceChildren();
   try {

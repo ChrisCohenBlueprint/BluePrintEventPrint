@@ -502,3 +502,39 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .lead-cc-note { font-size: 11.5px; color: var(--muted); }
 .lead-sent-note { font-size: 11.5px; color: var(--muted); margin-bottom: 18px;
   padding: 7px 11px; background: rgba(255,255,255,.03); border-left: 2px solid rgba(96,171,191,.5); border-radius: 4px; }
+
+/* ─── Partner logos ─────────────────────────────────────────────────────────── */
+.partners-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 22px; margin-bottom: 24px; }
+.partners-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+.partners-card p { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-bottom: 16px; max-width: 70ch; }
+.partner-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.partner-form .admin-input { padding: 8px 11px; font-size: 12.5px; background: var(--bg); flex: 1; min-width: 150px; }
+.partners-table-wrap { overflow-x: auto; }
+.partners-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 760px; }
+.partners-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); font-weight: 600; padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.partners-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.partners-table tr:last-child td { border-bottom: none; }
+.partners-table tr.partner-hidden { opacity: .45; }
+.partner-thumb { height: 30px; max-width: 110px; object-fit: contain; background: rgba(255,255,255,.06);
+  border-radius: 4px; padding: 3px; display: block; }
+.partner-broken { font-size: 11px; color: var(--red); }
+.partners-empty { color: var(--muted); font-size: 12.5px; padding: 14px 12px; }
+.sponsors-cat-title { font-size: 15px; font-weight: 700; margin-bottom: 12px; }
+
+/* ─── Partner logos in the admin sidebar ────────────────────────────────────── */
+.nav-partners { margin: 4px 10px 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.nav-partners.hidden { display: none; }
+.nav-partners-label { display: block; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 8px; padding: 0 2px; }
+.nav-partners-logos { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.nav-partners-logos a, .nav-partners-logos span {
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 7px; opacity: .8; transition: opacity .15s, border-color .15s;
+}
+.nav-partners-logos a:hover { opacity: 1; border-color: rgba(255,255,255,.2); }
+/* A definite height, not just max-height: an SVG data URI carries no intrinsic
+   size, so max-* alone collapses it to nothing. */
+.nav-partners-logos img { height: 20px; width: auto; max-width: 76px; object-fit: contain; display: block; }

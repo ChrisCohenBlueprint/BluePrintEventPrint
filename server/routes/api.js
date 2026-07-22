@@ -6,6 +6,7 @@ const booths    = require('../models/booths');
 const inquiries = require('../models/inquiries');
 const sponsors  = require('../models/sponsors');
 const users     = require('../models/users');
+const partners  = require('../models/partners');
 const salesTeam = require('../data/sales-team');
 const holds     = require('../services/holds');
 const { getDb } = require('../db');
@@ -117,6 +118,34 @@ router.get('/inquiries/:id', async (req, res, next) => {
     const row = await inquiries.withHistory(new ObjectId(req.params.id));
     if (!row) return res.status(404).json({ error: 'Not found' });
     res.json(row);
+  } catch (e) { next(e); }
+});
+
+// ─── Partner logos (the public "In partnership with" strip) ───────────────────
+router.get('/partners', async (_req, res, next) => {
+  try { res.json(await partners.all()); } catch (e) { next(e); }
+});
+
+router.post('/partners', async (req, res, next) => {
+  try {
+    const r = await partners.create(req.body || {});
+    res.status(r.ok ? 200 : 400).json(r);
+  } catch (e) { next(e); }
+});
+
+router.patch('/partners/:id', async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
+    const r = await partners.update(req.params.id, req.body || {});
+    res.status(r.ok ? 200 : 400).json(r);
+  } catch (e) { next(e); }
+});
+
+router.delete('/partners/:id', async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
+    const ok = await partners.remove(req.params.id);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: 'Partner not found.' });
   } catch (e) { next(e); }
 });
 

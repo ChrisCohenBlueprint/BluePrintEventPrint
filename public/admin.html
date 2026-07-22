@@ -36,6 +36,13 @@
       <li class="nav-link" data-section="team"><i data-lucide="users"></i> Team</li>
       <li class="nav-link" data-section="log"><i data-lucide="activity"></i> Activity Log</li>
     </ul>
+    <!-- Sponsor / partner logos, managed in Sponsors → Partner logos. Hidden
+         until at least one logo is configured. -->
+    <div class="nav-partners hidden" id="nav-partners">
+      <span class="nav-partners-label">Partners</span>
+      <div class="nav-partners-logos" id="nav-partners-logos"></div>
+    </div>
+
     <a href="/floorplan" target="_blank" class="nav-view-public">
       <i data-lucide="external-link"></i> View Public Page
     </a>
@@ -292,6 +299,25 @@
     <!-- ═══ SECTION: SPONSORS ════════════════════════════════════════════════ -->
     <section class="admin-section" id="section-sponsors">
       <p class="sponsors-intro">The sponsorship catalogue. Prices here are admin-only — buyers never see them on the floorplan; they're used to rank recommendations against a stand's size. Edit price, availability, media and whether an option is offered.</p>
+      <!-- Partner logos shown on the public floorplan strip -->
+      <div class="partners-card">
+        <h3>Partner logos</h3>
+        <p>These appear in the “In partnership with” strip at the bottom of the public floorplan. Paste a logo image URL and, optionally, the link it should open.</p>
+        <form id="partner-add-form" class="partner-form">
+          <input type="text" id="partner-name"  class="admin-input" placeholder="Name (e.g. Castrol)">
+          <input type="text" id="partner-image" class="admin-input" placeholder="Logo image URL or /sponsors/logo.png">
+          <input type="text" id="partner-url"   class="admin-input" placeholder="Link (optional) https://…">
+          <button type="submit" class="admin-btn success"><i data-lucide="plus"></i> Add logo</button>
+        </form>
+        <div class="partners-table-wrap">
+          <table class="partners-table">
+            <thead><tr><th>Logo</th><th>Name</th><th>Image URL</th><th>Link</th><th>Shown</th><th></th></tr></thead>
+            <tbody id="partners-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <h3 class="sponsors-cat-title">Sponsorship catalogue</h3>
       <div class="sponsors-admin-wrap">
         <table class="sponsors-admin-table" id="sponsors-admin-table">
           <thead><tr>

@@ -11,6 +11,7 @@ const apiRoutes    = require('./server/routes/api');
 const authRoutes   = require('./server/routes/auth-routes');
 const publicRoutes = require('./server/routes/public');
 const users        = require('./server/models/users');
+const partners     = require('./server/models/partners');
 const tracking   = require('./server/services/tracking');
 
 async function start() {
@@ -20,6 +21,7 @@ async function start() {
   // from ADMIN_USER / ADMIN_PASS so the existing Render credentials keep working
   // — 2FA is then set up on that account's first login.
   await users.ensureIndexes();
+  await partners.ensureIndexes();
   await users.bootstrap({ username: config.adminUser, password: config.adminPass });
 
   const app    = express();
