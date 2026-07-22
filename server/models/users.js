@@ -112,7 +112,38 @@ async function useRecoveryCode(username, code) {
   return res.modifiedCount === 1;
 }
 
+// ─── Team management ──────────────────────────────────────────────────────────
+/** All accounts, without any secret material. */
+const list = () =>
+  col().find({}).project({ username: 1, role: 1, totpEnrolled: 1, createdAt: 1 })
+       .sort({ createdAt: 1 }).toArray();
+
+const count = () => col().countDocuments();
+
+/** Reset an account's 2FA so it re-enrols on next login (lost-phone recovery). */
+async function resetTotp(username) {
+  const res = await col().updateOne(
+    { username: String(username || '').toLowerCase().trim() },
+    { $set: { totpSecret: null, totpEnrolled: false, recoveryHashes: [] },
+      $unset: { pendingSecret: '', pendingRecovery: '' } });
+  return res.matchedCount === 1;
+}
+
+/** Set a new password without touching 2FA. */
+async function setPassword(username, password) {
+  const res = await col().updateOne(
+    { username: String(username || '').toLowerCase().trim() },
+    { $set: { passwordHash: hashPassword(password), updatedAt: new Date() } });
+  return res.matchedCount === 1;
+}
+
+async function remove(username) {
+  const res = await col().deleteOne({ username: String(username || '').toLowerCase().trim() });
+  return res.deletedCount === 1;
+}
+
 module.exports = {
   ensureIndexes, findByUsername, upsert, bootstrap,
   verifyPassword, verifyTotp, startEnrolment, confirmEnrolment, useRecoveryCode,
+  list, count, resetTotp, setPassword, remove,
 };

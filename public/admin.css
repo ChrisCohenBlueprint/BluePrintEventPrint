@@ -466,3 +466,28 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .lead-status-btn.active.st-contacted { background: rgba(96,171,191,.18); color: #7dd3e8; border-color: rgba(96,171,191,.5); }
 .lead-status-btn.active.st-won       { background: rgba(74,222,128,.18); color: #86efac; border-color: rgba(74,222,128,.5); }
 .lead-status-btn.active.st-lost      { background: rgba(148,163,184,.16); color: #cbd5e1; border-color: rgba(148,163,184,.4); }
+
+/* ─── Team (admin accounts) ─────────────────────────────────────────────────── */
+.team-layout { display: grid; grid-template-columns: 340px 1fr; gap: 20px; align-items: start; }
+@media (max-width: 900px) { .team-layout { grid-template-columns: 1fr; } }
+.team-add-card, .team-list-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
+.team-add-card h3, .team-list-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+.team-add-card p { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-bottom: 16px; }
+.team-form { display: flex; flex-direction: column; gap: 14px; }
+.team-field { display: flex; flex-direction: column; gap: 5px; }
+.team-field label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.team-field .admin-input { width: 100%; padding: 9px 12px; font-size: 13px; background: var(--bg); }
+.team-pw-row { display: flex; gap: 8px; }
+.team-pw-row .admin-input { flex: 1; }
+.team-table-wrap { overflow-x: auto; }
+.team-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 460px; }
+.team-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted);
+  font-weight: 600; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.team-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.team-table tr:last-child td { border-bottom: none; }
+.team-you { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--accent);
+  background: rgba(99,102,241,.15); border-radius: 10px; padding: 1px 6px; margin-left: 6px; }
+.team-2fa { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px; }
+.team-2fa.on  { background: rgba(74,222,128,.16); color: #86efac; }
+.team-2fa.off { background: rgba(249,115,22,.16); color: #fdba74; }
+.team-actions { display: flex; gap: 6px; flex-wrap: wrap; }

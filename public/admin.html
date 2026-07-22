@@ -33,6 +33,7 @@
       <li class="nav-link" data-section="analytics"><i data-lucide="bar-chart-3"></i> Analytics</li>
       <li class="nav-link" data-section="sponsors"><i data-lucide="award"></i> Sponsors</li>
       <li class="nav-link" data-section="tools"><i data-lucide="wrench"></i> Tools</li>
+      <li class="nav-link" data-section="team"><i data-lucide="users"></i> Team</li>
       <li class="nav-link" data-section="log"><i data-lucide="activity"></i> Activity Log</li>
     </ul>
     <a href="/floorplan" target="_blank" class="nav-view-public">
@@ -395,6 +396,40 @@
           </form>
         </div>
 
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: TEAM ════════════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-team">
+      <div class="team-layout">
+        <div class="team-add-card">
+          <h3>Add an administrator</h3>
+          <p>Create an account, then share the username and temporary password. They set up their own two-factor login the first time they sign in, and can change the password after.</p>
+          <form id="team-add-form" class="team-form">
+            <div class="team-field">
+              <label for="team-username">Username</label>
+              <input type="text" id="team-username" class="admin-input" autocomplete="off" autocapitalize="none" placeholder="e.g. james">
+            </div>
+            <div class="team-field">
+              <label for="team-password">Temporary password</label>
+              <div class="team-pw-row">
+                <input type="text" id="team-password" class="admin-input" autocomplete="off" placeholder="at least 8 characters">
+                <button type="button" class="admin-btn" id="team-gen-pw" title="Generate a password">Generate</button>
+              </div>
+            </div>
+            <button type="submit" class="admin-btn success full"><i data-lucide="user-plus"></i> Add administrator</button>
+          </form>
+        </div>
+
+        <div class="team-list-card">
+          <h3>Administrators</h3>
+          <div class="team-table-wrap">
+            <table class="team-table">
+              <thead><tr><th>Username</th><th>2FA</th><th>Added</th><th></th></tr></thead>
+              <tbody id="team-tbody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </section>
 

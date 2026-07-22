@@ -5,10 +5,61 @@ const config    = require('../config');
 const booths    = require('../models/booths');
 const inquiries = require('../models/inquiries');
 const sponsors  = require('../models/sponsors');
+const users     = require('../models/users');
 const holds     = require('../services/holds');
 const { getDb } = require('../db');
 
 const router = express.Router();
+
+// ─── Team: admin accounts ─────────────────────────────────────────────────────
+// Behind adminAuth like everything under /api. Any admin can manage the team.
+// A new admin gets a username + temporary password here, shares it out of band,
+// and sets up their own 2FA on first login.
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,31}$/;
+
+router.get('/admins', async (_req, res, next) => {
+  try { res.json(await users.list()); } catch (e) { next(e); }
+});
+
+router.post('/admins', async (req, res, next) => {
+  try {
+    const username = String(req.body?.username || '').toLowerCase().trim();
+    const password = String(req.body?.password || '');
+    if (!USERNAME_RE.test(username)) return res.status(400).json({ error: 'Username must be 2–32 chars: letters, numbers, . _ -' });
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    if (await users.findByUsername(username)) return res.status(409).json({ error: 'That username already exists.' });
+    await users.upsert({ username, password, role: 'admin' });
+    res.json({ ok: true, username });
+  } catch (e) { next(e); }
+});
+
+router.post('/admins/:username/reset-2fa', async (req, res, next) => {
+  try {
+    const ok = await users.resetTotp(req.params.username);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: 'No such account.' });
+  } catch (e) { next(e); }
+});
+
+router.post('/admins/:username/password', async (req, res, next) => {
+  try {
+    const password = String(req.body?.password || '');
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    const ok = await users.setPassword(req.params.username, password);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: 'No such account.' });
+  } catch (e) { next(e); }
+});
+
+router.delete('/admins/:username', async (req, res, next) => {
+  try {
+    const target = String(req.params.username || '').toLowerCase().trim();
+    // Never leave the system with no admins — that would lock everyone out.
+    if (await users.count() <= 1) return res.status(400).json({ error: 'Cannot delete the last admin.' });
+    // Deleting the account you are signed in as would be confusing; block it.
+    if (req.admin && req.admin.user === target) return res.status(400).json({ error: 'You cannot delete your own account.' });
+    const ok = await users.remove(target);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: 'No such account.' });
+  } catch (e) { next(e); }
+});
 
 // ─── Sponsors (admin — includes price) ────────────────────────────────────────
 router.get('/sponsors', async (_req, res, next) => {

@@ -2,7 +2,8 @@
 const socket = io();
 
 // Show who is signed in.
-fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u)document.getElementById('nav-username').textContent=u.user;}).catch(()=>{});
+let currentUser = null;
+fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u){currentUser=u.user;document.getElementById('nav-username').textContent=u.user;}}).catch(()=>{});
 
 // Prime the sponsor catalogue so lead detail can name sponsorship interests
 // without waiting for the Sponsors tab to be opened.
@@ -22,6 +23,7 @@ const sectionTitles = {
   analytics: 'Analytics',
   sponsors: 'Sponsors',
   tools: 'Tools',
+  team: 'Team',
   log: 'Activity Log'
 };
 
@@ -40,6 +42,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
     if (sec === 'leads') loadLeads();
     if (sec === 'analytics') loadAnalytics();
     if (sec === 'sponsors') loadSponsorsAdmin();
+    if (sec === 'team') loadTeam();
   });
 });
 
@@ -958,6 +961,110 @@ async function saveSponsor(key, fields) {
     adminToast(res.ok ? 'Sponsor updated.' : 'Could not save sponsor.', res.ok ? 'ok' : 'error');
     if (res.ok && 'active' in fields) loadSponsorsAdmin();
   } catch { adminToast('Could not save sponsor.', 'error'); }
+}
+
+// ─── Team (admin accounts) ────────────────────────────────────────────────────
+async function loadTeam() {
+  const tbody = document.getElementById('team-tbody');
+  tbody.replaceChildren();
+  let admins = [];
+  try { admins = await fetch('/api/admins').then(r => r.ok ? r.json() : []); } catch {}
+
+  admins.forEach(a => {
+    const tr = document.createElement('tr');
+
+    const name = document.createElement('td');
+    const strong = document.createElement('strong'); strong.textContent = a.username;
+    name.appendChild(strong);
+    if (a.username === currentUser) { const you = document.createElement('span'); you.className = 'team-you'; you.textContent = ' you'; name.appendChild(you); }
+    tr.appendChild(name);
+
+    const tfa = document.createElement('td');
+    const pill = document.createElement('span');
+    pill.className = 'team-2fa ' + (a.totpEnrolled ? 'on' : 'off');
+    pill.textContent = a.totpEnrolled ? 'Enrolled' : 'Not set up';
+    tfa.appendChild(pill);
+    tr.appendChild(tfa);
+
+    const added = document.createElement('td');
+    added.textContent = a.createdAt ? new Date(a.createdAt).toLocaleDateString('en-GB') : '—';
+    tr.appendChild(added);
+
+    const actions = document.createElement('td');
+    actions.className = 'team-actions';
+    actions.appendChild(teamBtn('Reset 2FA', () => resetMemberTotp(a.username)));
+    actions.appendChild(teamBtn('New password', () => resetMemberPassword(a.username)));
+    if (a.username !== currentUser && admins.length > 1) {
+      actions.appendChild(teamBtn('Remove', () => removeMember(a.username), 'danger'));
+    }
+    tr.appendChild(actions);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function teamBtn(label, onClick, kind) {
+  const b = document.createElement('button');
+  b.className = 'admin-btn' + (kind === 'danger' ? ' danger' : '');
+  b.style.cssText = 'font-size:11px;padding:5px 10px';
+  b.textContent = label;
+  b.onclick = onClick;
+  return b;
+}
+
+function genPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const a = new Uint32Array(14); crypto.getRandomValues(a);
+  return Array.from(a, x => chars[x % chars.length]).join('') + '!';
+}
+
+document.getElementById('team-gen-pw')?.addEventListener('click', () => {
+  document.getElementById('team-password').value = genPassword();
+});
+
+document.getElementById('team-add-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('team-username').value.trim();
+  const password = document.getElementById('team-password').value;
+  try {
+    const res = await fetch('/api/admins', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      adminToast(`Administrator "${username}" added. Share the username and password with them.`, 'ok');
+      document.getElementById('team-username').value = '';
+      document.getElementById('team-password').value = '';
+      loadTeam();
+    } else {
+      adminToast(data.error || 'Could not add administrator.', 'error');
+    }
+  } catch { adminToast('Could not add administrator.', 'error'); }
+});
+
+async function resetMemberTotp(username) {
+  if (!confirm(`Reset 2FA for "${username}"? They will set it up again on their next login.`)) return;
+  const res = await fetch(`/api/admins/${encodeURIComponent(username)}/reset-2fa`, { method: 'POST' });
+  adminToast(res.ok ? `2FA reset for ${username}.` : 'Could not reset 2FA.', res.ok ? 'ok' : 'error');
+  if (res.ok) loadTeam();
+}
+
+async function resetMemberPassword(username) {
+  const pw = prompt(`New password for "${username}" (at least 8 characters):`);
+  if (pw === null) return;
+  const res = await fetch(`/api/admins/${encodeURIComponent(username)}/password`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }),
+  });
+  const data = await res.json().catch(() => ({}));
+  adminToast(res.ok ? `Password updated for ${username}.` : (data.error || 'Could not update password.'), res.ok ? 'ok' : 'error');
+}
+
+async function removeMember(username) {
+  if (!confirm(`Remove administrator "${username}"? They will lose access immediately.`)) return;
+  const res = await fetch(`/api/admins/${encodeURIComponent(username)}`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  adminToast(res.ok ? `Removed ${username}.` : (data.error || 'Could not remove.'), res.ok ? 'ok' : 'error');
+  if (res.ok) loadTeam();
 }
 
 document.getElementById('analytics-refresh')?.addEventListener('click', loadAnalytics);
