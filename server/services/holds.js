@@ -40,6 +40,23 @@ async function create({ boothNumber, company, contactId = null, sessionId = null
 /** Delete hold documents without touching booth status. */
 const drop = (boothNumber) => col().deleteMany({ showId: config.showId, boothNumber });
 
+/**
+ * Write a hold document unconditionally — used by the admin force-status path,
+ * which may put a stand on hold regardless of its current status. create()
+ * refuses unless the stand is available, so relying on it there left the stand
+ * 'held' with no hold document, and the expiry sweep reclaimed it within a
+ * minute. This always leaves a matching document behind.
+ */
+async function forceHold(boothNumber, { company = 'Pending', durationMs = config.defaultHoldMs, actor = null } = {}) {
+  await drop(boothNumber);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + durationMs);
+  await col().insertOne({ showId: config.showId, boothNumber, company, contactId: null,
+                          sessionId: null, createdAt: now, expiresAt, createdBy: actor });
+  track({ type: 'hold.create', boothNumber, meta: { company, expiresAt, forced: true }, actor });
+  return { ok: true, expiresAt };
+}
+
 async function release(boothNumber, { actor = null } = {}) {
   await drop(boothNumber);
   await booths.setStatus(boothNumber, 'available', { company: null, actor });
@@ -110,4 +127,4 @@ function startExpiryLoop(onExpired) {
   return t;
 }
 
-module.exports = { create, release, drop, active, reconcile, startExpiryLoop };
+module.exports = { create, release, drop, forceHold, active, reconcile, startExpiryLoop };

@@ -256,12 +256,11 @@ function register(io) {
       // Forcing 'held' without a hold document left the booth to be reclaimed
       // by the expiry sweep within 60 seconds — the stand silently went back on
       // sale. Keep the hold collection in step with whatever status is forced.
-      if (status === 'held') {
-        await holdsSvc.drop(n);
-        await holdsSvc.create({ boothNumber: n, company: company || 'Pending', actor: socket.data.user });
-      } else {
-        await holdsSvc.drop(n);
-      }
+      // forceHold always writes a hold document, even when the stand is not
+      // currently available. holdsSvc.create refuses in that case, which used to
+      // leave the stand 'held' with no hold doc — reclaimed by the sweep in 60s.
+      if (status === 'held') await holdsSvc.forceHold(n, { company: company || 'Pending', actor: socket.data.user });
+      else await holdsSvc.drop(n);
 
       const r = await booths.setStatus(n, status, {
         // Blank company on a status change used to wipe an existing exhibitor.

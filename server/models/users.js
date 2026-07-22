@@ -99,13 +99,15 @@ const verifyTotp = (user, token) => user.totpEnrolled && totp.verify(user.totpSe
 
 /** Spend a recovery code (one use). Returns true if it was valid. */
 async function useRecoveryCode(username, code) {
-  const user = await findByUsername(username);
-  if (!user) return false;
   const hash = crypto.createHash('sha256').update(String(code || '').trim()).digest('hex');
-  if (!(user.recoveryHashes || []).includes(hash)) return false;
-  await col().updateOne({ username: user.username },
-    { $pull: { recoveryHashes: hash } });
-  return true;
+  // Atomic check-and-remove: the code must still be present for the update to
+  // match. A separate read-then-pull would let two concurrent logins both pass
+  // the check and spend the same code twice.
+  const res = await col().updateOne(
+    { username: String(username || '').toLowerCase().trim(), recoveryHashes: hash },
+    { $pull: { recoveryHashes: hash } }
+  );
+  return res.modifiedCount === 1;
 }
 
 module.exports = {

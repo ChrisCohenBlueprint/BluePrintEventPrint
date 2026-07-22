@@ -102,6 +102,12 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
   if (!a || !b) return { ok: false, reason: 'missing_booth' };
   if (primaryNum === secondaryNum) return { ok: false, reason: 'same_booth' };
 
+  // Only merge available stands. Consolidating a sold or held stand would delete
+  // its booking along with the record and orphan any hold document — refuse it.
+  if (a.status !== 'available' || b.status !== 'available') {
+    return { ok: false, reason: 'not_available' };
+  }
+
   const g1 = a.geometry, g2 = b.geometry;
   const box = (g1 && g2) ? {
     x: Math.min(g1.x, g2.x), y: Math.min(g1.y, g2.y),
@@ -131,6 +137,9 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
 async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = {}) {
   const b = await get(boothNum);
   if (!b) return { ok: false, reason: 'missing_booth' };
+  // Splitting is a pre-sale layout operation. On a sold/held stand it would
+  // shrink a paid booking to 1/n of its area, so only available stands split.
+  if (b.status !== 'available') return { ok: false, reason: 'not_available' };
   const n = Math.max(2, Math.min(6, parts | 0));
   const g = b.geometry;
   if (!g) return { ok: false, reason: 'no_geometry' };
@@ -147,7 +156,16 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
     w: cellW, h: cellH,
   });
 
-  // First cell stays on the original record.
+  // Check every new suffix for a collision BEFORE mutating anything. The old
+  // order mutated the primary and inserted some cells first, so a collision on
+  // a later cell left the stand corrupted and half-split.
+  const nums = [];
+  for (let i = 1; i < n; i++) {
+    const num = `${boothNum}-${i + 1}`;
+    if (await get(num)) return { ok: false, reason: 'suffix_exists' };
+    nums.push(num);
+  }
+
   await col().updateOne(
     { showId: config.showId, boothNumber: boothNum },
     { $set: { geometry: cellGeom(0), sqm, listPrice: price, updatedAt: new Date(), updatedBy: actor } }
@@ -155,17 +173,15 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
 
   const created = [];
   for (let i = 1; i < n; i++) {
-    const num = `${boothNum}-${i + 1}`;
-    if (await get(num)) return { ok: false, reason: 'suffix_exists' };
     await col().insertOne({
-      showId: config.showId, boothNumber: num,
+      showId: config.showId, boothNumber: nums[i - 1],
       svgElementId: null, geometry: cellGeom(i),
       sqm, sqmSource: 'split', listPrice: price, status: 'available',
       assignment: { company: null, contactId: null, actualPrice: null, notes: '' },
       clicks: 0, splitFrom: boothNum,
       createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
     });
-    created.push(num);
+    created.push(nums[i - 1]);
   }
   return { ok: true, created };
 }
