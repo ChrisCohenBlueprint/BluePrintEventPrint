@@ -26,6 +26,7 @@ function toPublic(b) {
     sqm:     b.sqm,
     geometry: b.geometry,
     splitFrom: b.splitFrom || null,   // lets the client draw + number split cells
+    splitAxis: b.splitAxis || null,   // 'vertical' | 'horizontal' — which edge is the divider
     viewers: b.viewers || 0,
     interest: b.clicks || 0,
   };
@@ -179,7 +180,7 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
       svgElementId: null, geometry: cellGeom(i),
       sqm, sqmSource: 'split', listPrice: price, status: 'available',
       assignment: { company: null, contactId: null, actualPrice: null, notes: '' },
-      clicks: 0, splitFrom: boothNum,
+      clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
       createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
     });
     created.push(nums[i - 1]);

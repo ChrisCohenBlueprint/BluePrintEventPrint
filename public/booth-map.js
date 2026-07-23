@@ -103,18 +103,37 @@
       if (host && host.parentNode) host.parentNode.insertBefore(overlay, host.nextSibling);
       else svgDoc.appendChild(overlay);
 
-      // A stand created by splitting has no printed number of its own, so draw a
-      // solid black boundary — the shared edge reads as the dividing line
-      // between the cells — and its number in the top-left, the convention the
-      // artwork uses for every other stand. Without this the new cell is an
-      // invisible, untrackable box.
+      // A stand created by splitting has no printed number of its own, so draw
+      // the dividing line between it and its neighbour, plus its number in the
+      // top-left (the convention the artwork uses for every other stand).
+      //
+      // Only the divider is drawn — NOT a full box. The artwork already draws
+      // the outer boundary of the original stand, so stroking a whole rectangle
+      // here doubles that outer edge and, because the stored geometry doesn't
+      // sit exactly on the artwork's own stroke, the second rectangle pokes out
+      // past it. A single internal line sits cleanly between the two cells.
       if (b.splitFrom) {
+        // Span the divider along the host artwork's real edges, not the stored
+        // geometry — the geometry can sit a fraction off the artwork's own
+        // stroke, and a line drawn to it pokes past the box. The host bbox is
+        // exactly where the artwork's outline is.
+        var hb = (host && host.getBBox) ? host.getBBox() : { x: g.x, y: g.y, width: g.w, height: g.h };
+        var divider = document.createElementNS(SVG_NS, 'line');
+        if (b.splitAxis === 'horizontal') {
+          // Cells stacked top-to-bottom: the shared edge is this cell's top.
+          divider.setAttribute('x1', hb.x);            divider.setAttribute('y1', g.y);
+          divider.setAttribute('x2', hb.x + hb.width); divider.setAttribute('y2', g.y);
+        } else {
+          // Side by side (default): the shared edge is this cell's left.
+          divider.setAttribute('x1', g.x);  divider.setAttribute('y1', hb.y);
+          divider.setAttribute('x2', g.x);  divider.setAttribute('y2', hb.y + hb.height);
+        }
         // .75px is the stroke the artwork uses for every stand rectangle
-        // (.cls-8/9/10/11/12/13/14), so the split edge matches the rest of the
-        // plan rather than reading as a heavier line.
-        overlay.setAttribute('stroke', '#000');
-        overlay.setAttribute('stroke-width', '.75');
-        overlay.setAttribute('stroke-linejoin', 'miter');
+        // (.cls-8/9/10/11/12/13/14), so the divider matches the rest of the plan.
+        divider.setAttribute('stroke', '#000');
+        divider.setAttribute('stroke-width', '.75');
+        divider.style.pointerEvents = 'none';
+        overlay.parentNode.insertBefore(divider, overlay.nextSibling);
 
         var label = document.createElementNS(SVG_NS, 'text');
         label.setAttribute('x', g.x + 5);
