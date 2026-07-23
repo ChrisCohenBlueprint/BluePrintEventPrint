@@ -387,19 +387,19 @@ body {
    pinning wide wordmarks to a 16:9 box shrank them to nothing. */
 .sponsor-logos a, .sponsor-logos span {
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-  height: 46px; min-width: calc(46px * 16 / 9);
+  height: 92px; min-width: calc(92px * 16 / 9);
   /* Logos arrive in many colours; muting them until hover keeps the strip calm
      without hiding anyone. */
   opacity: .72; filter: grayscale(100%);
   transition: opacity .2s, filter .2s;
 }
 .sponsor-logos a:hover, .sponsor-logos a:focus-visible { opacity: 1; filter: none; }
-.sponsor-logos img { height: 100%; width: auto; max-width: 200px; object-fit: contain; display: block; }
+.sponsor-logos img { height: 100%; width: auto; max-width: 400px; object-fit: contain; display: block; }
 
 @media (max-width: 900px) {
   .sponsor-strip { gap: 12px; padding: 10px 12px; }
   .sponsor-logos { gap: 18px; }
-  .sponsor-logos a, .sponsor-logos span { height: 34px; min-width: calc(34px * 16 / 9); }
+  .sponsor-logos a, .sponsor-logos span { height: 68px; min-width: calc(68px * 16 / 9); }
 }
 @media (prefers-reduced-motion: reduce) {
   .sponsor-logos a { transition: none; }
