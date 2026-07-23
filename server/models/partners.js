@@ -14,6 +14,12 @@ const col = () => getDb().collection('partners');
 
 const clean = (v, max) => typeof v === 'string' ? v.trim().slice(0, max) : '';
 
+// The largest inline image we will store. A data URI longer than this used to
+// be silently truncated by clean(), which saved a corrupt image that rendered
+// broken everywhere. Now it's rejected outright so the admin sees a real error.
+const MAX_IMAGE = 2_000_000;
+const OVERSIZE = Symbol('oversize');
+
 /**
  * A link the browser will navigate to: http(s) or a site-relative path only.
  * Never javascript:, data: or anything else that could execute.
@@ -31,7 +37,8 @@ function safeLink(v) {
  * logo can be pasted directly. Only image MIME types — never data:text/html.
  */
 function safeImage(v) {
-  const s = clean(v, 2000000);   // data URIs are long
+  if (typeof v === 'string' && v.length > MAX_IMAGE) return OVERSIZE;
+  const s = clean(v, MAX_IMAGE);
   if (!s) return '';
   if (/^data:image\/(png|jpe?g|gif|webp|svg\+xml);/i.test(s)) return s;
   return safeLink(s);
@@ -52,18 +59,21 @@ const publicList = async () => {
 };
 
 async function create({ name, image, url, alt }) {
+  const img = safeImage(image);
+  if (img === OVERSIZE) return { ok: false, error: 'That image is too large to store. Please use one under ~1.5 MB.' };
+  if (!img) return { ok: false, error: 'A logo image URL or path is required.' };
+
   const last = await col().find({ showId: config.showId }).sort({ order: -1 }).limit(1).toArray();
   const doc = {
     showId: config.showId,
     name:  clean(name, 120),
-    image: safeImage(image),
+    image: img,
     url:   safeLink(url),
     alt:   clean(alt, 160),
     active: true,
     order: (last[0]?.order ?? -1) + 1,
     createdAt: new Date(), updatedAt: new Date(),
   };
-  if (!doc.image) return { ok: false, error: 'A logo image URL or path is required.' };
   const { insertedId } = await col().insertOne(doc);
   return { ok: true, partner: { ...doc, _id: insertedId } };
 }
@@ -76,6 +86,7 @@ async function update(id, fields) {
   if ('order'  in fields) $set.order = Number(fields.order) || 0;
   if ('image'  in fields) {
     const v = safeImage(fields.image);
+    if (v === OVERSIZE) return { ok: false, error: 'That image is too large to store. Please use one under ~1.5 MB.' };
     if (!v) return { ok: false, error: 'Logo must be an http(s) URL, a path starting with /, or a data:image URI' };
     $set.image = v;
   }

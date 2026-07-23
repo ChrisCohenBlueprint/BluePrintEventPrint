@@ -1133,9 +1133,11 @@ async function savePartner(id, fields) {
  * kept in the database rather than written to disk. SVGs pass through untouched
  * to keep them vector.
  */
-function fileToDataUrl(file, maxWidth = 640) {
+function fileToDataUrl(file, maxWidth = 800) {
+  // Keep the stored data URI comfortably under the server's ~2M-char cap.
+  const MAX_LEN = 1_500_000;
   return new Promise((resolve, reject) => {
-    if (file.size > 5 * 1024 * 1024) return reject(new Error('Image must be under 5 MB.'));
+    if (file.size > 8 * 1024 * 1024) return reject(new Error('Image must be under 8 MB.'));
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('Could not read that file.'));
     reader.onload = () => {
@@ -1143,12 +1145,32 @@ function fileToDataUrl(file, maxWidth = 640) {
       const img = new Image();
       img.onerror = () => reject(new Error('That file is not a readable image.'));
       img.onload = () => {
-        const scale = Math.min(1, maxWidth / img.width);
-        const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.round(img.width * scale));
-        c.height = Math.max(1, Math.round(img.height * scale));
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-        resolve(c.toDataURL('image/png'));   // PNG keeps logo transparency
+        // Downscale by the larger dimension so a tall banner is capped too, not
+        // just a wide one — the old width-only scale let tall images through
+        // huge and the server truncated them into corruption.
+        let scale = Math.min(1, maxWidth / Math.max(img.width, img.height));
+        const render = () => {
+          const c = document.createElement('canvas');
+          c.width  = Math.max(1, Math.round(img.width * scale));
+          c.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          // PNG preserves transparency (logos), but is huge for photos. Try PNG
+          // first; if it's oversized, fall back to JPEG on a white backing.
+          let url = c.toDataURL('image/png');
+          if (url.length > MAX_LEN) {
+            ctx.globalCompositeOperation = 'destination-over';
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height);
+            url = c.toDataURL('image/jpeg', 0.85);
+          }
+          return url;
+        };
+        let url = render();
+        // Still too big (a very detailed image)? Shrink and retry a few times.
+        let guard = 0;
+        while (url.length > MAX_LEN && guard++ < 5) { scale *= 0.75; url = render(); }
+        if (url.length > MAX_LEN) return reject(new Error('That image is too detailed to store — try a simpler or smaller logo.'));
+        resolve(url);
       };
       img.src = reader.result;
     };
@@ -1211,6 +1233,11 @@ let pendingPartnerImage = '';
       preview.classList.remove('hidden');
       prompt.classList.add('hidden');
       zone.classList.add('has-image');
+      // Dropping only stages the logo — it isn't live until "Add logo" is
+      // pressed. Make that unmissable, since a staged preview reads as "done".
+      const form = document.getElementById('partner-add-form');
+      form.classList.add('logo-staged');
+      form.querySelector('button[type=submit]').classList.add('cta-ready');
     } catch (err) { adminToast(err.message, 'error'); }
   }, { input: document.getElementById('partner-file') });
 })();
@@ -1223,6 +1250,9 @@ function resetPartnerDropzone() {
   zone.classList.remove('has-image');
   document.getElementById('partner-preview').classList.add('hidden');
   document.getElementById('partner-drop-prompt').classList.remove('hidden');
+  const form = document.getElementById('partner-add-form');
+  form.classList.remove('logo-staged');
+  form.querySelector('button[type=submit]').classList.remove('cta-ready');
 }
 
 document.getElementById('partner-add-form')?.addEventListener('submit', async (e) => {
