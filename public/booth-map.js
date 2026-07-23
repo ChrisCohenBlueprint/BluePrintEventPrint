@@ -65,6 +65,20 @@
     var artwork = Array.prototype.slice.call(svgDoc.querySelectorAll(ARTWORK_SELECTOR));
     var geoms = artwork.map(rectGeom);
 
+    // Work out the split groups up front. A split stand becomes several cells:
+    // the secondary cells each carry splitFrom (their parent's number) + axis,
+    // but the PRIMARY cell keeps the original number and — because the split
+    // only tagged the new cells — has no split marker of its own. So a stand
+    // that was split shows one outlined half (the secondaries) and one bare
+    // half (the primary, leaning on the artwork's original box). Derive the
+    // group from the secondaries: any number a secondary points at is itself a
+    // split cell and must be outlined too. Doing it here also fixes stands that
+    // were split before this logic existed, with no data migration.
+    var splitAxisByPrimary = {};
+    booths.forEach(function (b) {
+      if (b.splitFrom) splitAxisByPrimary[b.splitFrom] = b.splitAxis || 'vertical';
+    });
+
     booths.forEach(function (b) {
       var g = b.geometry;
       if (!g || typeof g.x !== 'number') { unplaced.push(b); return; }
@@ -103,29 +117,26 @@
       if (host && host.parentNode) host.parentNode.insertBefore(overlay, host.nextSibling);
       else svgDoc.appendChild(overlay);
 
-      // A stand created by splitting has no printed number of its own, so draw
-      // the dividing line between it and its neighbour, plus its number in the
-      // top-left (the convention the artwork uses for every other stand).
+      // Is this cell part of a split stand — either a secondary (has splitFrom)
+      // or the primary the secondaries point back at?
+      var isPrimarySplit = Object.prototype.hasOwnProperty.call(splitAxisByPrimary, b.boothNumber);
+      var isSplitCell = !!b.splitFrom || isPrimarySplit;
+      var splitAxis = b.splitAxis || splitAxisByPrimary[b.boothNumber] || 'vertical';
+
+      // Draw every split cell as a complete four-sided box so both halves are
+      // fully outlined, not just the one that happened to carry the split tag.
       //
-      // Only the divider is drawn — NOT a full box. The artwork already draws
-      // the outer boundary of the original stand, so stroking a whole rectangle
-      // here doubles that outer edge and, because the stored geometry doesn't
-      // sit exactly on the artwork's own stroke, the second rectangle pokes out
-      // past it. A single internal line sits cleanly between the two cells.
-      if (b.splitFrom) {
-        // Draw the cell as a complete box so it reads exactly like every other
-        // stand — outline on all four sides, not just the divider.
-        //
-        // Each edge is snapped to the host artwork's real bounds where the cell
-        // meets the original stand's boundary, and left at the cell's own split
-        // line where it meets a sibling. Snapping matters because the stored
-        // geometry can sit a fraction off the artwork's own 0.75pt stroke: an
-        // outer edge drawn to the geometry would poke past or gap the existing
-        // outline, while a shared outer edge drawn to the host bbox lands
-        // exactly on it (same position, same weight — no doubling).
+      // Each edge is snapped to the host artwork's real bounds where the cell
+      // meets the original stand's boundary, and left at the cell's own split
+      // line where it meets a sibling. Snapping matters because the stored
+      // geometry can sit a fraction off the artwork's own 0.75pt stroke: an
+      // outer edge drawn to the geometry would poke past or gap the existing
+      // outline, while a shared outer edge drawn to the host bbox lands
+      // exactly on it (same position, same weight — no doubling).
+      if (isSplitCell) {
         var hb = (host && host.getBBox) ? host.getBBox() : { x: g.x, y: g.y, width: g.w, height: g.h };
         var x1, y1, x2, y2;
-        if (b.splitAxis === 'horizontal') {
+        if (splitAxis === 'horizontal') {
           // Stacked: top/bottom are split lines, left/right are the stand's sides.
           x1 = hb.x;                       x2 = hb.x + hb.width;
           y1 = Math.max(g.y, hb.y);        y2 = Math.min(g.y + g.h, hb.y + hb.height);
@@ -151,17 +162,22 @@
         box.style.pointerEvents = 'none';
         overlay.parentNode.insertBefore(box, overlay.nextSibling);
 
-        var label = document.createElementNS(SVG_NS, 'text');
-        label.setAttribute('x', g.x + 5);
-        label.setAttribute('y', g.y + 14);
-        label.setAttribute('fill', '#111827');
-        label.setAttribute('font-size', '12px');
-        label.setAttribute('font-family', 'Raleway, sans-serif');
-        label.setAttribute('font-weight', '700');
-        label.setAttribute('data-split-label', b.boothNumber);
-        label.style.pointerEvents = 'none';
-        label.textContent = b.boothNumber;
-        overlay.parentNode.insertBefore(label, overlay.nextSibling);
+        // Only the secondary cells get a fresh top-left number; the primary
+        // still carries the artwork's original printed number, so adding one
+        // would duplicate it.
+        if (b.splitFrom) {
+          var label = document.createElementNS(SVG_NS, 'text');
+          label.setAttribute('x', g.x + 5);
+          label.setAttribute('y', g.y + 14);
+          label.setAttribute('fill', '#111827');
+          label.setAttribute('font-size', '12px');
+          label.setAttribute('font-family', 'Raleway, sans-serif');
+          label.setAttribute('font-weight', '700');
+          label.setAttribute('data-split-label', b.boothNumber);
+          label.style.pointerEvents = 'none';
+          label.textContent = b.boothNumber;
+          overlay.parentNode.insertBefore(label, overlay.nextSibling);
+        }
       }
 
       placed[b.boothNumber] = overlay;
