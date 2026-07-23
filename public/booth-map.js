@@ -206,5 +206,114 @@
     return { placed: placed, count: Object.keys(placed).length, unplaced: unplaced };
   }
 
-  global.BoothMap = { attach: attach, rectGeom: rectGeom };
+  /**
+   * Paint an exhibitor name inside a stand so it always fits — never truncated.
+   *
+   * The rules, in the order a person would apply them:
+   *   1. Wrap the name across lines at spaces (most names are 2–3 words and
+   *      naturally sit on 2–3 lines).
+   *   2. If a single word is still wider than the stand, break it with a
+   *      hyphen onto the next line.
+   *   3. Only if it still won't fit top-to-bottom, step the font down — down to
+   *      a floor, past which we stop shrinking and let it be, but we do NOT cut
+   *      any characters off.
+   *
+   * @param textEl an empty <text> element already in the SVG (so it can be
+   *               measured); its tspans are (re)built here.
+   * @param str    the exhibitor name.
+   * @param box    { x, y, w, h } of the stand, in SVG user units.
+   * @param opts   { maxFont, minFont, family, weight, pad }.
+   */
+  function fitLabel(textEl, str, box, opts) {
+    opts = opts || {};
+    var maxFont = opts.maxFont || 14;
+    var minFont = opts.minFont || 6;
+    var family  = opts.family  || 'Raleway, sans-serif';
+    var weight  = opts.weight  || '700';
+    var pad     = opts.pad != null ? opts.pad : 6;
+    var lineRatio = 1.15;
+
+    var maxW = Math.max(1, box.w - pad * 2);
+    var maxH = Math.max(1, box.h - pad * 2);
+    var words = String(str).trim().split(/\s+/).filter(Boolean);
+
+    textEl.setAttribute('text-anchor', 'middle');
+    textEl.setAttribute('font-family', family);
+    textEl.setAttribute('font-weight', weight);
+    textEl.removeAttribute('dominant-baseline');
+
+    // Measure a candidate string at the element's current font size.
+    var meas = document.createElementNS(SVG_NS, 'text');
+    meas.setAttribute('font-family', family);
+    meas.setAttribute('font-weight', weight);
+    meas.style.visibility = 'hidden';
+    meas.style.pointerEvents = 'none';
+    textEl.parentNode.appendChild(meas);
+    function widthOf(s, fs) {
+      meas.setAttribute('font-size', fs);
+      meas.textContent = s;
+      return meas.getComputedTextLength();
+    }
+
+    // Break one over-long word into hyphenated chunks that each fit maxW.
+    function breakWord(word, fs) {
+      var pieces = [], cur = '';
+      for (var i = 0; i < word.length; i++) {
+        var next = cur + word[i];
+        if (cur && widthOf(next + '-', fs) > maxW) { pieces.push(cur + '-'); cur = word[i]; }
+        else cur = next;
+      }
+      if (cur) pieces.push(cur);
+      return pieces;
+    }
+
+    // Flow the words into lines at a given font size.
+    function layout(fs) {
+      var lines = [], line = '';
+      for (var w = 0; w < words.length; w++) {
+        var word = words[w];
+        if (widthOf(word, fs) > maxW) {          // too wide even alone → hyphenate
+          if (line) { lines.push(line); line = ''; }
+          var pieces = breakWord(word, fs);
+          for (var p = 0; p < pieces.length - 1; p++) lines.push(pieces[p]);
+          line = pieces[pieces.length - 1];
+          continue;
+        }
+        var test = line ? line + ' ' + word : word;
+        if (line && widthOf(test, fs) > maxW) { lines.push(line); line = word; }
+        else line = test;
+      }
+      if (line) lines.push(line);
+      return lines;
+    }
+
+    // Largest font from max→min whose wrapped block fits the height; if none
+    // fits we keep the minimum (still every character, just tighter).
+    var chosen = null, chosenFont = minFont;
+    for (var fs = maxFont; fs >= minFont; fs -= 0.5) {
+      var lines = layout(fs);
+      if (lines.length * fs * lineRatio <= maxH) { chosen = lines; chosenFont = fs; break; }
+      chosen = lines; chosenFont = fs;             // remember the smallest tried
+    }
+
+    textEl.parentNode.removeChild(meas);
+    if (!chosen) chosen = [String(str)];
+
+    // Render the lines, vertically centred in the box.
+    while (textEl.firstChild) textEl.removeChild(textEl.firstChild);
+    textEl.setAttribute('font-size', chosenFont);
+    var cx = box.x + box.w / 2;
+    var lineH = chosenFont * lineRatio;
+    var blockH = chosen.length * lineH;
+    var firstBaseline = box.y + box.h / 2 - blockH / 2 + chosenFont * 0.82;
+    for (var i = 0; i < chosen.length; i++) {
+      var tspan = document.createElementNS(SVG_NS, 'tspan');
+      tspan.setAttribute('x', cx);
+      tspan.setAttribute('y', firstBaseline + i * lineH);
+      tspan.textContent = chosen[i];
+      textEl.appendChild(tspan);
+    }
+  }
+
+  global.BoothMap = { attach: attach, rectGeom: rectGeom, fitLabel: fitLabel };
 })(window);

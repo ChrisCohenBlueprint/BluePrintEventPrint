@@ -614,19 +614,14 @@ function applyVisual(n) {
     if (!textNode) {
       textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       textNode.setAttribute('id', `text-booth-${n}`);
-      textNode.setAttribute('text-anchor', 'middle');
-      textNode.setAttribute('dominant-baseline', 'middle');
       textNode.setAttribute('fill', '#111827');
-      textNode.setAttribute('font-size', '14px');
-      textNode.setAttribute('font-family', 'Raleway, sans-serif');
-      textNode.setAttribute('font-weight', '700');
       textNode.style.pointerEvents = 'none';
       el.parentNode.appendChild(textNode);
     }
     const bbox = el.getBBox();
-    textNode.setAttribute('x', bbox.x + bbox.width / 2);
-    textNode.setAttribute('y', bbox.y + bbox.height / 2);
-    textNode.textContent = company.length > 20 ? company.substring(0, 18) + '…' : company;
+    // Wrap / hyphenate / shrink to fit — never truncate.
+    BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
+      { family: 'Raleway, sans-serif' });
   } else if (textNode) {
     textNode.remove();
   }
