@@ -388,12 +388,9 @@ body {
 .sponsor-logos a, .sponsor-logos span {
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   height: 92px; min-width: calc(92px * 16 / 9);
-  /* Logos arrive in many colours; muting them until hover keeps the strip calm
-     without hiding anyone. */
-  opacity: .72; filter: grayscale(100%);
-  transition: opacity .2s, filter .2s;
+  transition: opacity .2s;
 }
-.sponsor-logos a:hover, .sponsor-logos a:focus-visible { opacity: 1; filter: none; }
+.sponsor-logos a:hover, .sponsor-logos a:focus-visible { opacity: .85; }
 .sponsor-logos img { height: 100%; width: auto; max-width: 400px; object-fit: contain; display: block; }
 
 @media (max-width: 900px) {
