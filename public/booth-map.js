@@ -131,28 +131,21 @@
       else if (host && host.parentNode) host.parentNode.insertBefore(overlay, host.nextSibling);
       else svgDoc.appendChild(overlay);
 
-      // Draw every split cell as a complete four-sided box so both halves are
-      // fully outlined, not just the one that happened to carry the split tag.
+      // Draw every split cell as a complete four-sided box, bounding the cell's
+      // own geometry exactly.
       //
-      // Each edge is snapped to the host artwork's real bounds where the cell
-      // meets the original stand's boundary, and left at the cell's own split
-      // line where it meets a sibling. Snapping matters because the stored
-      // geometry can sit a fraction off the artwork's own 0.75pt stroke: an
-      // outer edge drawn to the geometry would poke past or gap the existing
-      // outline, while a shared outer edge drawn to the host bbox lands
-      // exactly on it (same position, same weight — no doubling).
+      // This box is drawn ON TOP of the white masking overlay, so it — not the
+      // artwork's original stroke — is the outline the eye sees. It therefore
+      // has to trace the white fill's edge exactly on all four sides. An earlier
+      // version snapped the outer edges to the host artwork's bbox to avoid
+      // doubling the artwork stroke; but when the stored geometry sat slightly
+      // OUTSIDE that bbox, the snapped box came up short of the fill, leaving a
+      // white edge with no line on it — the missing top/bottom on a horizontal
+      // split. Bounding the cell geometry itself guarantees a stroke on every
+      // visible side; the shared split line, drawn by both neighbours, doubles
+      // to the weight of a normal stand border.
       if (isSplitCell) {
-        var hb = (host && host.getBBox) ? host.getBBox() : { x: g.x, y: g.y, width: g.w, height: g.h };
-        var x1, y1, x2, y2;
-        if (splitAxis === 'horizontal') {
-          // Stacked: top/bottom are split lines, left/right are the stand's sides.
-          x1 = hb.x;                       x2 = hb.x + hb.width;
-          y1 = Math.max(g.y, hb.y);        y2 = Math.min(g.y + g.h, hb.y + hb.height);
-        } else {
-          // Side by side (default): left/right are split lines, top/bottom the sides.
-          x1 = Math.max(g.x, hb.x);        x2 = Math.min(g.x + g.w, hb.x + hb.width);
-          y1 = hb.y;                       y2 = hb.y + hb.height;
-        }
+        var x1 = g.x, y1 = g.y, x2 = g.x + g.w, y2 = g.y + g.h;
         var box = document.createElementNS(SVG_NS, 'rect');
         box.setAttribute('x', x1);         box.setAttribute('y', y1);
         box.setAttribute('width',  Math.max(0, x2 - x1));
