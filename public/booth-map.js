@@ -113,27 +113,39 @@
       // sit exactly on the artwork's own stroke, the second rectangle pokes out
       // past it. A single internal line sits cleanly between the two cells.
       if (b.splitFrom) {
-        // Span the divider along the host artwork's real edges, not the stored
-        // geometry — the geometry can sit a fraction off the artwork's own
-        // stroke, and a line drawn to it pokes past the box. The host bbox is
-        // exactly where the artwork's outline is.
+        // Draw the cell as a complete box so it reads exactly like every other
+        // stand — outline on all four sides, not just the divider.
+        //
+        // Each edge is snapped to the host artwork's real bounds where the cell
+        // meets the original stand's boundary, and left at the cell's own split
+        // line where it meets a sibling. Snapping matters because the stored
+        // geometry can sit a fraction off the artwork's own 0.75pt stroke: an
+        // outer edge drawn to the geometry would poke past or gap the existing
+        // outline, while a shared outer edge drawn to the host bbox lands
+        // exactly on it (same position, same weight — no doubling).
         var hb = (host && host.getBBox) ? host.getBBox() : { x: g.x, y: g.y, width: g.w, height: g.h };
-        var divider = document.createElementNS(SVG_NS, 'line');
+        var x1, y1, x2, y2;
         if (b.splitAxis === 'horizontal') {
-          // Cells stacked top-to-bottom: the shared edge is this cell's top.
-          divider.setAttribute('x1', hb.x);            divider.setAttribute('y1', g.y);
-          divider.setAttribute('x2', hb.x + hb.width); divider.setAttribute('y2', g.y);
+          // Stacked: top/bottom are split lines, left/right are the stand's sides.
+          x1 = hb.x;                       x2 = hb.x + hb.width;
+          y1 = Math.max(g.y, hb.y);        y2 = Math.min(g.y + g.h, hb.y + hb.height);
         } else {
-          // Side by side (default): the shared edge is this cell's left.
-          divider.setAttribute('x1', g.x);  divider.setAttribute('y1', hb.y);
-          divider.setAttribute('x2', g.x);  divider.setAttribute('y2', hb.y + hb.height);
+          // Side by side (default): left/right are split lines, top/bottom the sides.
+          x1 = Math.max(g.x, hb.x);        x2 = Math.min(g.x + g.w, hb.x + hb.width);
+          y1 = hb.y;                       y2 = hb.y + hb.height;
         }
-        // .75px is the stroke the artwork uses for every stand rectangle
-        // (.cls-8/9/10/11/12/13/14), so the divider matches the rest of the plan.
-        divider.setAttribute('stroke', '#000');
-        divider.setAttribute('stroke-width', '.75');
-        divider.style.pointerEvents = 'none';
-        overlay.parentNode.insertBefore(divider, overlay.nextSibling);
+        var box = document.createElementNS(SVG_NS, 'rect');
+        box.setAttribute('x', x1);         box.setAttribute('y', y1);
+        box.setAttribute('width',  Math.max(0, x2 - x1));
+        box.setAttribute('height', Math.max(0, y2 - y1));
+        box.setAttribute('fill', 'none');
+        // .75 is the stroke the artwork uses for every stand rectangle
+        // (.cls-8/9/10/11/12/13/14), so the box matches the rest of the plan.
+        box.setAttribute('stroke', '#000');
+        box.setAttribute('stroke-width', '.75');
+        box.setAttribute('stroke-linejoin', 'miter');
+        box.style.pointerEvents = 'none';
+        overlay.parentNode.insertBefore(box, overlay.nextSibling);
 
         var label = document.createElementNS(SVG_NS, 'text');
         label.setAttribute('x', g.x + 5);
