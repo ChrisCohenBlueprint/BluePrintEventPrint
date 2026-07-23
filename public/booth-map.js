@@ -113,15 +113,23 @@
       overlay.setAttribute('data-overlay', '1');
       overlay.setAttribute('fill', 'transparent');
 
-      var host = hostIdx > -1 ? artwork[hostIdx] : null;
-      if (host && host.parentNode) host.parentNode.insertBefore(overlay, host.nextSibling);
-      else svgDoc.appendChild(overlay);
-
       // Is this cell part of a split stand — either a secondary (has splitFrom)
       // or the primary the secondaries point back at?
       var isPrimarySplit = Object.prototype.hasOwnProperty.call(splitAxisByPrimary, b.boothNumber);
       var isSplitCell = !!b.splitFrom || isPrimarySplit;
       var splitAxis = b.splitAxis || splitAxisByPrimary[b.boothNumber] || 'vertical';
+
+      var host = hostIdx > -1 ? artwork[hostIdx] : null;
+      // Split cells go to the very end of the SVG, ABOVE the artwork's baked-in
+      // number and size for the original (now-divided) stand. The overlay's own
+      // status fill (white when available) then hides those stale figures — the
+      // original "128 / 64 m²" that a horizontal divider would otherwise be
+      // drawn straight through — and the clean per-cell number and size are
+      // redrawn on top. Non-split overlays keep their old position (just after
+      // the host) so a genuine printed number still shows through above them.
+      if (isSplitCell) svgDoc.appendChild(overlay);
+      else if (host && host.parentNode) host.parentNode.insertBefore(overlay, host.nextSibling);
+      else svgDoc.appendChild(overlay);
 
       // Draw every split cell as a complete four-sided box so both halves are
       // fully outlined, not just the one that happened to carry the split tag.
@@ -162,21 +170,33 @@
         box.style.pointerEvents = 'none';
         overlay.parentNode.insertBefore(box, overlay.nextSibling);
 
-        // Only the secondary cells get a fresh top-left number; the primary
-        // still carries the artwork's original printed number, so adding one
-        // would duplicate it.
-        if (b.splitFrom) {
-          var label = document.createElementNS(SVG_NS, 'text');
-          label.setAttribute('x', g.x + 5);
-          label.setAttribute('y', g.y + 14);
-          label.setAttribute('fill', '#111827');
-          label.setAttribute('font-size', '12px');
-          label.setAttribute('font-family', 'Raleway, sans-serif');
-          label.setAttribute('font-weight', '700');
-          label.setAttribute('data-split-label', b.boothNumber);
-          label.style.pointerEvents = 'none';
-          label.textContent = b.boothNumber;
-          overlay.parentNode.insertBefore(label, overlay.nextSibling);
+        // Every split cell — primary and secondary alike — gets its own number
+        // top-left and size bottom-right, matching the plan's convention. The
+        // overlay above masked the stale baked figures, so these are the only
+        // ones now visible, and they carry each cell's real (divided) values.
+        var makeText = function (x, y, str, anchor) {
+          var t = document.createElementNS(SVG_NS, 'text');
+          t.setAttribute('x', x);
+          t.setAttribute('y', y);
+          if (anchor) t.setAttribute('text-anchor', anchor);
+          t.setAttribute('fill', '#111827');
+          t.setAttribute('font-family', 'Raleway, sans-serif');
+          t.setAttribute('font-weight', '700');
+          t.style.pointerEvents = 'none';
+          t.textContent = str;
+          return t;
+        };
+
+        var num = makeText(x1 + 5, y1 + 14, b.boothNumber);
+        num.setAttribute('font-size', '12px');
+        num.setAttribute('data-split-label', b.boothNumber);
+        overlay.parentNode.insertBefore(num, overlay.nextSibling);
+
+        if (b.sqm) {
+          var size = makeText(x2 - 4, y2 - 5, b.sqm, 'end');
+          size.setAttribute('font-size', '9px');
+          size.setAttribute('data-split-size', b.boothNumber);
+          overlay.parentNode.insertBefore(size, overlay.nextSibling);
         }
       }
 
