@@ -139,10 +139,14 @@
         box.setAttribute('width',  Math.max(0, x2 - x1));
         box.setAttribute('height', Math.max(0, y2 - y1));
         box.setAttribute('fill', 'none');
-        // .75 is the stroke the artwork uses for every stand rectangle
-        // (.cls-8/9/10/11/12/13/14), so the box matches the rest of the plan.
+        // The artwork strokes every stand at .75, but a normal border in the
+        // plan is where TWO neighbouring stands' edges overlap — so it reads
+        // heavier than a single .75 line. This divider is one line, so at .75
+        // it looked thinner than everything around it. 1.1 matches the weight
+        // of a real (doubled) stand border. Verified against the artwork at the
+        // zoom the plan is actually viewed.
         box.setAttribute('stroke', '#000');
-        box.setAttribute('stroke-width', '.75');
+        box.setAttribute('stroke-width', '1.1');
         box.setAttribute('stroke-linejoin', 'miter');
         box.style.pointerEvents = 'none';
         overlay.parentNode.insertBefore(box, overlay.nextSibling);
