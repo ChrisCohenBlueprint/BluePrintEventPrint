@@ -181,9 +181,10 @@ function applyAdminVisual(el, status) {
       el.parentNode.appendChild(textNode);
     }
     const bbox = el.getBBox();
-    // Wrap / hyphenate / shrink to fit — never truncate.
+    // Wrap / hyphenate / shrink to fit — never truncate. Raleway to match the
+    // public floorplan exactly, so a stand looks the same on both.
     BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
-      { family: 'Plus Jakarta Sans, sans-serif' });
+      { family: 'Raleway, sans-serif' });
   } else if (textNode) {
     textNode.remove();
   }
