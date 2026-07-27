@@ -50,18 +50,30 @@ function codeAt(secret, counter) {
 }
 
 /**
- * Verify a user-entered code. A ±1 step window absorbs clock drift between the
- * server and the phone. Comparison is constant-time.
+ * Which time-step a code matches, or -1 if none.
+ *
+ * A ±1 step window absorbs clock drift between the server and the phone.
+ * Steps at or below `after` are treated as already spent and skipped — this is
+ * what makes a code single-use: the caller records the returned step and passes
+ * it back as `after` next time, so the same code cannot be replayed within its
+ * ~90s validity. Comparison is constant-time.
  */
-function verify(secret, token, { step = 30, window = 1, now = Date.now() } = {}) {
-  if (!secret || !/^\d{6}$/.test(String(token || '').trim())) return false;
+function verifyStep(secret, token, { step = 30, window = 1, now = Date.now(), after = -Infinity } = {}) {
+  if (!secret || !/^\d{6}$/.test(String(token || '').trim())) return -1;
   const counter = Math.floor(now / 1000 / step);
   const given = Buffer.from(String(token).trim());
   for (let w = -window; w <= window; w++) {
-    const expected = Buffer.from(codeAt(secret, counter + w));
-    if (expected.length === given.length && crypto.timingSafeEqual(expected, given)) return true;
+    const c = counter + w;
+    if (c <= after) continue;                        // already spent
+    const expected = Buffer.from(codeAt(secret, c));
+    if (expected.length === given.length && crypto.timingSafeEqual(expected, given)) return c;
   }
-  return false;
+  return -1;
+}
+
+/** Boolean form, for callers that don't track replay (e.g. one-shot checks). */
+function verify(secret, token, opts = {}) {
+  return verifyStep(secret, token, opts) >= 0;
 }
 
 /** otpauth:// URI, encoded into the enrolment QR. */
@@ -71,4 +83,4 @@ function otpauthUri(secret, { account, issuer = 'BluePrint EventPrint' } = {}) {
   return `otpauth://totp/${label}?${params.toString()}`;
 }
 
-module.exports = { generateSecret, verify, otpauthUri, codeAt, base32Encode, base32Decode };
+module.exports = { generateSecret, verify, verifyStep, otpauthUri, codeAt, base32Encode, base32Decode };

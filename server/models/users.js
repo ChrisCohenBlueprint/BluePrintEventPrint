@@ -20,6 +20,12 @@ function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
+// A fixed decoy hash so a login for an unknown username can still run one full
+// scrypt, matching the timing of a real account. Without this, a missing user
+// returned instantly and its non-existence leaked through response latency.
+const DECOY_HASH = hashPassword('bp-timing-decoy');
+const absorbPassword = (password) => { verifyPassword(password, DECOY_HASH); };
+
 // ─── Recovery codes ───────────────────────────────────────────────────────────
 // Shown once at enrolment; each works once if the phone is lost. Stored hashed,
 // so a database leak does not hand over usable codes. 10 random bytes (80 bits)
@@ -117,14 +123,34 @@ async function startEnrolment(username) {
 async function confirmEnrolment(username, token) {
   const user = await findByUsername(username);
   if (!user || !user.pendingSecret) return false;
-  if (!totp.verify(user.pendingSecret, token)) return false;
+  const step = totp.verifyStep(user.pendingSecret, token);
+  if (step < 0) return false;
+  // Record the step used at enrolment so the very same code can't be replayed
+  // to log in immediately afterwards.
   await col().updateOne({ username: user.username },
-    { $set: { totpSecret: user.pendingSecret, totpEnrolled: true, recoveryHashes: user.pendingRecovery || [] },
+    { $set: { totpSecret: user.pendingSecret, totpEnrolled: true, recoveryHashes: user.pendingRecovery || [], lastTotpStep: step },
       $unset: { pendingSecret: '', pendingRecovery: '' } });
   return true;
 }
 
 const verifyTotp = (user, token) => user.totpEnrolled && totp.verify(user.totpSecret, token);
+
+/**
+ * Verify a TOTP code AND spend it, so it cannot be replayed within its window.
+ * The matched step is stored as lastTotpStep; codes at or below it are refused
+ * next time. The write is conditional (only advances the step), so two
+ * concurrent logins can't both accept the same code.
+ */
+async function verifyTotpAndConsume(user, token) {
+  if (!user?.totpEnrolled) return false;
+  const step = totp.verifyStep(user.totpSecret, token, { after: user.lastTotpStep || 0 });
+  if (step < 0) return false;
+  await col().updateOne(
+    { username: user.username, $or: [{ lastTotpStep: { $lt: step } }, { lastTotpStep: { $exists: false } }] },
+    { $set: { lastTotpStep: step } }
+  );
+  return true;
+}
 
 /** Spend a recovery code (one use). Returns true if it was valid. */
 async function useRecoveryCode(username, code) {
@@ -176,6 +202,7 @@ async function remove(username) {
 
 module.exports = {
   ensureIndexes, findByUsername, findAuth, upsert, bootstrap, ensureOwner,
-  verifyPassword, verifyTotp, startEnrolment, confirmEnrolment, useRecoveryCode,
+  verifyPassword, absorbPassword, verifyTotp, verifyTotpAndConsume,
+  startEnrolment, confirmEnrolment, useRecoveryCode,
   list, count, resetTotp, setPassword, remove,
 };

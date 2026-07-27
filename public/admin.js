@@ -8,6 +8,13 @@ let currentUser = null;
 let currentRole = null;
 fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u){currentUser=u.user;currentRole=u.role;document.getElementById('nav-username').textContent=u.user;if(document.getElementById('section-team')?.classList.contains('active'))loadTeam();}}).catch(()=>{});
 
+// Sign out via POST — a GET logout can be triggered cross-site to force an
+// admin out. Falls back to the (now inert) /logout link if the POST fails.
+document.getElementById('nav-signout')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  fetch('/logout', { method: 'POST' }).catch(() => {}).finally(() => { location.href = '/login'; });
+});
+
 // Prime the sponsor catalogue so lead detail can name sponsorship interests
 // without waiting for the Sponsors tab to be opened.
 let sponsorAdminCache = [];

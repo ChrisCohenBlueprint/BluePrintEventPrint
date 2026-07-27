@@ -191,16 +191,36 @@ function requireAdmin(socket, type, handler) {
 // Carries state between the password step and the 2FA step without a session
 // store. Signed with SESSION_SECRET, short-lived, and NOT an auth cookie — it
 // only proves the password was accepted and the user still owes a code.
+// Pending tokens are single-use once a login step succeeds: the jti is recorded
+// here and rejected thereafter, so a captured token can't be replayed for the
+// rest of its 5-minute life. In-memory is sufficient (a token only lives 5 min);
+// entries are pruned as they expire.
+const spentPending = new Map();   // jti -> expiry ms
+function prunePending(now) { for (const [j, exp] of spentPending) if (exp < now) spentPending.delete(j); }
+
 function signPending(username, purpose) {
-  return signToken({ pending: username, purpose, exp: Date.now() + 5 * 60 * 1000 });
+  return signToken({
+    pending: username, purpose,
+    jti: crypto.randomBytes(9).toString('base64url'),
+    exp: Date.now() + 5 * 60 * 1000,
+  });
 }
 function verifyPending(token, purpose) {
   const p = verifyToken(token);
   if (!p || !p.pending || p.purpose !== purpose) return null;
+  if (p.jti && spentPending.has(p.jti)) return null;   // already used
   return p.pending;
+}
+/** Mark a pending token spent — called after the step it authorised succeeds. */
+function consumePending(token) {
+  const p = verifyToken(token);
+  if (!p || !p.jti) return;
+  prunePending(Date.now());
+  spentPending.set(p.jti, p.exp || Date.now() + 5 * 60 * 1000);
 }
 
 module.exports = {
   adminAuth, socketAuth, requireAdmin, signToken, verifyToken, COOKIE,
-  setSessionCookie, clearSessionCookie, sessionUser, signPending, verifyPending,
+  setSessionCookie, clearSessionCookie, sessionUser,
+  signPending, verifyPending, consumePending,
 };
