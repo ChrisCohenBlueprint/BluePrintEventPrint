@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LEX 2026 Floorplan | Interactive Expo Map</title>
+  <!-- Embed mode: add ?embed=1 to the URL when iframing this page into another
+       site. It drops our own brand header (redundant on the host site) so the
+       plan fills the frame with no empty top gap to crop. Set before paint to
+       avoid a flash of the header. -->
+  <script>if (new URLSearchParams(location.search).has('embed')) document.documentElement.classList.add('embed');</script>
   <meta name="description" content="Browse available exhibition stands at LEX 2026. Click any white space to view pricing and reserve your spot.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

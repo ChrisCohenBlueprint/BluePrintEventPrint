@@ -369,6 +369,17 @@ body {
 
 .hidden { display: none !important; }
 
+/* ─── Embed mode (?embed=1) ────────────────────────────────────────────────── */
+/* Dropped when iframed into another site: hide our brand header so the plan
+   fills the frame with no empty top strip, and let the layout use the full
+   height. This removes the need for the host page to negative-offset the
+   iframe to hide a gap. */
+.embed .fp-header { display: none; }
+.embed .fp-main { padding-top: 0; }
+/* Our own cookie bar is redundant when the host site already has one; suppress
+   it in embed so two consent banners don't stack. */
+.embed .consent-bar { display: none; }
+
 /* ─── Sponsor strip ────────────────────────────────────────────────────────── */
 .sponsor-strip {
   flex-shrink: 0;
