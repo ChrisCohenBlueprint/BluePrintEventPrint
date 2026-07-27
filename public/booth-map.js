@@ -288,15 +288,19 @@
     }
 
     // Largest font from max→min whose wrapped block fits the height; if none
-    // fits we keep the minimum (still every character, just tighter).
+    // fits we keep the minimum (still every character, just tighter). The
+    // measurement node is removed in a finally so an exception mid-measure
+    // can't leave hidden <text> nodes accumulating in the SVG.
     var chosen = null, chosenFont = minFont;
-    for (var fs = maxFont; fs >= minFont; fs -= 0.5) {
-      var lines = layout(fs);
-      if (lines.length * fs * lineRatio <= maxH) { chosen = lines; chosenFont = fs; break; }
-      chosen = lines; chosenFont = fs;             // remember the smallest tried
+    try {
+      for (var fs = maxFont; fs >= minFont; fs -= 0.5) {
+        var lines = layout(fs);
+        if (lines.length * fs * lineRatio <= maxH) { chosen = lines; chosenFont = fs; break; }
+        chosen = lines; chosenFont = fs;           // remember the smallest tried
+      }
+    } finally {
+      if (meas.parentNode) meas.parentNode.removeChild(meas);
     }
-
-    textEl.parentNode.removeChild(meas);
     if (!chosen) chosen = [String(str)];
 
     // Render the lines, vertically centred in the box.

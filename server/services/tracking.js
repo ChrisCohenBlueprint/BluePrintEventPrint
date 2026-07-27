@@ -14,6 +14,10 @@ function flushSoon() {
   if (timer.unref) timer.unref();
 }
 
+// Cap on how many events we'll hold in memory if the database is unreachable,
+// so a prolonged outage can't grow the buffer without bound.
+const MAX_BUFFER = 10_000;
+
 async function flush() {
   if (!buffer.length) return;
   const batch = buffer;
@@ -22,14 +26,28 @@ async function flush() {
     await getDb().collection('activity').insertMany(batch, { ordered: false });
   } catch (e) {
     console.error('Activity flush failed:', e.message);
+    // Re-queue rather than drop, so a transient DB blip doesn't silently lose
+    // events — bounded, and only if newer events haven't already filled it.
+    if (buffer.length + batch.length <= MAX_BUFFER) { buffer = batch.concat(buffer); flushSoon(); }
   }
 }
 
-// Client IP, accounting for Render's proxy.
+// Client IP, accounting for Render's proxy. Truncated (IPv4 → /24, IPv6 → /48)
+// before storage: enough for coarse network/analytics context without keeping a
+// full address that identifies an individual visitor for the retention window.
 function clientIp(socket) {
   const fwd = socket?.handshake?.headers?.['x-forwarded-for'];
-  if (fwd) return String(fwd).split(',')[0].trim();
-  return socket?.handshake?.address || null;
+  const raw = fwd ? String(fwd).split(',')[0].trim() : (socket?.handshake?.address || null);
+  if (!raw) return null;
+  if (raw.includes('.')) {                       // IPv4 (incl. ::ffff:a.b.c.d)
+    const p = raw.replace(/^::ffff:/i, '').split('.');
+    return p.length === 4 ? `${p[0]}.${p[1]}.${p[2]}.0` : raw;
+  }
+  if (raw.includes(':')) {                        // IPv6 → first three hextets
+    const head = raw.split(':').slice(0, 3).join(':');
+    return head.includes('::') ? head : head + '::';
+  }
+  return raw;
 }
 
 /**

@@ -190,11 +190,16 @@ function applyAdminVisual(el, status) {
       textNode.style.pointerEvents = 'none';
       el.parentNode.appendChild(textNode);
     }
-    const bbox = el.getBBox();
-    // Wrap / hyphenate / shrink to fit — never truncate. Raleway to match the
-    // public floorplan exactly, so a stand looks the same on both.
-    BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
-      { family: 'Raleway, sans-serif' });
+    // getBBox throws in some engines when the SVG isn't laid out (e.g. the
+    // floorplan tab is hidden). Guard it so one un-rendered stand can't abort
+    // the whole per-booth update loop and leave later stands unpainted.
+    try {
+      const bbox = el.getBBox();
+      // Wrap / hyphenate / shrink to fit — never truncate. Raleway to match the
+      // public floorplan exactly, so a stand looks the same on both.
+      BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
+        { family: 'Raleway, sans-serif' });
+    } catch { /* SVG not laid out yet — repaints on next broadcast */ }
   } else if (textNode) {
     textNode.remove();
   }

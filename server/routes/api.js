@@ -133,7 +133,7 @@ router.get('/holds', async (_req, res, next) => {
 });
 
 router.get('/inquiries', async (_req, res, next) => {
-  try { res.json(await inquiries.recent(Number(_req.query.limit) || 100)); } catch (e) { next(e); }
+  try { res.json(await inquiries.recent(Math.min(Number(_req.query.limit) || 100, 500))); } catch (e) { next(e); }
 });
 
 // One lead with the full browsing history that preceded it.
@@ -265,7 +265,7 @@ router.get('/booths/:n/activity', async (req, res, next) => {
   try {
     const rows = await getDb().collection('activity')
       .find({ showId: config.showId, boothNumber: String(req.params.n) })
-      .sort({ ts: -1 }).limit(Number(req.query.limit) || 25).toArray();
+      .sort({ ts: -1 }).limit(Math.min(Number(req.query.limit) || 25, 500)).toArray();
     res.json(rows);
   } catch (e) { next(e); }
 });
@@ -328,7 +328,7 @@ router.get('/audit', async (req, res, next) => {
       .find({ showId: config.showId,
               type: { $in: ['booth.status_change', 'deal.update', 'hold.create',
                             'hold.release', 'hold.expire', 'security.denied'] } })
-      .sort({ ts: -1 }).limit(Number(req.query.limit) || 200).toArray();
+      .sort({ ts: -1 }).limit(Math.min(Number(req.query.limit) || 200, 1000)).toArray();
     res.json(rows);
   } catch (e) { next(e); }
 });

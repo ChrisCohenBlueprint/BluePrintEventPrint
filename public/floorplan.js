@@ -455,10 +455,11 @@ function renderSponsors(list) {
 }
 
 function toggleSponsor(key) {
-  if (sponsorCache[key]?.soldOut) return;
   const i = sponsorShortlist.indexOf(key);
-  if (i > -1) sponsorShortlist.splice(i, 1);
-  else if (sponsorShortlist.length < 25) sponsorShortlist.push(key);
+  if (i > -1) sponsorShortlist.splice(i, 1);           // removing is always allowed
+  // A sold-out package can't be ADDED, but one already on the shortlist can
+  // still be removed (it may have sold out while shortlisted).
+  else if (!sponsorCache[key]?.soldOut && sponsorShortlist.length < 25) sponsorShortlist.push(key);
   renderShortlist();
   renderSponsors(currentSponsorList);   // refresh the Added/Add button states
 }
