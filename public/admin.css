@@ -417,8 +417,10 @@ body {
 .lead-detail-head h2 { font-size: 20px; font-weight: 700; }
 .lead-detail-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
-/* Active / Archived — one connected segmented control, not two loose pills. */
-.leads-filter { display: inline-flex; gap: 2px; margin: 12px 14px; padding: 3px;
+/* Active / Archived — one connected segmented control, not two loose pills.
+   align-self:flex-start stops the column flexbox stretching it to full width,
+   so it hugs its buttons and sits clearly inset from the panel edge. */
+.leads-filter { display: inline-flex; align-self: flex-start; gap: 2px; margin: 12px 14px; padding: 3px;
   background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 9px; }
 .leads-filter-btn {
   font-family: inherit; font-size: 12px; font-weight: 600; padding: 5px 16px; border-radius: 6px;
