@@ -35,6 +35,13 @@ function auditTeam(req, action, target, meta = {}) {
                 meta: { action, target, ...meta } }); } catch { /* audit best-effort */ }
 }
 
+// Same idea for lead management (archive/restore/delete), so a removed enquiry
+// is at least attributable in the audit stream.
+function auditLead(req, action, leadId, meta = {}) {
+  try { track({ type: 'lead.admin', boothNumber: null, actor: req.admin?.user || 'unknown',
+                meta: { action, leadId, ...meta } }); } catch { /* audit best-effort */ }
+}
+
 // Listing the team is readable by any admin; mutations below require owner.
 router.get('/admins', async (_req, res, next) => {
   try { res.json(await users.list()); } catch (e) { next(e); }
@@ -132,8 +139,32 @@ router.get('/holds', async (_req, res, next) => {
   try { res.json(await holds.active()); } catch (e) { next(e); }
 });
 
-router.get('/inquiries', async (_req, res, next) => {
-  try { res.json(await inquiries.recent(Math.min(Number(_req.query.limit) || 100, 500))); } catch (e) { next(e); }
+router.get('/inquiries', async (req, res, next) => {
+  try {
+    const archived = req.query.archived === '1' || req.query.archived === 'true';
+    res.json(await inquiries.recent(Math.min(Number(req.query.limit) || 100, 500), { archived }));
+  } catch (e) { next(e); }
+});
+
+// Shelve / restore a lead — reversible, keeps the record.
+router.post('/inquiries/:id/archive', async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
+    const archived = req.body?.archived !== false;   // default to archiving
+    const ok = await inquiries.setArchived(new ObjectId(req.params.id), archived);
+    if (ok) auditLead(req, archived ? 'archive' : 'restore', req.params.id);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true, archived } : { error: 'Lead not found.' });
+  } catch (e) { next(e); }
+});
+
+// Permanently delete a lead.
+router.delete('/inquiries/:id', async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
+    const ok = await inquiries.remove(new ObjectId(req.params.id));
+    if (ok) auditLead(req, 'delete', req.params.id);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: 'Lead not found.' });
+  } catch (e) { next(e); }
 });
 
 // One lead with the full browsing history that preceded it.

@@ -61,8 +61,14 @@ async function create({ name, email, phone, company, message, boothNumbers = [],
   return { ok: true, id: insertedId, eventsLinked: linked };
 }
 
-const recent = (limit = 100) =>
-  col().find({ showId: config.showId }).sort({ createdAt: -1 }).limit(limit).toArray();
+/**
+ * Recent enquiries. By default only the live ones; pass { archived: true } for
+ * the shelf. Archived leads are kept (never auto-deleted) but hidden from the
+ * working list so it stays focused on what still needs actioning.
+ */
+const recent = (limit = 100, { archived = false } = {}) =>
+  col().find({ showId: config.showId, archived: archived ? true : { $ne: true } })
+       .sort({ createdAt: -1 }).limit(limit).toArray();
 
 /** An enquiry plus the browsing history that led to it — the sales view. */
 async function withHistory(id) {
@@ -91,6 +97,18 @@ async function assign(id, member) {
   return res.matchedCount === 1;
 }
 
+/** Shelve a lead (or restore it) without deleting anything. Reversible. */
+async function setArchived(id, archived) {
+  const res = await col().updateOne({ _id: id }, { $set: { archived: !!archived, updatedAt: new Date() } });
+  return res.matchedCount === 1;
+}
+
+/** Permanently delete a lead. */
+async function remove(id) {
+  const res = await col().deleteOne({ _id: id });
+  return res.deletedCount === 1;
+}
+
 /** Record that the lead was forwarded, so repeat sends are visible. */
 async function recordSend(id, { to, cc, by }) {
   const res = await col().updateOne({ _id: id }, {
@@ -101,4 +119,4 @@ async function recordSend(id, { to, cc, by }) {
   return res.matchedCount === 1;
 }
 
-module.exports = { col, create, recent, withHistory, setStatus, STATUSES, assign, recordSend };
+module.exports = { col, create, recent, withHistory, setStatus, STATUSES, assign, recordSend, setArchived, remove };

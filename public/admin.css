@@ -393,7 +393,19 @@ body {
   border-radius: 12px; padding: 24px; overflow-y: auto; }
 .lead-empty { text-align: center; color: var(--muted); padding: 60px 20px; }
 .lead-empty svg { width: 34px; height: 34px; opacity: .5; margin-bottom: 12px; }
-.lead-detail-head h2 { font-size: 20px; font-weight: 700; margin-bottom: 16px; }
+.lead-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.lead-detail-head h2 { font-size: 20px; font-weight: 700; }
+.lead-detail-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* Active / Archived toggle above the leads list. */
+.leads-filter { display: flex; gap: 4px; padding: 0 0 10px; }
+.leads-filter-btn {
+  font-family: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 16px;
+  background: transparent; color: var(--muted); border: 1px solid var(--border); cursor: pointer;
+  transition: all .15s;
+}
+.leads-filter-btn:hover { color: var(--text); }
+.leads-filter-btn.active { background: rgba(99,102,241,.15); color: var(--accent); border-color: rgba(99,102,241,.4); }
 .lead-contact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; margin-bottom: 18px; }
 .lead-field-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 2px; }
 .lead-field-value { font-size: 14px; font-weight: 500; color: var(--text); text-decoration: none; }

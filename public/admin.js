@@ -715,32 +715,48 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
 // history that led to it. Built with DOM nodes — the fields are visitor input.
 let leadCache = [];
 
+let leadsArchived = false;   // false = active list, true = the archive shelf
+
 async function loadLeads() {
   const listEl = document.getElementById('leads-list');
   listEl.textContent = 'Loading…';
   try {
-    leadCache = await fetch('/api/inquiries?limit=200').then(r => r.ok ? r.json() : []);
+    leadCache = await fetch(`/api/inquiries?limit=200&archived=${leadsArchived ? 1 : 0}`).then(r => r.ok ? r.json() : []);
     renderLeadsList();
   } catch {
     listEl.textContent = 'Could not load enquiries.';
   }
 }
 
+// Active / Archived toggle.
+document.getElementById('leads-filter')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.leads-filter-btn');
+  if (!btn) return;
+  leadsArchived = btn.dataset.archived === '1';
+  document.querySelectorAll('.leads-filter-btn').forEach(b => b.classList.toggle('active', b === btn));
+  document.getElementById('lead-detail').replaceChildren();   // clear stale detail
+  loadLeads();
+});
+
 function renderLeadsList() {
   const listEl = document.getElementById('leads-list');
-  document.getElementById('leads-count').textContent =
-    `${leadCache.length} ${leadCache.length === 1 ? 'enquiry' : 'enquiries'}`;
+  const noun = leadsArchived ? 'archived' : (leadCache.length === 1 ? 'enquiry' : 'enquiries');
+  document.getElementById('leads-count').textContent = `${leadCache.length} ${noun}`;
 
-  const newCount = leadCache.filter(l => l.status === 'new').length;
-  const badge = document.getElementById('leads-badge');
-  badge.textContent = newCount;
-  badge.classList.toggle('hidden', newCount === 0);
+  // The nav badge tracks unactioned NEW leads on the active list only — archived
+  // leads shouldn't light it up.
+  if (!leadsArchived) {
+    const newCount = leadCache.filter(l => l.status === 'new').length;
+    const badge = document.getElementById('leads-badge');
+    badge.textContent = newCount;
+    badge.classList.toggle('hidden', newCount === 0);
+  }
 
   listEl.replaceChildren();
   if (!leadCache.length) {
     const empty = document.createElement('div');
     empty.className = 'leads-empty-row';
-    empty.textContent = 'No enquiries yet.';
+    empty.textContent = leadsArchived ? 'No archived enquiries.' : 'No enquiries yet.';
     listEl.appendChild(empty);
     return;
   }
@@ -795,7 +811,51 @@ async function openLead(id) {
   const h = document.createElement('h2');
   h.textContent = lead.contact?.name || '(no name)';
   head.appendChild(h);
+
+  // Archive / restore + delete. Archiving shelves the lead (reversible);
+  // delete removes it for good behind a confirm.
+  const actions = document.createElement('div');
+  actions.className = 'lead-detail-actions';
+
+  const archiveBtn = document.createElement('button');
+  archiveBtn.className = 'admin-btn';
+  archiveBtn.style.cssText = 'font-size:12px;padding:5px 10px';
+  archiveBtn.innerHTML = lead.archived
+    ? '<i data-lucide="archive-restore"></i> Restore'
+    : '<i data-lucide="archive"></i> Archive';
+  archiveBtn.onclick = async () => {
+    const toArchive = !lead.archived;
+    try {
+      const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}/archive`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: toArchive }),
+      });
+      if (!res.ok) throw new Error();
+      adminToast(toArchive ? 'Enquiry archived.' : 'Enquiry restored.', 'ok');
+      panel.replaceChildren();            // it just left this view
+      loadLeads();
+    } catch { adminToast('Could not update the enquiry.', 'error'); }
+  };
+  actions.appendChild(archiveBtn);
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'admin-btn danger';
+  delBtn.style.cssText = 'font-size:12px;padding:5px 10px';
+  delBtn.innerHTML = '<i data-lucide="trash-2"></i> Delete';
+  delBtn.onclick = async () => {
+    if (!confirm(`Permanently delete the enquiry from ${lead.contact?.name || 'this contact'}? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error();
+      adminToast('Enquiry deleted.', 'ok');
+      panel.replaceChildren();
+      loadLeads();
+    } catch { adminToast('Could not delete the enquiry.', 'error'); }
+  };
+  actions.appendChild(delBtn);
+
+  head.appendChild(actions);
   panel.appendChild(head);
+  lucide.createIcons();
 
   // Pipeline status — sales move a lead new → contacted → won / lost.
   const statusRow = document.createElement('div');
