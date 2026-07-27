@@ -1,7 +1,10 @@
 const { getDb } = require('../db');
 const config = require('../config');
+const { safeLink, safeImage } = require('../lib/safe-url');
 
 const col = () => getDb().collection('sponsors');
+
+const TIERS = ['platinum', 'gold', 'silver'];
 
 const all = () => col().find({ showId: config.showId }).toArray();
 
@@ -76,17 +79,30 @@ async function recommend(sqm) {
 }
 
 async function setFields(key, fields) {
-  const allowed = ['price', 'availability', 'image', 'video', 'active', 'tier', 'soldOut'];
   const $set = { updatedAt: new Date() };
-  for (const k of allowed) if (k in fields) $set[k] = fields[k];
 
-  // Sold out and offered are mutually exclusive — marking a package sold out
-  // withdraws it from sale in the same click, and clearing the flag puts it
-  // back on offer. Doing this here keeps the two in step no matter which
-  // client sets the flag.
+  // Each field is validated rather than copied verbatim: price is already
+  // coerced by the route, but tier/availability/image/video reach the public
+  // card, so they are constrained here too — a bad tier can't break the sort,
+  // and image/video get the same URL sanitising as partner logos (no
+  // javascript:, no data:text/html, no protocol-relative off-site links).
+  if ('price'   in fields) $set.price = fields.price;                       // route already validated
+  if ('active'  in fields) $set.active = fields.active === true;
+  if ('tier'    in fields) $set.tier = TIERS.includes(String(fields.tier).toLowerCase())
+                                       ? String(fields.tier).toLowerCase() : 'silver';
+  if ('availability' in fields) $set.availability = String(fields.availability ?? '').slice(0, 120);
+  if ('image'   in fields) $set.image = safeImage(fields.image);
+  if ('video'   in fields) $set.video = safeLink(fields.video);
+
+  // Sold out and offered are mutually exclusive, and now kept in step in BOTH
+  // directions: marking a package sold out withdraws it from sale, and putting
+  // it back on offer (active:true) clears the sold-out flag. Otherwise a
+  // sold-out package flipped active still showed its "Sold out" badge.
   if ('soldOut' in fields) {
     $set.soldOut = fields.soldOut === true;
     $set.active  = !$set.soldOut;
+  } else if ($set.active === true) {
+    $set.soldOut = false;
   }
   await col().updateOne({ showId: config.showId, key }, { $set });
   return col().findOne({ showId: config.showId, key });

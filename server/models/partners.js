@@ -1,6 +1,7 @@
 const { ObjectId } = require('mongodb');
 const { getDb } = require('../db');
 const config = require('../config');
+const { clean, safeLink } = require('../lib/safe-url');
 
 /**
  * Partner logos — the "In partnership with" strip on the public floorplan.
@@ -12,29 +13,16 @@ const config = require('../config');
  */
 const col = () => getDb().collection('partners');
 
-const clean = (v, max) => typeof v === 'string' ? v.trim().slice(0, max) : '';
-
 // The largest inline image we will store. A data URI longer than this used to
-// be silently truncated by clean(), which saved a corrupt image that rendered
-// broken everywhere. Now it's rejected outright so the admin sees a real error.
+// be silently truncated, which saved a corrupt image that rendered broken
+// everywhere. Now it's rejected outright so the admin sees a real error.
 const MAX_IMAGE = 2_000_000;
 const OVERSIZE = Symbol('oversize');
 
 /**
- * A link the browser will navigate to: http(s) or a site-relative path only.
- * Never javascript:, data: or anything else that could execute.
- */
-function safeLink(v) {
-  const s = clean(v, 500);
-  if (!s) return '';
-  if (/^https?:\/\//i.test(s)) return s;
-  if (s.startsWith('/')) return s;
-  return '';
-}
-
-/**
- * An image source. Same rules as a link, plus inline `data:image/…` so a small
- * logo can be pasted directly. Only image MIME types — never data:text/html.
+ * An image source: a shared safe link (http(s) or non-protocol-relative
+ * site path), plus an inline `data:image/…` URI so a small logo can be pasted
+ * directly. Oversized data URIs are rejected rather than truncated.
  */
 function safeImage(v) {
   if (typeof v === 'string' && v.length > MAX_IMAGE) return OVERSIZE;
