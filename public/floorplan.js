@@ -104,7 +104,7 @@ async function load() {
     lucide.createIcons();
     initPanZoom();
   } catch (e) {
-    mount.innerHTML = '<p style="color:#f87171;padding:20px">Floorplan could not be loaded. Please refresh.</p>';
+    mount.innerHTML = '<p style="color:#dc2626;padding:20px">Floorplan could not be loaded. Please refresh.</p>';
   }
 }
 
