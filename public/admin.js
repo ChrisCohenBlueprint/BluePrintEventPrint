@@ -734,7 +734,7 @@ document.getElementById('leads-filter')?.addEventListener('click', (e) => {
   if (!btn) return;
   leadsArchived = btn.dataset.archived === '1';
   document.querySelectorAll('.leads-filter-btn').forEach(b => b.classList.toggle('active', b === btn));
-  document.getElementById('lead-detail').replaceChildren();   // clear stale detail
+  renderLeadEmpty();                                          // clear any open detail
   loadLeads();
 });
 
@@ -752,6 +752,9 @@ function renderLeadsList() {
     badge.classList.toggle('hidden', newCount === 0);
   }
 
+  // Keep the right-hand panel's summary in step, unless a lead is open there.
+  if (!document.querySelector('#lead-detail .lead-detail-head')) renderLeadEmpty();
+
   listEl.replaceChildren();
   if (!leadCache.length) {
     const empty = document.createElement('div');
@@ -766,28 +769,76 @@ function renderLeadsList() {
     row.className = 'lead-row';
     row.dataset.id = l._id;
 
-    const name = document.createElement('div');
+    // Line 1 — name + status chip.
+    const top = document.createElement('div');
+    top.className = 'lead-row-top';
+    const name = document.createElement('span');
     name.className = 'lead-row-name';
     name.textContent = l.contact?.name || '(no name)';
-    if (l.status === 'new') {
-      const dot = document.createElement('span');
-      dot.className = 'lead-new-dot';
-      name.prepend(dot);
-    }
+    const chip = document.createElement('span');
+    chip.className = `lead-chip st-${l.status || 'new'}`;
+    chip.textContent = LEAD_STATUS_LABEL[l.status] || 'New';
+    top.append(name, chip);
 
+    // Line 2 — company/email · stands · sponsorship interest.
     const meta = document.createElement('div');
     meta.className = 'lead-row-meta';
-    const booths = (l.boothsOfInterest || []).join(', ');
-    meta.textContent = `${l.contact?.company || l.contact?.email || ''}${booths ? ' · stands ' + booths : ''}`;
+    const parts = [];
+    const org = l.contact?.company || l.contact?.email;
+    if (org) parts.push(org);
+    const booths = l.boothsOfInterest || [];
+    if (booths.length) parts.push('stands ' + booths.join(', '));
+    const sponsors = l.sponsorsOfInterest || [];
+    if (sponsors.length) parts.push(`+${sponsors.length} sponsorship`);
+    meta.textContent = parts.join(' · ') || '—';
 
-    const time = document.createElement('div');
-    time.className = 'lead-row-time';
-    time.textContent = l.createdAt ? new Date(l.createdAt).toLocaleDateString('en-GB') : '';
+    // Line 3 — date · assignee.
+    const foot = document.createElement('div');
+    foot.className = 'lead-row-foot';
+    const time = document.createElement('span');
+    time.textContent = l.createdAt ? new Date(l.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '';
+    const who = document.createElement('span');
+    who.className = 'lead-row-assignee' + (l.assignedTo?.name ? '' : ' unassigned');
+    who.textContent = l.assignedTo?.name || 'Unassigned';
+    foot.append(time, who);
 
-    row.append(name, meta, time);
+    row.append(top, meta, foot);
     row.onclick = () => { document.querySelectorAll('.lead-row').forEach(r => r.classList.remove('active')); row.classList.add('active'); openLead(l._id); };
     listEl.appendChild(row);
   });
+}
+
+const LEAD_STATUS_LABEL = { new: 'New', contacted: 'Contacted', won: 'Won', lost: 'Lost' };
+
+// The right-hand panel before any enquiry is picked — a prompt plus a quick
+// count of what's in the current view, so the page never looks empty.
+function renderLeadEmpty() {
+  const panel = document.getElementById('lead-detail');
+  if (!panel) return;
+  panel.replaceChildren();
+  const wrap = document.createElement('div');
+  wrap.className = 'lead-empty';
+  const icon = document.createElement('i'); icon.setAttribute('data-lucide', 'inbox');
+  const p = document.createElement('p');
+  p.textContent = 'Select an enquiry to see the contact and their browsing history.';
+  wrap.append(icon, p);
+
+  const stats = document.createElement('div');
+  stats.className = 'lead-empty-stats';
+  const stat = (num, label) => {
+    const s = document.createElement('div'); s.className = 'lead-empty-stat';
+    const n = document.createElement('strong'); n.textContent = num;
+    const t = document.createElement('span'); t.textContent = label;
+    s.append(n, t); return s;
+  };
+  stats.append(
+    stat(leadCache.length, leadsArchived ? 'archived' : 'active'),
+    stat(leadCache.filter(l => l.status === 'new').length, 'new'),
+    stat(leadCache.filter(l => l.assignedTo?.name).length, 'assigned'),
+  );
+  wrap.appendChild(stats);
+  panel.appendChild(wrap);
+  lucide.createIcons();
 }
 
 const EVENT_LABEL = {
@@ -831,7 +882,7 @@ async function openLead(id) {
       });
       if (!res.ok) throw new Error();
       adminToast(toArchive ? 'Enquiry archived.' : 'Enquiry restored.', 'ok');
-      panel.replaceChildren();            // it just left this view
+      renderLeadEmpty();                   // it just left this view
       loadLeads();
     } catch { adminToast('Could not update the enquiry.', 'error'); }
   };
@@ -847,7 +898,7 @@ async function openLead(id) {
       const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error();
       adminToast('Enquiry deleted.', 'ok');
-      panel.replaceChildren();
+      renderLeadEmpty();
       loadLeads();
     } catch { adminToast('Could not delete the enquiry.', 'error'); }
   };
