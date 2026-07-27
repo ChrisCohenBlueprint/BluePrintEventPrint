@@ -1,9 +1,12 @@
 // ─── BluePrint EventPrint — Admin Dashboard JS ────────────────────────────────
 const socket = io();
 
-// Show who is signed in.
+// Show who is signed in. currentRole gates team management — only the owner may
+// add/remove members or reset a colleague's password/2FA (the server enforces
+// this too; hiding the controls just avoids showing buttons that would 403).
 let currentUser = null;
-fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u){currentUser=u.user;document.getElementById('nav-username').textContent=u.user;}}).catch(()=>{});
+let currentRole = null;
+fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u){currentUser=u.user;currentRole=u.role;document.getElementById('nav-username').textContent=u.user;if(document.getElementById('section-team')?.classList.contains('active'))loadTeam();}}).catch(()=>{});
 
 // Prime the sponsor catalogue so lead detail can name sponsorship interests
 // without waiting for the Sponsors tab to be opened.
@@ -1357,6 +1360,13 @@ async function saveSponsor(key, fields) {
 async function loadTeam() {
   const tbody = document.getElementById('team-tbody');
   tbody.replaceChildren();
+  const isOwner = currentRole === 'owner';
+
+  // Team management (add form + per-member actions) is owner-only. Hide the
+  // add-admin card for everyone else.
+  const addCard = document.querySelector('.team-add-card');
+  if (addCard) addCard.style.display = isOwner ? '' : 'none';
+
   let admins = [];
   try { admins = await fetch('/api/admins').then(r => r.ok ? r.json() : []); } catch {}
 
@@ -1382,10 +1392,15 @@ async function loadTeam() {
 
     const actions = document.createElement('td');
     actions.className = 'team-actions';
-    actions.appendChild(teamBtn('Reset 2FA', () => resetMemberTotp(a.username)));
-    actions.appendChild(teamBtn('New password', () => resetMemberPassword(a.username)));
-    if (a.username !== currentUser && admins.length > 1) {
-      actions.appendChild(teamBtn('Remove', () => removeMember(a.username), 'danger'));
+    // Only the owner may reset a colleague's credentials or remove them.
+    if (isOwner) {
+      actions.appendChild(teamBtn('Reset 2FA', () => resetMemberTotp(a.username)));
+      actions.appendChild(teamBtn('New password', () => resetMemberPassword(a.username)));
+      if (a.role !== 'owner' && a.username !== currentUser && admins.length > 1) {
+        actions.appendChild(teamBtn('Remove', () => removeMember(a.username), 'danger'));
+      }
+    } else {
+      actions.textContent = '—';
     }
     tr.appendChild(actions);
 

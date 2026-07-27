@@ -4,6 +4,9 @@ const users  = require('./models/users');
 
 const COOKIE = 'bp_admin';
 
+// Both roles may use the admin surfaces; only 'owner' may manage team accounts.
+const ADMIN_ROLES = ['admin', 'owner'];
+
 // ─── Constant-time string compare ─────────────────────────────────────────────
 // Length is compared first because timingSafeEqual throws on length mismatch.
 function safeEqual(a, b) {
@@ -81,16 +84,18 @@ function clearSessionCookie(res) {
 async function sessionUser(req) {
   const cookies = parseCookies(req.headers.cookie || '');
   const payload = verifyToken(cookies[COOKIE]);   // null if absent, tampered or expired
-  if (!payload || payload.pending || payload.purpose || payload.role !== 'admin') return null;
+  if (!payload || payload.pending || payload.purpose || !ADMIN_ROLES.includes(payload.role)) return null;
 
   let account;
   try { account = await users.findAuth(payload.user); }
   catch { return null; }                           // DB unavailable → fail closed
   // Account gone (deleted) or its token version moved on (password/2FA reset) →
   // the cookie is stale. Existing pre-upgrade tokens/accounts both read as 0.
-  if (!account || account.role !== 'admin') return null;
+  if (!account || !ADMIN_ROLES.includes(account.role)) return null;
   if ((account.tokenVersion || 0) !== (payload.v || 0)) return null;
-  return payload;
+  // Return the CURRENT role from the DB, not the token's — an account promoted
+  // to owner gains that authority without having to log in again.
+  return { ...payload, role: account.role };
 }
 
 // ─── Express: protect admin surfaces ──────────────────────────────────────────
@@ -114,7 +119,7 @@ async function adminAuth(req, res, next) {
   if (!isAdminPath && !isApiPath) return next();
 
   const session = await sessionUser(req);
-  if (session) { req.admin = { user: session.user }; return next(); }
+  if (session) { req.admin = { user: session.user, role: session.role }; return next(); }
 
   // Not authenticated. HTML page requests go to the login screen; everything
   // else (XHR, assets) gets a clean 401.
@@ -130,17 +135,20 @@ async function socketAuth(socket, next) {
   const cookies = parseCookies(socket.handshake.headers.cookie || '');
   const payload = verifyToken(cookies[COOKIE]);
 
-  let isAdmin = false;
-  if (payload?.role === 'admin' && !payload.pending && !payload.purpose) {
+  let isAdmin = false, role = null;
+  if (payload && ADMIN_ROLES.includes(payload.role) && !payload.pending && !payload.purpose) {
     try {
       const account = await users.findAuth(payload.user);
       // Same revocation check as the HTTP path: a deleted account or a bumped
       // token version means the socket must not be treated as an admin.
-      isAdmin = !!account && account.role === 'admin' &&
-                (account.tokenVersion || 0) === (payload.v || 0);
+      if (account && ADMIN_ROLES.includes(account.role) &&
+          (account.tokenVersion || 0) === (payload.v || 0)) {
+        isAdmin = true; role = account.role;
+      }
     } catch { isAdmin = false; }               // DB unavailable → not admin
   }
   socket.data.isAdmin = isAdmin;
+  socket.data.role    = role;
   socket.data.user    = isAdmin ? payload.user : null;
   next();
 }

@@ -23,6 +23,9 @@ async function start() {
   await users.ensureIndexes();
   await partners.ensureIndexes();
   await users.bootstrap({ username: config.adminUser, password: config.adminPass });
+  // Promote the configured bootstrap account to owner (team-management tier).
+  // Idempotent, and safe on an already-seeded database.
+  await users.ensureOwner(config.adminUser);
 
   const app    = express();
   const server = http.createServer(app);

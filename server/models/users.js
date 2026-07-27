@@ -79,14 +79,26 @@ async function upsert({ username, password, role = 'admin' }) {
   return findByUsername(uname);
 }
 
-/** Seed Annie from the env credentials if no accounts exist yet. */
+/** Seed the owner from the env credentials if no accounts exist yet. */
 async function bootstrap({ username, password }) {
   if (!username || !password) return null;
   const count = await col().countDocuments();
   if (count > 0) return null;
-  const user = await upsert({ username, password, role: 'admin' });
-  console.log(`✅ Seeded admin account "${user.username}" — 2FA set up on first login`);
+  const user = await upsert({ username, password, role: 'owner' });
+  console.log(`✅ Seeded owner account "${user.username}" — 2FA set up on first login`);
   return user;
+}
+
+/**
+ * Guarantee the configured bootstrap account is the owner. Team management
+ * (creating/removing admins, resetting a colleague's password or 2FA) is
+ * restricted to the owner, so on deploy the existing bootstrap admin is
+ * promoted in place — nobody is logged out and the role simply gains authority.
+ */
+async function ensureOwner(username) {
+  const uname = String(username || '').toLowerCase().trim();
+  if (!uname) return;
+  await col().updateOne({ username: uname }, { $set: { role: 'owner' } });
 }
 
 /** Begin enrolment: hand back a fresh secret and the codes to display once. */
@@ -163,7 +175,7 @@ async function remove(username) {
 }
 
 module.exports = {
-  ensureIndexes, findByUsername, findAuth, upsert, bootstrap,
+  ensureIndexes, findByUsername, findAuth, upsert, bootstrap, ensureOwner,
   verifyPassword, verifyTotp, startEnrolment, confirmEnrolment, useRecoveryCode,
   list, count, resetTotp, setPassword, remove,
 };
