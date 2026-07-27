@@ -34,20 +34,29 @@ function toPublic(b) {
 
 const toAdmin = (b) => b;
 
-async function setStatus(boothNumber, status, { company = null, actor = null } = {}) {
+/**
+ * Set a booth's status.
+ *
+ * `expect` optionally names the prior statuses this change is allowed from, and
+ * is applied as a filter on the write itself — so a booking cannot silently
+ * overwrite one another admin made a moment earlier. `changed` reports whether
+ * the conditional write actually matched, letting the caller warn on a
+ * conflict. With no `expect`, the write is unconditional as before.
+ */
+async function setStatus(boothNumber, status, { company = null, actor = null, expect = null } = {}) {
   const before = await get(boothNumber);
   if (!before) return null;
 
-  await col().updateOne(
-    { showId: config.showId, boothNumber },
-    { $set: {
-        status,
-        'assignment.company': company,
-        updatedAt: new Date(),
-        updatedBy: actor,
-    } }
-  );
-  return { before, after: await get(boothNumber) };
+  const filter = { showId: config.showId, boothNumber };
+  if (Array.isArray(expect) && expect.length) filter.status = { $in: expect };
+
+  const res = await col().updateOne(filter, { $set: {
+    status,
+    'assignment.company': company,
+    updatedAt: new Date(),
+    updatedBy: actor,
+  } });
+  return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };
 }
 
 async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
@@ -55,11 +64,21 @@ async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
   if (!before) return null;
 
   const $set = { updatedAt: new Date(), updatedBy: actor };
-  if (actualPrice !== undefined) $set['assignment.actualPrice'] = actualPrice;
-  if (notes       !== undefined) $set['assignment.notes']       = notes;
+  if (actualPrice !== undefined) {
+    if (actualPrice === null || actualPrice === '') {
+      $set['assignment.actualPrice'] = null;
+    } else {
+      // A non-numeric/negative price used to be stored verbatim (NaN, a string,
+      // a negative), corrupting the deal record.
+      const n = Number(actualPrice);
+      if (!Number.isFinite(n) || n < 0) return { before, after: before, changed: false, error: 'bad_price' };
+      $set['assignment.actualPrice'] = n;
+    }
+  }
+  if (notes !== undefined) $set['assignment.notes'] = String(notes).slice(0, 2000);
 
   await col().updateOne({ showId: config.showId, boothNumber }, { $set });
-  return { before, after: await get(boothNumber) };
+  return { before, after: await get(boothNumber), changed: true };
 }
 
 async function incrementClicks(boothNumber) {
@@ -115,19 +134,35 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
     x: Math.min(g1.x, g2.x), y: Math.min(g1.y, g2.y),
     w: Math.max(g1.x + g1.w, g2.x + g2.w) - Math.min(g1.x, g2.x),
     h: Math.max(g1.y + g1.h, g2.y + g2.h) - Math.min(g1.y, g2.y),
-  } : g1;
+  } : (g1 || g2 || null);
 
-  await col().updateOne(
-    { showId: config.showId, boothNumber: primaryNum },
-    { $set: {
-        sqm: (a.sqm || 0) + (b.sqm || 0),
-        listPrice: (a.listPrice || 0) + (b.listPrice || 0),
-        geometry: box,
-        mergedFrom: [...(a.mergedFrom || []), secondaryNum],
-        updatedAt: new Date(), updatedBy: actor,
-    } }
+  const $set = {
+    sqm: (a.sqm || 0) + (b.sqm || 0),
+    listPrice: (a.listPrice || 0) + (b.listPrice || 0),
+    mergedFrom: [...(a.mergedFrom || []), secondaryNum],
+    updatedAt: new Date(), updatedBy: actor,
+  };
+  if (box) $set.geometry = box;   // never $set an undefined geometry
+
+  // The status re-checks above are only a read; between them and the writes
+  // another admin could book either stand. Both writes are therefore
+  // conditional on the stand still being available, and if the second fails we
+  // undo the first — so a booking made mid-merge is never silently destroyed.
+  // (No multi-document transaction: it would require a replica set and break
+  // local single-node Mongo.)
+  const del = await col().deleteOne({ showId: config.showId, boothNumber: secondaryNum, status: 'available' });
+  if (!del.deletedCount) return { ok: false, reason: 'not_available' };
+
+  const upd = await col().updateOne(
+    { showId: config.showId, boothNumber: primaryNum, status: 'available' },
+    { $set }
   );
-  await col().deleteOne({ showId: config.showId, boothNumber: secondaryNum });
+  if (!upd.matchedCount) {
+    // Primary was taken between the read and now — restore the secondary we
+    // just removed so no stand is lost, and report the conflict.
+    await col().insertOne(b);
+    return { ok: false, reason: 'not_available' };
+  }
   return { ok: true, primary: await get(primaryNum) };
 }
 
@@ -145,12 +180,23 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
   const n = Math.max(2, Math.min(6, parts | 0));
   const g = b.geometry;
   if (!g) return { ok: false, reason: 'no_geometry' };
+  // Below this every cell would round to <1 m², so refuse rather than emit
+  // zero-size stands or inflate the total with a Math.max(1,…) floor.
+  if ((b.sqm || 0) < n) return { ok: false, reason: 'too_small' };
 
   const vertical = axis === 'vertical';   // side by side
   const cellW = vertical ? g.w / n : g.w;
   const cellH = vertical ? g.h : g.h / n;
-  const sqm   = Math.max(1, Math.round((b.sqm || 0) / n));
-  const price = Math.round((b.listPrice || 0) / n);
+
+  // Distribute sqm and list price so the parts sum EXACTLY to the original:
+  // each cell gets floor(total/n), and the first `remainder` cells get one
+  // more. Previously every cell (primary included) took round(total/n), so
+  // n×part ≠ whole and the headline stats drifted on every split.
+  const share = (total, i) => {
+    const base = Math.floor(total / n), rem = total - base * n;
+    return base + (i < rem ? 1 : 0);
+  };
+  const totalSqm = b.sqm || 0, totalPrice = b.listPrice || 0;
 
   const cellGeom = (i) => ({
     x: vertical ? g.x + i * cellW : g.x,
@@ -168,17 +214,22 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
     nums.push(num);
   }
 
-  await col().updateOne(
-    { showId: config.showId, boothNumber: boothNum },
-    { $set: { geometry: cellGeom(0), sqm, listPrice: price, updatedAt: new Date(), updatedBy: actor } }
+  // Conditional on the stand still being available: if it was booked between
+  // the read above and here, matchedCount is 0 and nothing else is touched, so
+  // a paid booking can never be shrunk to a fraction of its area.
+  const primRes = await col().updateOne(
+    { showId: config.showId, boothNumber: boothNum, status: 'available' },
+    { $set: { geometry: cellGeom(0), sqm: share(totalSqm, 0), listPrice: share(totalPrice, 0),
+              updatedAt: new Date(), updatedBy: actor } }
   );
+  if (!primRes.matchedCount) return { ok: false, reason: 'not_available' };
 
   const created = [];
   for (let i = 1; i < n; i++) {
     await col().insertOne({
       showId: config.showId, boothNumber: nums[i - 1],
       svgElementId: null, geometry: cellGeom(i),
-      sqm, sqmSource: 'split', listPrice: price, status: 'available',
+      sqm: share(totalSqm, i), sqmSource: 'split', listPrice: share(totalPrice, i), status: 'available',
       assignment: { company: null, contactId: null, actualPrice: null, notes: '' },
       clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
       createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,

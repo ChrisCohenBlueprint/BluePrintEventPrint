@@ -202,8 +202,12 @@ function register(io) {
       const n = stand(boothNumber);
       // Clear any hold document first, but without flipping status to available.
       await holdsSvc.drop(n);
-      const r = await booths.setStatus(n, 'sold', { company, actor: socket.data.user });
-      if (!r) return;
+      // Only book from available/held — if another admin booked it in the
+      // meantime the conditional write won't match, and we say so rather than
+      // overwriting their exhibitor.
+      const r = await booths.setStatus(n, 'sold', { company, actor: socket.data.user, expect: ['available', 'held'] });
+      if (!r) return { ok: false, error: `Stand ${n} not found.` };
+      if (!r.changed) return { ok: false, error: `Stand ${n} is already taken — reload to see the latest.` };
       track({ type: 'booth.status_change', boothNumber: n, socket,
               meta: { from: r.before.status, to: 'sold', company } });
       await refresh(); broadcastState(io);
@@ -237,7 +241,8 @@ function register(io) {
     socket.on('booth:update-deal', requireAdmin(socket, 'booth:update-deal', async ({ boothNumber, actualPrice, notes }) => {
       const n = stand(boothNumber);
       const r = await booths.updateDeal(n, { actualPrice, notes, actor: socket.data.user });
-      if (!r) return;
+      if (!r) return { ok: false, error: `Stand ${n} not found.` };
+      if (r.error === 'bad_price') return { ok: false, error: 'Price must be a non-negative number.' };
       track({ type: 'deal.update', boothNumber: n, socket, meta: {
         fromPrice: r.before.assignment?.actualPrice ?? null, toPrice: actualPrice ?? null,
         notesChanged: notes !== undefined && notes !== r.before.assignment?.notes,
