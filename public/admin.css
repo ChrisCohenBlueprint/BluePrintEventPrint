@@ -375,8 +375,8 @@ body {
 .leads-list-panel { display: flex; flex-direction: column; background: var(--glass-bg, rgba(255,255,255,.03));
   border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .leads-list-head { display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--muted); }
-.leads-list { overflow-y: auto; flex: 1; }
+  padding: 14px 14px 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+.leads-list { overflow-y: auto; flex: 1; border-top: 1px solid var(--border); }
 .leads-empty-row { padding: 24px 14px; color: var(--muted); font-size: 13px; text-align: center; }
 
 .lead-row { display: block; width: 100%; text-align: left; padding: 12px 14px; border: none;
@@ -417,15 +417,15 @@ body {
 .lead-detail-head h2 { font-size: 20px; font-weight: 700; }
 .lead-detail-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
-/* Active / Archived toggle above the leads list. */
-.leads-filter { display: flex; gap: 4px; padding: 0 0 10px; }
+/* Active / Archived — one connected segmented control, not two loose pills. */
+.leads-filter { display: inline-flex; gap: 2px; margin: 12px 14px; padding: 3px;
+  background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 9px; }
 .leads-filter-btn {
-  font-family: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 16px;
-  background: transparent; color: var(--muted); border: 1px solid var(--border); cursor: pointer;
-  transition: all .15s;
+  font-family: inherit; font-size: 12px; font-weight: 600; padding: 5px 16px; border-radius: 6px;
+  background: transparent; color: var(--muted); border: none; cursor: pointer; transition: all .15s;
 }
 .leads-filter-btn:hover { color: var(--text); }
-.leads-filter-btn.active { background: rgba(99,102,241,.15); color: var(--accent); border-color: rgba(99,102,241,.4); }
+.leads-filter-btn.active { background: rgba(99,102,241,.9); color: #fff; }
 .lead-contact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; margin-bottom: 18px; }
 .lead-field-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 2px; }
 .lead-field-value { font-size: 14px; font-weight: 500; color: var(--text); text-decoration: none; }
