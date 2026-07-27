@@ -364,7 +364,12 @@ body {
 /* ─── Nav badge ─────────────────────────────────────────────────────────────── */
 .nav-badge {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 18px; height: 18px; padding: 0 6px; margin-left: auto;
+  min-width: 18px; height: 18px; margin-left: auto;
+  /* Digits have no descender, so flex-centring leaves them optically high in
+     the badge; the extra top padding nudges the number onto the true centre
+     (verified against a centre guide). box-sizing:border-box keeps the badge
+     18px tall regardless. */
+  padding: 2px 6px 0; box-sizing: border-box;
   font-size: 11px; font-weight: 700; line-height: 1; border-radius: 9px;
   background: #f97316; color: #1a1000;
 }
