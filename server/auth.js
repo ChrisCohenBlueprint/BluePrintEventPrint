@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const config = require('./config');
+const users  = require('./models/users');
 
 const COOKIE = 'bp_admin';
 
@@ -55,7 +56,11 @@ const cookieAttrs = () =>
   `HttpOnly; SameSite=Lax; Path=/${config.isProd ? '; Secure' : ''}`;
 
 function setSessionCookie(res, user) {
-  const token = signToken({ user: user.username, role: user.role || 'admin', exp: Date.now() + config.adminTokenTtlMs });
+  const token = signToken({
+    user: user.username, role: user.role || 'admin',
+    v: user.tokenVersion || 0,               // revocation stamp, checked on every request
+    exp: Date.now() + config.adminTokenTtlMs,
+  });
   res.setHeader('Set-Cookie', `${COOKIE}=${token}; ${cookieAttrs()}; Max-Age=${config.adminTokenTtlMs / 1000}`);
 }
 
@@ -63,14 +68,28 @@ function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; ${cookieAttrs()}; Max-Age=0`);
 }
 
-function sessionUser(req) {
+/**
+ * Resolve the signed session to a live account, or null.
+ *
+ * The cryptographic checks (valid HMAC, not expired, not a pending token, admin
+ * role) are necessary but no longer sufficient: the token is also matched
+ * against the account's current `tokenVersion` in the database, so deleting an
+ * admin or resetting their password/2FA revokes their session immediately
+ * rather than leaving it valid until the 12h token expiry. Async because it
+ * reads the DB — every caller awaits it.
+ */
+async function sessionUser(req) {
   const cookies = parseCookies(req.headers.cookie || '');
   const payload = verifyToken(cookies[COOKIE]);   // null if absent, tampered or expired
-  // Only a fully-authenticated session token grants access. Pending-login
-  // tokens are signed with the same secret but only prove the password step —
-  // they carry a `purpose`/`pending` marker and no admin role. Accepting them
-  // here would let anyone with the password skip 2FA entirely.
   if (!payload || payload.pending || payload.purpose || payload.role !== 'admin') return null;
+
+  let account;
+  try { account = await users.findAuth(payload.user); }
+  catch { return null; }                           // DB unavailable → fail closed
+  // Account gone (deleted) or its token version moved on (password/2FA reset) →
+  // the cookie is stale. Existing pre-upgrade tokens/accounts both read as 0.
+  if (!account || account.role !== 'admin') return null;
+  if ((account.tokenVersion || 0) !== (payload.v || 0)) return null;
   return payload;
 }
 
@@ -80,7 +99,7 @@ function sessionUser(req) {
 // login page; an API or asset request gets a 401.
 const ADMIN_PATHS = ['/admin.html', '/admin.js', '/admin.css'];
 
-function adminAuth(req, res, next) {
+async function adminAuth(req, res, next) {
   // Express matches routes case-insensitively and express.static resolves
   // percent-encoding, so the guard normalises both before comparing. Without
   // this, /API/booths and /ADMIN were reachable unauthenticated.
@@ -94,7 +113,7 @@ function adminAuth(req, res, next) {
   const isApiPath   = p === '/api' || p.startsWith('/api/');
   if (!isAdminPath && !isApiPath) return next();
 
-  const session = sessionUser(req);
+  const session = await sessionUser(req);
   if (session) { req.admin = { user: session.user }; return next(); }
 
   // Not authenticated. HTML page requests go to the login screen; everything
@@ -107,12 +126,22 @@ function adminAuth(req, res, next) {
 // ─── Socket.IO: identify admins at handshake ──────────────────────────────────
 // Without this the socket layer accepted admin:* events from any anonymous
 // visitor, which made the HTTP auth above decorative.
-function socketAuth(socket, next) {
+async function socketAuth(socket, next) {
   const cookies = parseCookies(socket.handshake.headers.cookie || '');
   const payload = verifyToken(cookies[COOKIE]);
 
-  socket.data.isAdmin = payload?.role === 'admin';
-  socket.data.user    = payload?.user || null;
+  let isAdmin = false;
+  if (payload?.role === 'admin' && !payload.pending && !payload.purpose) {
+    try {
+      const account = await users.findAuth(payload.user);
+      // Same revocation check as the HTTP path: a deleted account or a bumped
+      // token version means the socket must not be treated as an admin.
+      isAdmin = !!account && account.role === 'admin' &&
+                (account.tokenVersion || 0) === (payload.v || 0);
+    } catch { isAdmin = false; }               // DB unavailable → not admin
+  }
+  socket.data.isAdmin = isAdmin;
+  socket.data.user    = isAdmin ? payload.user : null;
   next();
 }
 

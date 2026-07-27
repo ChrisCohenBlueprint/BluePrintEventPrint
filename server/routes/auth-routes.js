@@ -26,8 +26,8 @@ const safeNext = (v) =>
   (typeof v === 'string' && /^\/[^/\\]/.test(v)) ? v : '/admin';
 
 // ─── Pages ────────────────────────────────────────────────────────────────────
-router.get('/login', (req, res) => {
-  if (auth.sessionUser(req)) return res.redirect(safeNext(req.query.next));
+router.get('/login', async (req, res) => {
+  if (await auth.sessionUser(req)) return res.redirect(safeNext(req.query.next));
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'login.html'));
 });
 
@@ -95,8 +95,8 @@ router.post('/login/verify', async (req, res) => {
 });
 
 // Who am I — lets the admin page show the signed-in user and a logout control.
-router.get('/api/me', (req, res) => {
-  const s = auth.sessionUser(req);
+router.get('/api/me', async (req, res) => {
+  const s = await auth.sessionUser(req);
   if (!s) return res.status(401).json({ error: 'Not signed in' });
   res.json({ user: s.user, role: s.role });
 });

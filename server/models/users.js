@@ -40,6 +40,17 @@ const findByUsername = (username) =>
   col().findOne({ username: String(username || '').toLowerCase().trim() });
 
 /**
+ * The minimum a request needs to authorise a session: does the account still
+ * exist, what is its role, and its current token version. Read on every admin
+ * request, so it is projected down to just these fields.
+ */
+const findAuth = (username) =>
+  col().findOne(
+    { username: String(username || '').toLowerCase().trim() },
+    { projection: { username: 1, role: 1, tokenVersion: 1 } }
+  );
+
+/**
  * Create or overwrite an account. Used by the bootstrap and by the create-admin
  * script. The account starts un-enrolled; 2FA is set up on first login.
  */
@@ -57,6 +68,10 @@ async function upsert({ username, password, role = 'admin' }) {
         totpSecret: null,
         totpEnrolled: false,
         recoveryHashes: [],
+        // Bumped whenever the account's credentials change or it is removed;
+        // the live session token embeds this number, so raising it revokes
+        // every token already issued for the account.
+        tokenVersion: 0,
         createdAt: new Date(),
       } },
     { upsert: true }
@@ -125,6 +140,9 @@ async function resetTotp(username) {
   const res = await col().updateOne(
     { username: String(username || '').toLowerCase().trim() },
     { $set: { totpSecret: null, totpEnrolled: false, recoveryHashes: [] },
+      // Resetting 2FA is a recovery/offboarding action — end any live session
+      // for the account so a stolen cookie cannot outlive the reset.
+      $inc: { tokenVersion: 1 },
       $unset: { pendingSecret: '', pendingRecovery: '' } });
   return res.matchedCount === 1;
 }
@@ -133,7 +151,9 @@ async function resetTotp(username) {
 async function setPassword(username, password) {
   const res = await col().updateOne(
     { username: String(username || '').toLowerCase().trim() },
-    { $set: { passwordHash: hashPassword(password), updatedAt: new Date() } });
+    // Bump tokenVersion so changing the password logs out existing sessions.
+    { $set: { passwordHash: hashPassword(password), updatedAt: new Date() },
+      $inc: { tokenVersion: 1 } });
   return res.matchedCount === 1;
 }
 
@@ -143,7 +163,7 @@ async function remove(username) {
 }
 
 module.exports = {
-  ensureIndexes, findByUsername, upsert, bootstrap,
+  ensureIndexes, findByUsername, findAuth, upsert, bootstrap,
   verifyPassword, verifyTotp, startEnrolment, confirmEnrolment, useRecoveryCode,
   list, count, resetTotp, setPassword, remove,
 };
