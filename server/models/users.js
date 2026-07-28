@@ -130,12 +130,39 @@ async function confirmEnrolment(username, token) {
   const step = totp.verifyStep(user.pendingSecret, token);
   if (step < 0) return false;
   // Record the step used at enrolment so the very same code can't be replayed
-  // to log in immediately afterwards.
+  // to log in immediately afterwards. The one-time invite code is consumed here
+  // too — enrolment is complete, it has done its job.
   await col().updateOne({ username: user.username },
     { $set: { totpSecret: user.pendingSecret, totpEnrolled: true, recoveryHashes: user.pendingRecovery || [], lastTotpStep: step },
-      $unset: { pendingSecret: '', pendingRecovery: '' } });
+      $unset: { pendingSecret: '', pendingRecovery: '', claimHash: '' } });
   return true;
 }
+
+// ─── Invite / claim code ──────────────────────────────────────────────────────
+// A one-time code the owner issues when creating an account (or resetting its
+// 2FA). It must be presented alongside the temp password before the account can
+// enrol an authenticator — so an intercepted temp password ALONE cannot claim
+// the account. Accounts with no claimHash (the bootstrap owner, legacy admins)
+// don't require one, so this can never lock out an existing user.
+const CLAIM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function makeClaimCode() {
+  return Array.from(crypto.randomBytes(9), b => CLAIM_ALPHABET[b % CLAIM_ALPHABET.length]).join('');
+}
+const claimHash = (code) => crypto.createHash('sha256').update(String(code || '').trim().toUpperCase()).digest('hex');
+
+/** Issue (or re-issue) a one-time invite code; returns the plaintext to show once. */
+async function issueClaimCode(username) {
+  const code = makeClaimCode();
+  const res = await col().updateOne(
+    { username: String(username || '').toLowerCase().trim() },
+    { $set: { claimHash: claimHash(code) } }
+  );
+  return res.matchedCount ? code : null;
+}
+/** True only when the account carries a claim code and still needs to enrol. */
+const needsClaim = (user) => !!(user && user.claimHash && !user.totpEnrolled);
+/** Accounts with no claimHash never require a code; otherwise it must match. */
+const checkClaim = (user, code) => !user || !user.claimHash || claimHash(code) === user.claimHash;
 
 const verifyTotp = (user, token) => user.totpEnrolled && totp.verify(user.totpSecret, token);
 
@@ -212,5 +239,6 @@ module.exports = {
   ensureIndexes, findByUsername, findAuth, upsert, bootstrap, ensureOwner,
   verifyPassword, absorbPassword, verifyTotp, verifyTotpAndConsume,
   startEnrolment, confirmEnrolment, useRecoveryCode,
+  issueClaimCode, needsClaim, checkClaim,
   list, count, resetTotp, setPassword, remove,
 };

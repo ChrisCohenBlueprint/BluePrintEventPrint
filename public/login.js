@@ -38,6 +38,7 @@
 
     const { ok, data } = await post('/login', {
       username: $('username').value.trim(), password: $('password').value,
+      claim: $('claim')?.value.trim() || undefined,   // only used on first-login enrolment
     });
     btn.disabled = false; btn.textContent = 'Continue';
 

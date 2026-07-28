@@ -80,6 +80,12 @@ router.post('/login', async (req, res) => {
   clearFailures(username);
 
   if (!user.totpEnrolled) {
+    // Invited accounts must present their one-time invite code before the 2FA
+    // secret is handed out, so an intercepted temp password alone can't claim
+    // the account. Accounts without a claim code (owner, legacy) skip this.
+    if (users.needsClaim(user) && !users.checkClaim(user, req.body?.claim)) {
+      return res.status(401).json({ ok: false, error: 'This account needs its one-time invite code (first login only). Ask the owner for it.' });
+    }
     const { secret, recoveryCodes, otpauth } = await users.startEnrolment(user.username);
     const qr = await QRCode.toDataURL(otpauth, { margin: 1, width: 220 }).catch(() => null);
     return res.json({

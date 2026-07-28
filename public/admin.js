@@ -1603,7 +1603,8 @@ document.getElementById('team-add-form')?.addEventListener('submit', async (e) =
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
-      adminToast(`Administrator "${username}" added. Share the username and password with them.`, 'ok');
+      adminToast(`Administrator "${username}" added.`, 'ok');
+      showInviteCode(username, data.claim);
       document.getElementById('team-username').value = '';
       document.getElementById('team-password').value = '';
       loadTeam();
@@ -1613,11 +1614,26 @@ document.getElementById('team-add-form')?.addEventListener('submit', async (e) =
   } catch { adminToast('Could not add administrator.', 'error'); }
 });
 
+// Show the one-time invite code the owner must share (with the temp password)
+// so the new admin can enrol 2FA on first login. Blocking + clipboard copy so
+// it can't be missed.
+function showInviteCode(username, code) {
+  if (!code) return;
+  try { navigator.clipboard?.writeText(code); } catch {}
+  alert(
+    `Invite code for "${username}":\n\n    ${code}\n\n` +
+    `Give this to them WITH the temporary password (out of band — e.g. in person or a separate channel). ` +
+    `They enter it on their FIRST sign-in only, before setting up their authenticator. ` +
+    `It's been copied to your clipboard.`
+  );
+}
+
 async function resetMemberTotp(username) {
-  if (!confirm(`Reset 2FA for "${username}"? They will set it up again on their next login.`)) return;
+  if (!confirm(`Reset 2FA for "${username}"? They will set it up again on their next login with a new invite code.`)) return;
   const res = await fetch(`/api/admins/${encodeURIComponent(username)}/reset-2fa`, { method: 'POST' });
-  adminToast(res.ok ? `2FA reset for ${username}.` : 'Could not reset 2FA.', res.ok ? 'ok' : 'error');
-  if (res.ok) loadTeam();
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) { adminToast(`2FA reset for ${username}.`, 'ok'); showInviteCode(username, data.claim); loadTeam(); }
+  else adminToast(data.error || 'Could not reset 2FA.', 'error');
 }
 
 async function resetMemberPassword(username) {

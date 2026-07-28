@@ -55,16 +55,26 @@ router.post('/admins', requireOwner, async (req, res, next) => {
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     if (await users.findByUsername(username)) return res.status(409).json({ error: 'That username already exists.' });
     await users.upsert({ username, password, role: 'admin' });
+    // One-time invite code — must be shared out of band and entered on first
+    // login, so the temp password alone can't claim the account.
+    const claim = await users.issueClaimCode(username);
     auditTeam(req, 'create', username);
-    res.json({ ok: true, username });
+    res.json({ ok: true, username, claim });
   } catch (e) { next(e); }
 });
 
 router.post('/admins/:username/reset-2fa', requireOwner, async (req, res, next) => {
   try {
+    const target = await users.findByUsername(req.params.username);
     const ok = await users.resetTotp(req.params.username);
-    if (ok) auditTeam(req, 'reset-2fa', req.params.username);
-    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: 'No such account.' });
+    if (!ok) return res.status(404).json({ error: 'No such account.' });
+    // Re-enrolling an admin needs a fresh invite code, else a reset would re-open
+    // the temp-password-only claim window. The OWNER is exempt: it is the
+    // recovery anchor, so it must always be able to re-enrol from its password
+    // alone (a lost invite code could otherwise lock everyone out permanently).
+    const claim = target?.role === 'owner' ? null : await users.issueClaimCode(req.params.username);
+    auditTeam(req, 'reset-2fa', req.params.username);
+    res.json({ ok: true, claim });
   } catch (e) { next(e); }
 });
 
