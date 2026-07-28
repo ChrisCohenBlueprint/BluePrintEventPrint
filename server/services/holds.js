@@ -26,12 +26,20 @@ async function create({ boothNumber, company, contactId = null, sessionId = null
   const now       = new Date();
   const expiresAt = new Date(now.getTime() + durationMs);
 
+  // Flip the booth to 'held' ONLY if it is still available — the status read
+  // above is a TOCTOU window. Without this precondition a hold landing at the
+  // same moment as a booking (booth:book) would unconditionally flip the just-
+  // sold stand back to 'held' and overwrite the exhibitor, silently erasing the
+  // sale (the same race booth:book itself is already guarded against).
+  const r = await booths.setStatus(boothNumber, 'held', { company, actor, expect: ['available'] });
+  if (!r || !r.changed) return { ok: false, reason: 'not_available' };
+
+  // Only write the hold document once the status flip has actually claimed the
+  // stand, so we never leave a hold doc on a stand we didn't hold.
   await col().insertOne({
     showId: config.showId, boothNumber, company, contactId, sessionId,
     createdAt: now, expiresAt, createdBy: actor,
   });
-
-  await booths.setStatus(boothNumber, 'held', { company, actor });
   track({ type: 'hold.create', boothNumber, meta: { company, expiresAt }, sessionId, actor });
 
   return { ok: true, expiresAt };
@@ -59,7 +67,10 @@ async function forceHold(boothNumber, { company = 'Pending', durationMs = config
 
 async function release(boothNumber, { actor = null } = {}) {
   await drop(boothNumber);
-  await booths.setStatus(boothNumber, 'available', { company: null, actor });
+  // Release frees a HELD stand. Guarding on 'held' means clicking release on a
+  // stand that has since been sold won't blank the exhibitor and drop the sale
+  // — to un-book a sale the admin uses the explicit status change instead.
+  await booths.setStatus(boothNumber, 'available', { company: null, actor, expect: ['held'] });
   track({ type: 'hold.release', boothNumber, meta: {}, actor });
 }
 
