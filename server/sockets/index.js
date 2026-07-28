@@ -284,7 +284,12 @@ function register(io) {
     socket.on('booth:consolidate', requireAdmin(socket, 'booth:consolidate', async ({ primary, secondary }) => {
       const p = stand(primary), s = stand(secondary);
       const r = await booths.consolidate(p, s, { actor: socket.data.user });
-      if (!r.ok) return { ok: false, error: `Could not merge — ${r.reason}` };
+      if (!r.ok) {
+        const why = r.reason === 'not_adjacent' ? 'the stands are not next to each other'
+                  : r.reason === 'not_available' ? 'both stands must be available'
+                  : r.reason;
+        return { ok: false, error: `Could not merge — ${why}.` };
+      }
       track({ type: 'booth.consolidate', boothNumber: p, socket, meta: { secondary: s } });
       await refresh();
       io.to(ADMIN_ROOM).emit('booth:consolidated', { primary: p, secondary: s });

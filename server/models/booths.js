@@ -113,6 +113,28 @@ async function stats() {
 }
 
 /**
+ * Do two stand rectangles share an edge (touch), within a small tolerance?
+ *
+ * Merge only makes sense for stands that are actually next to each other. If it
+ * is allowed between distant stands, the merged geometry — the bounding box of
+ * the two — spans the whole gap between them, producing one giant rectangle
+ * that overlaps every unrelated stand in between. Do it a few times and the
+ * booth grows across the hall (the "booth got bigger and bigger" bug).
+ */
+function adjacent(g1, g2, tol = 10) {
+  const a2 = { x2: g1.x + g1.w, y2: g1.y + g1.h };
+  const b2 = { x2: g2.x + g2.w, y2: g2.y + g2.h };
+  const xOverlap = Math.min(a2.x2, b2.x2) - Math.max(g1.x, g2.x);
+  const yOverlap = Math.min(a2.y2, b2.y2) - Math.max(g1.y, g2.y);
+  const gapX = Math.max(g1.x, g2.x) - Math.min(a2.x2, b2.x2);
+  const gapY = Math.max(g1.y, g2.y) - Math.min(a2.y2, b2.y2);
+  // Share a vertical edge: overlap down the Y axis, and touch (small/negative
+  // gap) across X. Or the mirror for a horizontal edge. A distant stand leaves
+  // a large positive gap and is rejected; so does one separated by an aisle.
+  return (yOverlap > 0 && gapX <= tol) || (xOverlap > 0 && gapY <= tol);
+}
+
+/**
  * Merge `secondary` into `primary`: the primary absorbs the combined area, list
  * price and footprint, and the secondary is deleted. The geometry becomes the
  * bounding box of the two, so the merged stand still maps onto the plan.
@@ -127,6 +149,12 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
   // its booking along with the record and orphan any hold document — refuse it.
   if (a.status !== 'available' || b.status !== 'available') {
     return { ok: false, reason: 'not_available' };
+  }
+
+  // The two stands must actually touch — otherwise the merged bounding box
+  // swallows everything between them (see adjacent() above).
+  if (a.geometry && b.geometry && !adjacent(a.geometry, b.geometry)) {
+    return { ok: false, reason: 'not_adjacent' };
   }
 
   const g1 = a.geometry, g2 = b.geometry;
