@@ -15,6 +15,14 @@ const partners     = require('./server/models/partners');
 const booths       = require('./server/models/booths');
 const tracking   = require('./server/services/tracking');
 
+// Last-resort safety net: an unhandled promise rejection anywhere (a stray
+// un-awaited DB call in a timer, say) would otherwise terminate the process on
+// modern Node and drop every connected socket. Log it and keep serving — the
+// individual handlers already fail their own action gracefully.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection (kept alive):', reason?.stack || reason);
+});
+
 async function start() {
   await db.connect();
 

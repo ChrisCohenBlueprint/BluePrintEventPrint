@@ -127,7 +127,10 @@ function startExpiryLoop(onExpired) {
   const tick = async () => {
     try {
       const expired = await reconcile();
-      if (expired.length && onExpired) onExpired(expired);
+      // AWAIT the callback: it does refresh()+broadcast, and if that rejected
+      // (a DB blip right as a hold expires) an un-awaited call would escape this
+      // try/catch as an unhandled rejection and take the process down.
+      if (expired.length && onExpired) await onExpired(expired);
     } catch (e) {
       console.error('Hold reconciliation failed:', e.message);
     }

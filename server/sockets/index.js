@@ -15,7 +15,18 @@ let cache = [];
 let activeViewers = {};   // socketId → boothNumber
 let connections   = 0;
 
-async function refresh() { cache = await booths.all(); }
+// Versioned so concurrent refreshes can't leave the cache on an OLDER snapshot:
+// two mutations racing means two in-flight all() queries, and whichever RETURNS
+// last would otherwise win regardless of which was issued last. We stamp each
+// refresh and only accept the result of the most-recently issued one — the one
+// that saw the newest DB state. Otherwise a held/sold stand could show as
+// available to every viewer until the next mutation happened to refresh.
+let refreshSeq = 0;
+async function refresh() {
+  const seq = ++refreshSeq;
+  const rows = await booths.all();
+  if (seq === refreshSeq) cache = rows;
+}
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 // Token bucket per socket. The public events are unauthenticated by design, so
@@ -155,6 +166,9 @@ function register(io) {
       // Re-anchor dwell tracking to the booth now open. Without this the timer
       // stayed pinned to the first booth viewed, so its dwell was re-emitted on
       // every subsequent click and accumulated far beyond real attention.
+      // Also move the live-viewer marker, else the heatmap stayed pinned to the
+      // last booth:view and clicks never moved it.
+      activeViewers[socket.id] = n;
       socket.data.viewing   = n;
       socket.data.viewStart = Date.now();
 

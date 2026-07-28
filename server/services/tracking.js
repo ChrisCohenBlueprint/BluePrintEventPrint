@@ -7,6 +7,8 @@ const config    = require('../config');
 // booths on every single click.
 let buffer = [];
 let timer  = null;
+let inFlight = null;   // the promise of the flush currently writing, if any
+let dropped  = 0;      // events dropped while the buffer was full (for one warning)
 
 function flushSoon() {
   if (timer) return;
@@ -19,17 +21,23 @@ function flushSoon() {
 const MAX_BUFFER = 10_000;
 
 async function flush() {
+  if (inFlight) return inFlight;      // coalesce concurrent flushes onto one write
   if (!buffer.length) return;
   const batch = buffer;
   buffer = [];
-  try {
-    await getDb().collection('activity').insertMany(batch, { ordered: false });
-  } catch (e) {
-    console.error('Activity flush failed:', e.message);
-    // Re-queue rather than drop, so a transient DB blip doesn't silently lose
-    // events — bounded, and only if newer events haven't already filled it.
-    if (buffer.length + batch.length <= MAX_BUFFER) { buffer = batch.concat(buffer); flushSoon(); }
-  }
+  inFlight = (async () => {
+    try {
+      await getDb().collection('activity').insertMany(batch, { ordered: false });
+    } catch (e) {
+      console.error('Activity flush failed:', e.message);
+      // Re-queue rather than drop, so a transient DB blip doesn't silently lose
+      // events — bounded, and only if newer events haven't already filled it.
+      if (buffer.length + batch.length <= MAX_BUFFER) { buffer = batch.concat(buffer); flushSoon(); }
+    } finally {
+      inFlight = null;
+    }
+  })();
+  return inFlight;
 }
 
 // Client IP, accounting for Render's proxy. Truncated (IPv4 → /24, IPv6 → /48)
@@ -57,6 +65,17 @@ function clientIp(socket) {
  * not an audit trail. The client only ever supplies sessionId and event meta.
  */
 function track({ type, boothNumber = null, meta = {}, socket = null, sessionId = null, actor = null }) {
+  // Hard cap the in-memory buffer. The re-queue-on-failure path was bounded, but
+  // track() itself pushed unconditionally — during a sustained DB outage new
+  // events kept growing the buffer without limit. Once full we drop new events
+  // (analytics only) and log once, rather than risk the process memory.
+  if (buffer.length >= MAX_BUFFER) {
+    if (!dropped) console.error(`Activity buffer full (${MAX_BUFFER}) — dropping events until the DB catches up`);
+    dropped++;
+    return null;
+  }
+  if (dropped) { console.warn(`Activity buffer recovered — dropped ${dropped} events during the outage`); dropped = 0; }
+
   // `actor` covers writes that originate outside a socket — the hold expiry
   // sweep, migrations, and service calls that only know the acting username.
   const resolvedActor = actor
@@ -92,7 +111,13 @@ function track({ type, boothNumber = null, meta = {}, socket = null, sessionId =
  */
 async function attributeSession(sessionId, contactId) {
   if (!sessionId || !contactId) return 0;
-  await flush();  // make sure this session's pending events are on disk first
+  // Make sure this session's pending events are on disk first. Await BOTH a
+  // flush of anything still buffered AND any flush already in flight — otherwise
+  // a timer-driven flush that had already swapped the buffer (buffer now empty,
+  // insert not yet committed) would make this flush() a no-op and the updateMany
+  // would run before those events existed, leaving the lead's history partial.
+  await flush();
+  if (inFlight) await inFlight;
   const res = await getDb().collection('activity').updateMany(
     { sessionId, 'actor.contactId': { $exists: false } },
     { $set: { 'actor.contactId': contactId } }
