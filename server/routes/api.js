@@ -317,6 +317,7 @@ router.get('/analytics/demand', async (req, res, next) => {
 
     const rows = await getDb().collection('activity').aggregate([
       { $match: { showId: config.showId, ts: { $gte: since }, boothNumber: { $ne: null },
+                  'actor.kind': 'visitor',       // real visitors, not admin browsing
                   type: { $in: ['booth.click', 'booth.view', 'booth.dwell'] } } },
       { $group: {
           _id: '$boothNumber',
@@ -341,20 +342,35 @@ router.get('/analytics/funnel', async (req, res, next) => {
     const since = new Date(Date.now() - days * 86400_000);
     const act   = getDb().collection('activity');
 
-    const [sessions, browsed, clicked, inquired] = await Promise.all([
-      act.distinct('sessionId', { showId: config.showId, ts: { $gte: since }, type: 'session.start' }),
-      act.distinct('sessionId', { showId: config.showId, ts: { $gte: since }, type: 'booth.view' }),
-      act.distinct('sessionId', { showId: config.showId, ts: { $gte: since }, type: 'booth.click' }),
-      act.distinct('sessionId', { showId: config.showId, ts: { $gte: since }, type: 'inquiry.submit' }),
+    // Only real visitors (not admins browsing the plan), and — for the top of
+    // the funnel — only sessions that actually DID something. A bare
+    // session.start with no interaction is a bot/scraper socket connection or an
+    // instant bounce; counting those made the conversion rate look far worse
+    // than reality. The first step is therefore "engaged visits".
+    const base = { showId: config.showId, ts: { $gte: since }, 'actor.kind': 'visitor' };
+    const ENGAGED = ['booth.view', 'booth.click', 'booth.dwell', 'plan.zoom', 'consent.granted', 'inquiry.submit'];
+
+    const [rawSessions, engaged, browsed, clicked, inquired] = await Promise.all([
+      act.distinct('sessionId', { ...base, type: 'session.start' }),
+      act.distinct('sessionId', { ...base, type: { $in: ENGAGED } }),
+      act.distinct('sessionId', { ...base, type: 'booth.view' }),
+      act.distinct('sessionId', { ...base, type: 'booth.click' }),
+      act.distinct('sessionId', { ...base, type: 'inquiry.submit' }),
     ]);
 
     const n = a => a.filter(Boolean).length;
-    res.json({ since, days, steps: [
-      { step: 'Visited',  count: n(sessions) },
-      { step: 'Viewed a stand', count: n(browsed) },
-      { step: 'Clicked a stand', count: n(clicked) },
-      { step: 'Enquired', count: n(inquired) },
-    ] });
+    const rawVisits = n(rawSessions), engagedVisits = n(engaged);
+    res.json({
+      since, days,
+      rawVisits,                                  // total connections, for reference
+      botsFiltered: Math.max(0, rawVisits - engagedVisits),
+      steps: [
+        { step: 'Engaged visit',   count: engagedVisits },
+        { step: 'Viewed a stand',  count: n(browsed) },
+        { step: 'Clicked a stand', count: n(clicked) },
+        { step: 'Enquired',        count: n(inquired) },
+      ],
+    });
   } catch (e) { next(e); }
 });
 

@@ -1129,6 +1129,15 @@ function renderFunnel(data) {
     row.append(label, track);
     el.appendChild(row);
   });
+
+  // Note how many bot/no-interaction connections were excluded from the top of
+  // the funnel, so the numbers are transparent rather than mysteriously lower.
+  if (data.botsFiltered > 0) {
+    const note = document.createElement('div');
+    note.className = 'funnel-note';
+    note.textContent = `${data.botsFiltered} bot / no-interaction visit${data.botsFiltered === 1 ? '' : 's'} excluded (of ${data.rawVisits} total connections)`;
+    el.appendChild(note);
+  }
 }
 
 // Dwell reads better in minutes once it passes a minute.
