@@ -416,6 +416,24 @@
           </form>
         </div>
 
+        <!-- Reset tool — undo a merge or split -->
+        <div class="tool-card">
+          <div class="tool-header">
+            <i data-lucide="undo-2"></i>
+            <h3>Reset Stand</h3>
+          </div>
+          <p>Undo a merge or a split. A merged stand splits back into the originals; a split is removed and the parent restored. Also clears a stray leftover cell.</p>
+          <form id="reset-form" class="tool-form">
+            <div class="tool-field">
+              <label>Stand</label>
+              <select id="reset-stand" class="admin-select"><option value="">Select…</option></select>
+            </div>
+            <button type="submit" class="admin-btn warning full">
+              <i data-lucide="undo-2"></i> Reset Stand
+            </button>
+          </form>
+        </div>
+
         <!-- Bulk status tool -->
         <div class="tool-card">
           <div class="tool-header">

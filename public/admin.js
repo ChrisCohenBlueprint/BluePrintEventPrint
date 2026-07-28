@@ -515,7 +515,7 @@ function populateToolDropdowns() {
 
   // Merge and split operate on all stands, not only available ones — you may
   // need to reshape a stand regardless of its booking status.
-  ['merge-1', 'merge-2', 'split-stand'].forEach(id => {
+  ['merge-1', 'merge-2', 'split-stand', 'reset-stand'].forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
     const cur = sel.value;
@@ -554,6 +554,22 @@ document.getElementById('split-form').addEventListener('submit', e => {
     adminToast(res && res.ok ? `Stand ${boothNumber} split into ${(res.created || []).length + 1} — added ${(res.created || []).join(', ')}.`
                              : (res && res.error) || 'Split failed.',
                res && res.ok ? 'ok' : 'error');
+  });
+});
+
+// ─── Reset Form (undo a merge or split) ───────────────────────────────────────
+document.getElementById('reset-form')?.addEventListener('submit', e => {
+  e.preventDefault();
+  const boothNumber = document.getElementById('reset-stand').value;
+  if (!boothNumber) return adminToast('Select a stand to reset.', 'error');
+  if (!confirm(`Reset stand ${boothNumber}? This undoes its merge or split.`)) return;
+  socket.emit('booth:reset', { boothNumber }, (res) => {
+    if (res && res.ok) {
+      const msg = res.type === 'unmerge' ? `Stand ${boothNumber} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
+                : res.type === 'unsplit' ? `Stand ${boothNumber} un-split — removed ${(res.removed || []).join(', ')}.`
+                : `Removed leftover cell ${boothNumber}.`;
+      adminToast(msg, 'ok');
+    } else adminToast((res && res.error) || 'Reset failed.', 'error');
   });
 });
 

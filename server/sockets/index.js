@@ -309,6 +309,25 @@ function register(io) {
       return { ok: true, created: r.created };
     }));
 
+    // Undo a merge or split (or clear a stray leftover cell).
+    socket.on('booth:reset', requireAdmin(socket, 'booth:reset', async ({ boothNumber }) => {
+      const n = stand(boothNumber);
+      const r = await booths.reset(n);
+      if (!r.ok) {
+        const why = r.reason === 'not_composite' ? 'this stand was not merged or split'
+                  : r.reason === 'not_available' ? 'the stand must be available'
+                  : r.reason;
+        return { ok: false, error: `Could not reset ${n} — ${why}.` };
+      }
+      track({ type: 'booth.reset', boothNumber: n, socket, meta: { type: r.type, changed: r.restored || r.removed } });
+      await refresh(); broadcastState(io);
+      const detail = r.type === 'unmerge' ? `restored ${(r.restored || []).join(', ') || 'originals'}`
+                   : r.type === 'unsplit' ? `removed ${(r.removed || []).join(', ')}`
+                   : 'removed leftover cell';
+      log(io, `↩️ Stand ${escapeHtml(n)} reset — ${escapeHtml(detail)}`, 'admin');
+      return { ok: true, ...r };
+    }));
+
     // demo:reset is gone. It wiped all 272 booths and was reachable from any
     // anonymous browser console.
 

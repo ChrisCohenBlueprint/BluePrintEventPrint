@@ -164,10 +164,18 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
     h: Math.max(g1.y + g1.h, g2.y + g2.h) - Math.min(g1.y, g2.y),
   } : (g1 || g2 || null);
 
+  // Snapshot for a later reset: the primary's own footprint before its FIRST
+  // merge (captured once), plus the full record of each absorbed stand. Reset
+  // uses this to restore everything exactly.
+  const mergeSnapshot = a.mergeSnapshot
+    || { self: { geometry: a.geometry, sqm: a.sqm, listPrice: a.listPrice }, parts: [] };
+  mergeSnapshot.parts = [...mergeSnapshot.parts, b];
+
   const $set = {
     sqm: (a.sqm || 0) + (b.sqm || 0),
     listPrice: (a.listPrice || 0) + (b.listPrice || 0),
     mergedFrom: [...(a.mergedFrom || []), secondaryNum],
+    mergeSnapshot,
     updatedAt: new Date(), updatedBy: actor,
   };
   if (box) $set.geometry = box;   // never $set an undefined geometry
@@ -242,13 +250,18 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
     nums.push(num);
   }
 
+  // Snapshot for a later reset: the primary's footprint before the split and
+  // the numbers of the cells it created, so Reset can delete the cells and
+  // restore the parent exactly.
+  const splitSnapshot = { self: { geometry: g, sqm: totalSqm, listPrice: totalPrice }, created: nums };
+
   // Conditional on the stand still being available: if it was booked between
   // the read above and here, matchedCount is 0 and nothing else is touched, so
   // a paid booking can never be shrunk to a fraction of its area.
   const primRes = await col().updateOne(
     { showId: config.showId, boothNumber: boothNum, status: 'available' },
     { $set: { geometry: cellGeom(0), sqm: share(totalSqm, 0), listPrice: share(totalPrice, 0),
-              updatedAt: new Date(), updatedBy: actor } }
+              splitSnapshot, updatedAt: new Date(), updatedBy: actor } }
   );
   if (!primRes.matchedCount) return { ok: false, reason: 'not_available' };
 
@@ -267,5 +280,64 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
   return { ok: true, created };
 }
 
+/**
+ * Undo whatever composite operation shaped this stand.
+ *
+ *   - merged stand  → split back into the originals (restore self + re-insert
+ *                     every absorbed stand from the snapshot)
+ *   - split parent  → delete the created cells and restore the parent footprint
+ *   - leftover split cell with no snapshot (legacy) → just remove the stray cell
+ *
+ * Only touches available stands, so it can never disturb a booking.
+ */
+async function reset(boothNumber) {
+  const booth = await get(boothNumber);
+  if (!booth) return { ok: false, reason: 'missing_booth' };
+  if (booth.status !== 'available') return { ok: false, reason: 'not_available' };
+
+  // Un-merge.
+  if (booth.mergeSnapshot) {
+    const snap = booth.mergeSnapshot;
+    const restored = [];
+    for (const part of snap.parts || []) {
+      if (part && part.boothNumber && !(await get(part.boothNumber))) {
+        await col().insertOne(part);            // the stored doc keeps its original geometry/sqm/price
+        restored.push(part.boothNumber);
+      }
+    }
+    await col().updateOne(
+      { showId: config.showId, boothNumber },
+      { $set: { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() },
+        $unset: { mergeSnapshot: '', mergedFrom: '' } }
+    );
+    return { ok: true, type: 'unmerge', restored };
+  }
+
+  // Un-split (acting on the parent).
+  if (booth.splitSnapshot) {
+    const snap = booth.splitSnapshot;
+    const removed = [];
+    for (const num of snap.created || []) {
+      const child = await get(num);
+      // Don't delete a cell that has since been booked.
+      if (child && child.status === 'available') { await col().deleteOne({ showId: config.showId, boothNumber: num }); removed.push(num); }
+    }
+    await col().updateOne(
+      { showId: config.showId, boothNumber },
+      { $set: { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() },
+        $unset: { splitSnapshot: '' } }
+    );
+    return { ok: true, type: 'unsplit', removed };
+  }
+
+  // Legacy split cell with no snapshot to restore from — remove the stray cell.
+  if (booth.splitFrom) {
+    await col().deleteOne({ showId: config.showId, boothNumber });
+    return { ok: true, type: 'remove-cell', removed: [boothNumber] };
+  }
+
+  return { ok: false, reason: 'not_composite' };
+}
+
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal,
-                   incrementClicks, stats, consolidate, split };
+                   incrementClicks, stats, consolidate, split, reset };
