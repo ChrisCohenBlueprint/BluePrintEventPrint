@@ -12,6 +12,7 @@ const authRoutes   = require('./server/routes/auth-routes');
 const publicRoutes = require('./server/routes/public');
 const users        = require('./server/models/users');
 const partners     = require('./server/models/partners');
+const booths       = require('./server/models/booths');
 const tracking   = require('./server/services/tracking');
 
 async function start() {
@@ -26,6 +27,9 @@ async function start() {
   // Promote the configured bootstrap account to owner (team-management tier).
   // Idempotent, and safe on an already-seeded database.
   await users.ensureOwner(config.adminUser);
+  // Self-healing fix for the two stands the merge/split bug left at half size.
+  // Idempotent — no-ops once they are whole.
+  await booths.repairHalvedStands();
 
   const app    = express();
   const server = http.createServer(app);

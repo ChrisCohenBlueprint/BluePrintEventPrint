@@ -339,5 +339,33 @@ async function reset(boothNumber) {
   return { ok: false, reason: 'not_composite' };
 }
 
+/**
+ * One-time, self-healing repair. The earlier "booth got bigger and bigger" bug
+ * left stands 128 and 198 at half their artwork cell (their other halves were
+ * consumed by the phantom that has since been reset away). Restore each to the
+ * full cell if it is still at the expected half size. Idempotent: once a stand
+ * is full, or has been changed to something else, it is left alone — so this is
+ * safe to run on every boot and can be removed once it has run in production.
+ */
+async function repairHalvedStands() {
+  const FIXES = [
+    { boothNumber: '128', geometry: { x: 2086, y: 834,  w: 67,  h: 134 }, sqm: 32, half: { w: 67,  h: 67 } },
+    { boothNumber: '198', geometry: { x: 1650, y: 1379, w: 134, h: 101 }, sqm: 48, half: { w: 67,  h: 101 } },
+  ];
+  for (const f of FIXES) {
+    const b = await get(f.boothNumber);
+    if (!b || !b.geometry) continue;
+    const g = b.geometry;
+    if (Math.abs(g.w - f.half.w) > 3 || Math.abs(g.h - f.half.h) > 3) continue;   // not the expected half → skip
+    const rate = (b.sqm && b.listPrice) ? b.listPrice / b.sqm : (config.ratePerSqm || 600);
+    await col().updateOne(
+      { showId: config.showId, boothNumber: f.boothNumber },
+      { $set: { geometry: f.geometry, sqm: f.sqm, listPrice: Math.round(f.sqm * rate),
+                updatedAt: new Date(), updatedBy: 'repair:halved-stands' } }
+    );
+    console.log(`🔧 Repaired stand ${f.boothNumber} → full size (${f.sqm} m²)`);
+  }
+}
+
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal,
-                   incrementClicks, stats, consolidate, split, reset };
+                   incrementClicks, stats, consolidate, split, reset, repairHalvedStands };
