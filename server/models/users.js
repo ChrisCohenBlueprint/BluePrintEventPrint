@@ -67,10 +67,14 @@ async function upsert({ username, password, role = 'admin' }) {
     { $set: {
         username: uname,
         passwordHash: hashPassword(password),
-        role,
         updatedAt: new Date(),
       },
+      // Role is set only on INSERT, never overwritten. Otherwise the
+      // break-glass "reset password" path (admin-account.js create annie …)
+      // would re-run upsert with the default role:'admin' and silently DEMOTE
+      // the owner, locking everyone out of team management.
       $setOnInsert: {
+        role,
         totpSecret: null,
         totpEnrolled: false,
         recoveryHashes: [],
@@ -145,11 +149,15 @@ async function verifyTotpAndConsume(user, token) {
   if (!user?.totpEnrolled) return false;
   const step = totp.verifyStep(user.totpSecret, token, { after: user.lastTotpStep || 0 });
   if (step < 0) return false;
-  await col().updateOne(
+  const res = await col().updateOne(
     { username: user.username, $or: [{ lastTotpStep: { $lt: step } }, { lastTotpStep: { $exists: false } }] },
     { $set: { lastTotpStep: step } }
   );
-  return true;
+  // Only the request that actually advanced the step succeeds. Two concurrent
+  // logins can both pass verifyStep on the same code; the conditional write
+  // matches for exactly one, and returning that result (not an unconditional
+  // true) is what makes the code genuinely single-use under concurrency.
+  return res.modifiedCount === 1;
 }
 
 /** Spend a recovery code (one use). Returns true if it was valid. */

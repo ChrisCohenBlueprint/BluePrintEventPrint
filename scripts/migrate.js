@@ -42,6 +42,27 @@ async function main() {
   const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', 'booth_data.json'), 'utf8'));
   const entries = Object.values(raw);
 
+  // Guard against the renumber footgun. migrate keys on boothNumber and only
+  // updates geometry, so if a fresh extraction RENUMBERED the stands it would
+  // silently paste new geometry onto whatever booking currently holds that
+  // number — decoupling commercial state from position. If the incoming numbers
+  // barely overlap what's already stored, refuse and point at reseed.js (which
+  // re-matches by position and carries bookings across).
+  const existing = await db.collection('booths')
+    .find({ showId: config.showId }).project({ boothNumber: 1 }).toArray();
+  if (existing.length) {
+    const have = new Set(existing.map(b => b.boothNumber));
+    const incoming = entries.map(b => String(b.boothId).replace(/^booth-/, ''));
+    const overlap = incoming.filter(n => have.has(n)).length / incoming.length;
+    if (overlap < 0.8 && !argv.includes('--force')) {
+      console.error(`REFUSING: only ${Math.round(overlap * 100)}% of incoming stand numbers match the existing data.`);
+      console.error('This looks like a RENUMBER. migrate would decouple bookings from position.');
+      console.error('Use scripts/reseed.js (re-matches by position, carries bookings), or --force to override.');
+      await close();
+      process.exit(1);
+    }
+  }
+
   const ops = entries.map(b => {
     // boothNumber currently holds the positional id. Once real numbers are
     // extracted (plan §07) this becomes the printed stand number and the

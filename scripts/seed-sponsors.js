@@ -83,11 +83,15 @@ async function main() {
   for (const s of CATALOGUE) {
     const res = await col.updateOne(
       { showId: config.showId, key: s.key },
-      { // Catalogue fields are refreshed from this file; media, availability
-        // overrides and active flag set in admin are preserved on re-run.
-        $set: { name: s.name, tier: s.tier, price: s.price, blurb: s.blurb, perks: s.perks },
+      { // Descriptive catalogue fields are refreshed from this file on every
+        // run. PRICE is admin-negotiated commercial data (edited via the admin
+        // and used to rank recommendations), so it is seeded only on insert and
+        // NEVER overwritten — otherwise re-running this script would silently
+        // revert every negotiated price to the catalogue default.
+        $set: { name: s.name, tier: s.tier, blurb: s.blurb, perks: s.perks },
         $setOnInsert: {
           showId: config.showId, key: s.key,
+          price: s.price,
           availability: s.availability, active: true,
           image: '', video: '',
           createdAt: new Date(),

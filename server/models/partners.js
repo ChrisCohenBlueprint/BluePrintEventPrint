@@ -70,8 +70,12 @@ async function update(id, fields) {
   const $set = { updatedAt: new Date() };
   if ('name'   in fields) $set.name  = clean(fields.name, 120);
   if ('alt'    in fields) $set.alt   = clean(fields.alt, 160);
-  if ('active' in fields) $set.active = fields.active === true || fields.active === 'true';
-  if ('order'  in fields) $set.order = Number(fields.order) || 0;
+  // Coerce like the sponsor route: 1/"1"/true/"true" are all truthy (a bare 1
+  // used to read as false and hide the logo).
+  if ('active' in fields) $set.active = fields.active === true || fields.active === 'true' || fields.active === 1 || fields.active === '1';
+  // A non-numeric or negative order used to collapse to 0, silently stacking
+  // logos at the same position; clamp to a finite, non-negative integer.
+  if ('order'  in fields) { const o = Number(fields.order); $set.order = Number.isFinite(o) && o >= 0 ? Math.floor(o) : 0; }
   if ('image'  in fields) {
     const v = safeImage(fields.image);
     if (v === OVERSIZE) return { ok: false, error: 'That image is too large to store. Please use one under ~1.5 MB.' };

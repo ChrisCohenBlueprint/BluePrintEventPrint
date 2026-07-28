@@ -56,20 +56,24 @@ async function main() {
       .map(f => ({ f, d: Math.abs(centre({ x: f.x, y: f.y, w: f.w, h: f.h }).x - oc.x) +
                           Math.abs(centre({ x: f.x, y: f.y, w: f.w, h: f.h }).y - oc.y) }))
       .sort((p, q) => p.d - q.d);
-    if (cands.length) matches.push({ old: o, next: cands[0].f });
+    if (cands.length) matches.push({ old: o, next: cands[0].f, d: cands[0].d });
     else orphans.push(o);
   }
 
   // A new stand must not receive two different old bookings. If two old stands
-  // both match one new stand, keep the nearest and orphan the rest for manual
-  // re-assignment rather than silently overwriting one booking with another.
+  // both match one new stand, keep the geometrically NEAREST and orphan the
+  // rest for manual re-assignment. (Previously it kept whichever was iterated
+  // first, which could carry the wrong booking onto the stand.)
   const byNew = new Map();
   for (const m of matches) {
     const key = m.next.boothId;
     const prev = byNew.get(key);
     if (!prev) { byNew.set(key, m); continue; }
-    console.log(`  ⚠ two old stands (${prev.old.boothNumber}, ${m.old.boothNumber}) map to new ${key}`);
-    orphans.push(m.old);   // keep prev, orphan the later one
+    const keep   = m.d < prev.d ? m : prev;
+    const orphan = m.d < prev.d ? prev : m;
+    byNew.set(key, keep);
+    console.log(`  ⚠ two old stands (${prev.old.boothNumber}, ${m.old.boothNumber}) map to new ${key} — keeping nearer ${keep.old.boothNumber}`);
+    orphans.push(orphan.old);
   }
   const dedupedMatches = [...byNew.values()];
 
@@ -160,6 +164,21 @@ async function main() {
       console.log(`  hold ${h.boothNumber} removed — stand no longer exists`);
     }
   }
+
+  // Leads reference stand numbers too — re-point boothsOfInterest through the
+  // same old→new match table so a forwarded enquiry doesn't cite stale numbers.
+  const remap = new Map(matches.map(m => [m.old.boothNumber, String(m.next.boothId).replace(/^booth-/, '')]));
+  const inqs = await db.collection('inquiries').find({ showId: config.showId }).toArray();
+  let inqRemapped = 0;
+  for (const q of inqs) {
+    if (!Array.isArray(q.boothsOfInterest) || !q.boothsOfInterest.length) continue;
+    const mapped = q.boothsOfInterest.map(n => remap.get(n) || null).filter(Boolean);
+    if (mapped.join(',') !== q.boothsOfInterest.join(',')) {
+      await db.collection('inquiries').updateOne({ _id: q._id }, { $set: { boothsOfInterest: mapped } });
+      inqRemapped++;
+    }
+  }
+  if (inqRemapped) console.log(`  re-pointed stand refs on ${inqRemapped} lead(s)`);
 
   const counts = await db.collection('booths').aggregate([
     { $match: { showId: config.showId } },

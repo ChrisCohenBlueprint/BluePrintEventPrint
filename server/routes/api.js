@@ -113,6 +113,12 @@ router.patch('/sponsors/:key', async (req, res, next) => {
         body.price = n;
       }
     }
+    // Reject an oversized inline image rather than let it be silently truncated
+    // into a corrupt one (partners already reject; sponsors used the truncating
+    // shared helper).
+    if ('image' in body && typeof body.image === 'string' && body.image.length > 2_000_000) {
+      return res.status(400).json({ error: 'That image is too large to store. Please use one under ~1.5 MB.' });
+    }
     // Coerce honestly: the strings "false"/"0" are false, not truthy.
     const truthy = v => v === true || v === 'true' || v === 1 || v === '1';
     if ('active'  in body) body.active  = truthy(body.active);
@@ -142,7 +148,7 @@ router.get('/holds', async (_req, res, next) => {
 router.get('/inquiries', async (req, res, next) => {
   try {
     const archived = req.query.archived === '1' || req.query.archived === 'true';
-    res.json(await inquiries.recent(Math.min(Number(req.query.limit) || 100, 500), { archived }));
+    res.json(await inquiries.recent(Math.max(1, Math.min(Number(req.query.limit) || 100, 500)), { archived }));
   } catch (e) { next(e); }
 });
 
@@ -296,7 +302,7 @@ router.get('/booths/:n/activity', async (req, res, next) => {
   try {
     const rows = await getDb().collection('activity')
       .find({ showId: config.showId, boothNumber: String(req.params.n) })
-      .sort({ ts: -1 }).limit(Math.min(Number(req.query.limit) || 25, 500)).toArray();
+      .sort({ ts: -1 }).limit(Math.max(1, Math.min(Number(req.query.limit) || 25, 500))).toArray();
     res.json(rows);
   } catch (e) { next(e); }
 });
@@ -359,7 +365,7 @@ router.get('/audit', async (req, res, next) => {
       .find({ showId: config.showId,
               type: { $in: ['booth.status_change', 'deal.update', 'hold.create',
                             'hold.release', 'hold.expire', 'security.denied'] } })
-      .sort({ ts: -1 }).limit(Math.min(Number(req.query.limit) || 200, 1000)).toArray();
+      .sort({ ts: -1 }).limit(Math.max(1, Math.min(Number(req.query.limit) || 200, 1000))).toArray();
     res.json(rows);
   } catch (e) { next(e); }
 });

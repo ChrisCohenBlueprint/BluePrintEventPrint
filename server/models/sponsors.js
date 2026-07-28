@@ -58,12 +58,12 @@ async function recommend(sqm) {
 
   const list = await allActive();
   const scored = list.map(s => {
-    // Options without a set price (e.g. price-on-application) get a neutral,
-    // mid-pack score rather than being dropped.
-    const score = s.price
-      ? 1 / (1 + Math.abs(s.price - target) / target)
-      : 0.3;
-    return { s, score, price: s.price || Infinity };
+    // Only a genuinely UNSET price is price-on-application (neutral score). A
+    // legitimate £0 (complimentary) package is scored on its real distance to
+    // target rather than being treated as unpriced and sunk.
+    const priced = s.price != null;
+    const score = priced ? 1 / (1 + Math.abs(s.price - target) / target) : 0.3;
+    return { s, score, price: priced ? s.price : Infinity };
   });
 
   // Sold-out options always sink to the bottom: they are there to tempt, not
@@ -101,7 +101,11 @@ async function setFields(key, fields) {
   if ('soldOut' in fields) {
     $set.soldOut = fields.soldOut === true;
     $set.active  = !$set.soldOut;
-  } else if ($set.active === true) {
+  } else if ('active' in fields) {
+    // Any explicit change to `active` — offering it (true) OR hiding it
+    // (false) — clears sold-out. Without this, un-ticking Offered on a sold-out
+    // sponsor left soldOut:true, and allActive()'s `soldOut:true` clause kept it
+    // on the public floorplan: it could not be hidden.
     $set.soldOut = false;
   }
   await col().updateOne({ showId: config.showId, key }, { $set });

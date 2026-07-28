@@ -38,7 +38,7 @@ async function create({ name, email, phone, company, message, boothNumbers = [],
     showId: config.showId,
     sessionId,
     contact,
-    boothsOfInterest: boothNumbers.slice(0, 25).map(String),
+    boothsOfInterest: (Array.isArray(boothNumbers) ? boothNumbers : []).slice(0, 25).map(String),
     sponsorsOfInterest: Array.isArray(sponsorKeys) ? sponsorKeys.slice(0, 25).map(String) : [],
     message: clean(message, 2000),
     source:  'floorplan',
@@ -74,6 +74,10 @@ const recent = (limit = 100, { archived = false } = {}) =>
 async function withHistory(id) {
   const inquiry = await col().findOne({ _id: id });
   if (!inquiry) return null;
+  // A lead with no session has no browsing trail. Querying activity by a null
+  // sessionId would match EVERY anonymous/migration-imported event that also
+  // has sessionId:null, splicing unrelated history onto this one lead.
+  if (!inquiry.sessionId) return { ...inquiry, history: [] };
   const history = await getDb().collection('activity')
     .find({ sessionId: inquiry.sessionId })
     .sort({ ts: 1 }).limit(500).toArray();
@@ -114,7 +118,9 @@ async function recordSend(id, { to, cc, by }) {
   const res = await col().updateOne({ _id: id }, {
     $set: { lastSentAt: new Date(), lastSentTo: to, lastSentBy: by || null },
     $inc: { sendCount: 1 },
-    $push: { sendLog: { at: new Date(), to, cc, by: by || null } },
+    // Keep only the most recent 50 sends so repeated forwards can't grow the
+    // document toward Mongo's 16 MB limit.
+    $push: { sendLog: { $each: [{ at: new Date(), to, cc, by: by || null }], $slice: -50 } },
   });
   return res.matchedCount === 1;
 }
