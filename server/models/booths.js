@@ -121,17 +121,35 @@ async function stats() {
  * that overlaps every unrelated stand in between. Do it a few times and the
  * booth grows across the hall (the "booth got bigger and bigger" bug).
  */
-function adjacent(g1, g2, tol = 10) {
-  const a2 = { x2: g1.x + g1.w, y2: g1.y + g1.h };
-  const b2 = { x2: g2.x + g2.w, y2: g2.y + g2.h };
-  const xOverlap = Math.min(a2.x2, b2.x2) - Math.max(g1.x, g2.x);
-  const yOverlap = Math.min(a2.y2, b2.y2) - Math.max(g1.y, g2.y);
-  const gapX = Math.max(g1.x, g2.x) - Math.min(a2.x2, b2.x2);
-  const gapY = Math.max(g1.y, g2.y) - Math.min(a2.y2, b2.y2);
-  // Share a vertical edge: overlap down the Y axis, and touch (small/negative
-  // gap) across X. Or the mirror for a horizontal edge. A distant stand leaves
-  // a large positive gap and is rejected; so does one separated by an aisle.
-  return (yOverlap > 0 && gapX <= tol) || (xOverlap > 0 && gapY <= tol);
+function adjacent(g1, g2, tol = 3) {
+  const a2x = g1.x + g1.w, a2y = g1.y + g1.h;
+  const b2x = g2.x + g2.w, b2y = g2.y + g2.h;
+  const xOverlap = Math.min(a2x, b2x) - Math.max(g1.x, g2.x);
+  const yOverlap = Math.min(a2y, b2y) - Math.max(g1.y, g2.y);
+  // Overlapping in BOTH axes = nested/overlapping footprints, not a clean
+  // side-by-side merge — reject (folding overlapping stands is corruption).
+  if (xOverlap > tol && yOverlap > tol) return false;
+  const gapX = Math.max(g1.x, g2.x) - Math.min(a2x, b2x);
+  const gapY = Math.max(g1.y, g2.y) - Math.min(a2y, b2y);
+  // A genuine shared edge: real overlap along one axis, and the OTHER axis
+  // touches (gap ≈ 0). A whole-aisle gap (large positive) is rejected; a deep
+  // overlap (large negative) is caught above. tol is a few units for the .75pt
+  // artwork stroke and float geometry — not a whole ~50-unit aisle.
+  const shareV = yOverlap > tol && Math.abs(gapX) <= tol;
+  const shareH = xOverlap > tol && Math.abs(gapY) <= tol;
+  return shareV || shareH;
+}
+
+/**
+ * Would merging these two produce a CONTIGUOUS rectangle? Two same-height (or
+ * same-width) edge-adjacent stands tile their bounding box exactly; an L-shape
+ * (different heights) leaves an empty corner that would overlap whatever sits
+ * there. Require the box area to be within a whisker of the summed areas.
+ */
+function contiguousMerge(g1, g2) {
+  const box = { w: Math.max(g1.x + g1.w, g2.x + g2.w) - Math.min(g1.x, g2.x),
+                h: Math.max(g1.y + g1.h, g2.y + g2.h) - Math.min(g1.y, g2.y) };
+  return box.w * box.h <= (g1.w * g1.h + g2.w * g2.h) * 1.15;
 }
 
 /**
@@ -151,9 +169,19 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
     return { ok: false, reason: 'not_available' };
   }
 
-  // The two stands must actually touch — otherwise the merged bounding box
-  // swallows everything between them (see adjacent() above).
-  if (a.geometry && b.geometry && !adjacent(a.geometry, b.geometry)) {
+  // A stand already shaped by a split can't also be merged without first being
+  // reset — otherwise it would carry two composite snapshots at once, or leave
+  // a dangling split parent/child reference. (Growing an existing merge is fine:
+  // the primary may already have a mergeSnapshot; the secondary may not, or it
+  // would nest.)
+  if (a.splitSnapshot || a.splitFrom || b.splitSnapshot || b.splitFrom || b.mergeSnapshot) {
+    return { ok: false, reason: 'reset_first' };
+  }
+
+  // The two stands must actually touch AND tile a contiguous rectangle —
+  // otherwise the merged bounding box swallows everything between/around them.
+  if (a.geometry && b.geometry &&
+      (!adjacent(a.geometry, b.geometry) || !contiguousMerge(a.geometry, b.geometry))) {
     return { ok: false, reason: 'not_adjacent' };
   }
 
@@ -213,6 +241,12 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
   // Splitting is a pre-sale layout operation. On a sold/held stand it would
   // shrink a paid booking to 1/n of its area, so only available stands split.
   if (b.status !== 'available') return { ok: false, reason: 'not_available' };
+  // A stand already shaped by a merge or an earlier split of its own must be
+  // reset first — splitting a merged stand would leave it carrying both a
+  // merge and a split snapshot, which reset can only half-undo. (A split CHILD
+  // may be split again — reset refuses to unwind a parent whose child is split,
+  // so grandchildren can't be orphaned.)
+  if (b.mergeSnapshot || b.splitSnapshot) return { ok: false, reason: 'reset_first' };
   const n = Math.max(2, Math.min(6, parts | 0));
   const g = b.geometry;
   if (!g) return { ok: false, reason: 'no_geometry' };
@@ -295,9 +329,17 @@ async function reset(boothNumber) {
   if (!booth) return { ok: false, reason: 'missing_booth' };
   if (booth.status !== 'available') return { ok: false, reason: 'not_available' };
 
-  // Un-merge.
+  // Un-merge. Restore the parent FIRST, conditional on it still being available
+  // — if it was booked between the read and now, abort without re-inserting the
+  // parts, so we never leave a booked merged stand overlapping restored parts.
   if (booth.mergeSnapshot) {
     const snap = booth.mergeSnapshot;
+    const upd = await col().updateOne(
+      { showId: config.showId, boothNumber, status: 'available' },
+      { $set: { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() },
+        $unset: { mergeSnapshot: '', mergedFrom: '' } }
+    );
+    if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
     const restored = [];
     for (const part of snap.parts || []) {
       if (part && part.boothNumber && !(await get(part.boothNumber))) {
@@ -305,34 +347,44 @@ async function reset(boothNumber) {
         restored.push(part.boothNumber);
       }
     }
-    await col().updateOne(
-      { showId: config.showId, boothNumber },
-      { $set: { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() },
-        $unset: { mergeSnapshot: '', mergedFrom: '' } }
-    );
     return { ok: true, type: 'unmerge', restored };
   }
 
   // Un-split (acting on the parent).
   if (booth.splitSnapshot) {
     const snap = booth.splitSnapshot;
-    const removed = [];
+    // Refuse if any child can't be cleanly removed: a booked child would be
+    // destroyed and its area would double under the restored parent; a
+    // further-split child would orphan its own grandchildren. The admin resets
+    // those first.
     for (const num of snap.created || []) {
       const child = await get(num);
-      // Don't delete a cell that has since been booked.
-      if (child && child.status === 'available') { await col().deleteOne({ showId: config.showId, boothNumber: num }); removed.push(num); }
+      if (!child) continue;
+      if (child.status !== 'available') return { ok: false, reason: 'child_booked' };
+      if (child.splitSnapshot)          return { ok: false, reason: 'child_split' };
     }
-    await col().updateOne(
-      { showId: config.showId, boothNumber },
+    // Restore the parent first (conditional), then remove the cells — each
+    // delete conditional on the cell still being available so a booking landing
+    // mid-reset is preserved rather than deleted.
+    const upd = await col().updateOne(
+      { showId: config.showId, boothNumber, status: 'available' },
       { $set: { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() },
         $unset: { splitSnapshot: '' } }
     );
+    if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
+    const removed = [];
+    for (const num of snap.created || []) {
+      const res = await col().deleteOne({ showId: config.showId, boothNumber: num, status: 'available' });
+      if (res.deletedCount) removed.push(num);
+    }
     return { ok: true, type: 'unsplit', removed };
   }
 
-  // Legacy split cell with no snapshot to restore from — remove the stray cell.
+  // Legacy split cell with no snapshot to restore from — remove the stray cell
+  // (conditional on availability so it can't delete a booking).
   if (booth.splitFrom) {
-    await col().deleteOne({ showId: config.showId, boothNumber });
+    const res = await col().deleteOne({ showId: config.showId, boothNumber, status: 'available' });
+    if (!res.deletedCount) return { ok: false, reason: 'not_available' };
     return { ok: true, type: 'remove-cell', removed: [boothNumber] };
   }
 
@@ -340,31 +392,41 @@ async function reset(boothNumber) {
 }
 
 /**
- * One-time, self-healing repair. The earlier "booth got bigger and bigger" bug
- * left stands 128 and 198 at half their artwork cell (their other halves were
- * consumed by the phantom that has since been reset away). Restore each to the
- * full cell if it is still at the expected half size. Idempotent: once a stand
- * is full, or has been changed to something else, it is left alone — so this is
- * safe to run on every boot and can be removed once it has run in production.
+ * TRUE one-shot repair for the two stands the "booth got bigger and bigger" bug
+ * left at half size (128, 198). It runs at most once ever — guarded by a marker
+ * in the `meta` collection — because a size-only heuristic that fired on every
+ * boot would clobber a LEGITIMATE later split (an admin splitting 128 into two
+ * 67×67 cells matches the old half-size test exactly, and the next restart would
+ * re-inflate 128 over its new sibling — re-creating the very overlap this fixes).
+ *
+ * On top of the one-shot flag it only acts on a stand that STILL matches the
+ * exact corrupted footprint, isn't part of a live split/merge, and has no
+ * sibling `-2` cell — belt and braces for the single first run.
  */
 async function repairHalvedStands() {
+  const meta = getDb().collection('meta');
+  if (await meta.findOne({ _id: 'repair-halved-stands-v1' })) return;   // already applied — never touch again
+
   const FIXES = [
-    { boothNumber: '128', geometry: { x: 2086, y: 834,  w: 67,  h: 134 }, sqm: 32, half: { w: 67,  h: 67 } },
-    { boothNumber: '198', geometry: { x: 1650, y: 1379, w: 134, h: 101 }, sqm: 48, half: { w: 67,  h: 101 } },
+    { boothNumber: '128', from: { x: 2086, y: 834,  w: 67, h: 67  }, to: { x: 2086, y: 834,  w: 67,  h: 134 }, sqm: 32 },
+    { boothNumber: '198', from: { x: 1650, y: 1379, w: 67, h: 101 }, to: { x: 1650, y: 1379, w: 134, h: 101 }, sqm: 48 },
   ];
+  const near = (g, t) => g && ['x', 'y', 'w', 'h'].every(k => Math.abs(g[k] - t[k]) < 3);
+
   for (const f of FIXES) {
     const b = await get(f.boothNumber);
-    if (!b || !b.geometry) continue;
-    const g = b.geometry;
-    if (Math.abs(g.w - f.half.w) > 3 || Math.abs(g.h - f.half.h) > 3) continue;   // not the expected half → skip
+    if (!b || !near(b.geometry, f.from)) continue;                       // not the exact corrupted half → leave alone
+    if (b.splitSnapshot || b.mergeSnapshot || b.splitFrom) continue;     // part of a live composite → not ours to touch
+    if (await get(`${f.boothNumber}-2`)) continue;                       // a real split sibling exists → leave alone
     const rate = (b.sqm && b.listPrice) ? b.listPrice / b.sqm : (config.ratePerSqm || 600);
     await col().updateOne(
       { showId: config.showId, boothNumber: f.boothNumber },
-      { $set: { geometry: f.geometry, sqm: f.sqm, listPrice: Math.round(f.sqm * rate),
+      { $set: { geometry: f.to, sqm: f.sqm, listPrice: Math.round(f.sqm * rate),
                 updatedAt: new Date(), updatedBy: 'repair:halved-stands' } }
     );
     console.log(`🔧 Repaired stand ${f.boothNumber} → full size (${f.sqm} m²)`);
   }
+  await meta.updateOne({ _id: 'repair-halved-stands-v1' }, { $set: { done: true, at: new Date() } }, { upsert: true });
 }
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal,

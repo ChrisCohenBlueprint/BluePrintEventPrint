@@ -27,9 +27,11 @@ async function start() {
   // Promote the configured bootstrap account to owner (team-management tier).
   // Idempotent, and safe on an already-seeded database.
   await users.ensureOwner(config.adminUser);
-  // Self-healing fix for the two stands the merge/split bug left at half size.
-  // Idempotent — no-ops once they are whole.
-  await booths.repairHalvedStands();
+  // One-shot fix for the two stands the merge/split bug left at half size.
+  // Wrapped so a transient DB hiccup during this cosmetic repair degrades to
+  // "not repaired this boot" rather than taking the whole server offline.
+  try { await booths.repairHalvedStands(); }
+  catch (e) { console.error('Halved-stand repair skipped:', e.message); }
 
   const app    = express();
   const server = http.createServer(app);

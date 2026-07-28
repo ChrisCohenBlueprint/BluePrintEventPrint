@@ -287,6 +287,7 @@ function register(io) {
       if (!r.ok) {
         const why = r.reason === 'not_adjacent' ? 'the stands are not next to each other'
                   : r.reason === 'not_available' ? 'both stands must be available'
+                  : r.reason === 'reset_first'   ? 'one of the stands was already merged or split — reset it first'
                   : r.reason;
         return { ok: false, error: `Could not merge — ${why}.` };
       }
@@ -302,7 +303,13 @@ function register(io) {
     socket.on('booth:split', requireAdmin(socket, 'booth:split', async ({ boothNumber, parts, axis }) => {
       const n = stand(boothNumber);
       const r = await booths.split(n, { parts, axis, actor: socket.data.user });
-      if (!r.ok) return { ok: false, error: `Could not split — ${r.reason}` };
+      if (!r.ok) {
+        const why = r.reason === 'reset_first' ? 'it was already merged or split — reset it first'
+                  : r.reason === 'not_available' ? 'the stand must be available'
+                  : r.reason === 'too_small' ? 'the stand is too small to divide that many ways'
+                  : r.reason;
+        return { ok: false, error: `Could not split — ${why}.` };
+      }
       track({ type: 'booth.split', boothNumber: n, socket, meta: { parts, axis, created: r.created } });
       await refresh(); broadcastState(io);
       log(io, `✂️ Stand ${escapeHtml(n)} split into ${r.created.length + 1} — added ${r.created.map(escapeHtml).join(', ')}`, 'admin');
@@ -316,6 +323,8 @@ function register(io) {
       if (!r.ok) {
         const why = r.reason === 'not_composite' ? 'this stand was not merged or split'
                   : r.reason === 'not_available' ? 'the stand must be available'
+                  : r.reason === 'child_booked'  ? 'one of its split cells has been booked — release it first'
+                  : r.reason === 'child_split'   ? 'one of its split cells was split again — reset that cell first'
                   : r.reason;
         return { ok: false, error: `Could not reset ${n} — ${why}.` };
       }
