@@ -179,7 +179,7 @@ function applyAdminVisual(el, status) {
   el.classList.add(`booth-${status}`);
 
   const id = el.getAttribute('data-booth');
-  let textNode = svgDoc.querySelector(`#admin-text-${id}`);
+  let textNode = svgDoc.querySelector(`[id="admin-text-${id}"]`);
   const company = dealOf(booths[id]).company;
 
   if (status !== 'available' && company) {
@@ -225,10 +225,10 @@ function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 // ─── Admin Select Booth ───────────────────────────────────────────────────────
 function selectAdminBooth(id) {
   if (selectedAdminId) {
-    svgDoc.querySelector(`[data-booth="${selectedAdminId}"]`)?.classList.remove('booth-selected');
+    svgDoc.querySelector(`[data-booth="${CSS.escape(selectedAdminId)}"]`)?.classList.remove('booth-selected');
   }
   selectedAdminId = id;
-  svgDoc.querySelector(`[data-booth="${id}"]`)?.classList.add('booth-selected');
+  svgDoc.querySelector(`[data-booth="${CSS.escape(id)}"]`)?.classList.add('booth-selected');
   renderAdminBoothAction(id);
 }
 
@@ -497,7 +497,7 @@ document.getElementById('export-all-csv').onclick = () => {
 
   let rows = Object.values(booths).filter(b => {
     const matchFilter = filter === 'all' || b.status === filter;
-    const matchSearch = !search || b.boothNumber.toLowerCase().includes(search) || (dealOf(b).company || '').toLowerCase().includes(search);
+    const matchSearch = !search || String(b.boothNumber).toLowerCase().includes(search) || (dealOf(b).company || '').toLowerCase().includes(search);
     return matchFilter && matchSearch;
   });
 
@@ -599,22 +599,41 @@ document.getElementById('clear-log').addEventListener('click', () => {
 });
 
 // ─── Socket Events ────────────────────────────────────────────────────────────
+let lastAdminSig = '';
 socket.on('state:full', (serverBooths) => {
+  const incoming = new Set(serverBooths.map(b => b.boothNumber));
   serverBooths.forEach(b => { booths[b.boothNumber] = b; });
+  // Reconcile: drop booths the server no longer has (merged secondary, reset
+  // cell) so the tools, tables and overview counts don't show ghosts.
+  Object.keys(booths).forEach(n => { if (!incoming.has(n)) delete booths[n]; });
+  if (selectedAdminId && !booths[selectedAdminId]) selectedAdminId = null;
+
   updateOverview();
   renderBookingsTable();
   populateToolDropdowns();
 
   // Tag on the first state if the floorplan tab is already open; otherwise
   // loadAdminSVG() tags when the tab is first shown.
-  if (adminSvgReady && !adminTagged) tagAdminBooths();
-  if (svgDoc) {
-    Object.values(booths).forEach(b => {
+  if (adminSvgReady && !adminTagged) { tagAdminBooths(); lastAdminSig = BoothMap.signature(serverBooths); return; }
+  if (svgDoc && adminTagged) {
+    // A split/merge/reset changes the plan's STRUCTURE; re-tag the whole map so
+    // new cells appear and removed ones disappear without a page reload.
+    const sig = BoothMap.signature(serverBooths);
+    if (sig !== lastAdminSig) { lastAdminSig = sig; retagAdminMap(); }
+    else Object.values(booths).forEach(b => {
       const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
       if (el) applyAdminVisual(el, b.status);
     });
   }
 });
+
+// Re-run the SVG↔booth mapping from a clean slate after a structural change.
+function retagAdminMap() {
+  if (!svgDoc) return;
+  BoothMap.clear(svgDoc);
+  adminTagged = false;
+  tagAdminBooths();
+}
 
 // Rejected holds, failed merges and denied actions used to disappear silently.
 socket.on('error:action', ({ message }) => adminToast(message || 'That action could not be completed.', 'error'));
@@ -625,7 +644,7 @@ socket.on('booth:updated', (b) => {
   updateOverview();
   renderBookingsTable();
   if (svgDoc) {
-    const el = svgDoc.querySelector(`[data-booth="${b.boothNumber}"]`);
+    const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
     if (el) applyAdminVisual(el, b.status);
   }
   if (selectedAdminId === b.boothNumber) renderAdminBoothAction(b.boothNumber);
@@ -636,13 +655,12 @@ socket.on('stats:updated', (stats) => {
 });
 
 socket.on('booth:consolidated', ({ secondary }) => {
+  // Drop the absorbed stand from the client map; the state:full that follows
+  // this event re-tags the map cleanly (removing its overlay, split box, number
+  // and size nodes together), so no ghost outline is left behind.
   delete booths[secondary];
   renderBookingsTable();
   populateToolDropdowns();
-  if (svgDoc) {
-    const el = svgDoc.querySelector(`[data-booth="${secondary}"]`);
-    if (el) el.style.visibility = 'hidden';
-  }
 });
 
 socket.on('viewers:count', (n) => {

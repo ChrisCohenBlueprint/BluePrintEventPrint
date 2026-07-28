@@ -158,9 +158,12 @@ function tagBooths() {
 // ─── Deep link: /floorplan?booth=412 ──────────────────────────────────────────
 // Lets sales send a customer straight to a stand, and gives campaign traffic a
 // trackable entry point.
+let deepLinkDone = false;
 function openDeepLink() {
+  if (deepLinkDone) return;             // only on first tag — not on every re-tag
   const n = new URLSearchParams(location.search).get('booth');
   if (!n || !booths[n]) return;
+  deepLinkDone = true;
   selectBooth(n);
   const el = svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -170,6 +173,7 @@ function openDeepLink() {
 const tooltip = document.getElementById('fp-tooltip');
 function showTooltip(e, n) {
   const b = booths[n];
+  if (!b) return;                       // stand was removed under a lingering handler
   document.getElementById('tt-label').textContent  = `Stand ${n}`;
   document.getElementById('tt-status').textContent = STATUS_LABEL[b.status] || cap(b.status);
   document.getElementById('tt-price').textContent  = b.status === 'available' && b.sqm ? `${b.sqm} m²` : '';
@@ -201,6 +205,16 @@ function selectBooth(n) {
   if (window.matchMedia('(pointer: coarse)').matches) {
     setTimeout(() => document.getElementById('booth-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
   }
+}
+
+// Captured once so the panel can be returned to its "Select a Stand" prompt if
+// the stand a visitor had open is removed under them (an admin reset/merge).
+const emptyPanelHTML = document.getElementById('booth-panel')?.innerHTML || '';
+function hideSelection() {
+  svgDoc?.querySelectorAll('.booth-selected').forEach(el => el.classList.remove('booth-selected'));
+  const panel = document.getElementById('booth-panel');
+  if (panel && emptyPanelHTML) { panel.innerHTML = emptyPanelHTML; if (window.lucide) lucide.createIcons(); }
+  hideSponsors();
 }
 
 // ─── Shortlist ────────────────────────────────────────────────────────────────
@@ -568,20 +582,42 @@ function initForm() {
 }
 
 // ─── Socket events ────────────────────────────────────────────────────────────
+let lastMapSig = '';
 socket.on('state:full', (rows) => {
+  const incoming = new Set(rows.map(b => b.boothNumber));
   rows.forEach(b => {
     const n = b.boothNumber;
     booths[n] = { ...(booths[n] || {}), ...b };
   });
+  // Reconcile: drop booths the server no longer has (a merged secondary, a
+  // reset cell). Left in place they'd keep rendering, stay clickable, and be
+  // counted in the availability totals until a full reload.
+  Object.keys(booths).forEach(n => { if (!incoming.has(n)) delete booths[n]; });
+  if (selectedId && !booths[selectedId]) { selectedId = null; hideSelection(); }
   stateReady = true;
 
   // First broadcast may arrive before the plan has finished downloading.
-  if (!tagged) { tagBooths(); return; }
+  if (!tagged) { tagBooths(); lastMapSig = BoothMap.signature(rows); return; }
 
-  rows.forEach(b => applyVisual(b.boothNumber));
+  // A split/merge/reset changes the STRUCTURE (booths added/removed, geometry
+  // moved), which one-shot tagging would never reflect without a reload. Detect
+  // it via a structural fingerprint and re-tag the whole map; otherwise just
+  // repaint statuses.
+  const sig = BoothMap.signature(rows);
+  if (sig !== lastMapSig) { lastMapSig = sig; retagMap(); }
+  else rows.forEach(b => applyVisual(b.boothNumber));
+
   if (selectedId) renderPanel(selectedId);
   updateStatsStrip();
 });
+
+// Re-run the SVG↔booth mapping from a clean slate after a structural change.
+function retagMap() {
+  if (!svgDoc) return;
+  BoothMap.clear(svgDoc);
+  tagged = false;
+  tagBooths();   // re-attaches overlays/handlers and repaints every booth
+}
 
 socket.on('stats:updated', (stats) => {
   if (stats.availableBooths != null) document.getElementById('avail-count').textContent = stats.availableBooths;

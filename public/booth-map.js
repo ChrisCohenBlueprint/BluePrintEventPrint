@@ -64,6 +64,11 @@
 
     var artwork = Array.prototype.slice.call(svgDoc.querySelectorAll(ARTWORK_SELECTOR));
     var geoms = artwork.map(rectGeom);
+    // Largest legitimate stand dimension, used to reject absurdly-large geometry
+    // that has no artwork cell to clamp against.
+    var MAX_DIM = 0;
+    geoms.forEach(function (g) { if (g) MAX_DIM = Math.max(MAX_DIM, g.w, g.h); });
+    MAX_DIM = MAX_DIM || 1000;
 
     // Work out the split groups up front. A split stand becomes several cells:
     // the secondary cells each carry splitFrom (their parent's number) + axis,
@@ -81,7 +86,10 @@
 
     booths.forEach(function (b) {
       var g = b.geometry;
-      if (!g || typeof g.x !== 'number') { unplaced.push(b); return; }
+      // Reject missing or non-positive geometry: a zero/negative rect renders
+      // nothing and takes no clicks, yet would otherwise count as "placed" and
+      // hide a real problem behind the all-clear.
+      if (!g || typeof g.x !== 'number' || !(g.w > 0) || !(g.h > 0)) { unplaced.push(b); return; }
       var c = centre(g);
 
       // Prefer an artwork rectangle of the same size and place — that booth can
@@ -101,14 +109,40 @@
         if (opts.onTag) opts.onTag(el, b.boothNumber, b);
         return;
       }
+      // Two booths claiming the exact same rectangle (a data duplicate): the
+      // first won it above; warn so the overlap is diagnosable rather than a
+      // silently unclickable stand.
+      if (exactIdx > -1 && global.console) {
+        console.warn('BoothMap: stand ' + b.boothNumber + ' overlaps an already-placed stand at the same geometry');
+      }
 
       // Otherwise this booth is part of a block the artwork draws as one shape.
       // Insert a transparent hit area over just its share of that shape.
+      var host = hostIdx > -1 ? artwork[hostIdx] : null;
+      // Clamp a ballooned rect to the artwork cell it sits in, so corrupt
+      // oversized geometry can't paint a giant opaque, click-swallowing block
+      // over its neighbours. (The server now prevents ballooning, but the
+      // client must not render corruption if it ever arrives.) A legitimate
+      // split cell is a fraction of its host, so it is never clamped.
+      var ox = g.x, oy = g.y, ow = g.w, oh = g.h;
+      if (host) {
+        var hb = geoms[hostIdx];
+        if (ow > hb.w * 1.5 || oh > hb.h * 1.5) {
+          ox = hb.x; oy = hb.y; ow = hb.w; oh = hb.h;
+          if (global.console) console.warn('BoothMap: stand ' + b.boothNumber + ' has oversized geometry — clamped to its artwork cell');
+        }
+      } else if (ow > MAX_DIM * 1.5 || oh > MAX_DIM * 1.5) {
+        // Absurdly large and no cell to clamp against — refuse to paint a giant
+        // opaque, click-swallowing block. Surfaces in the unplaced warning.
+        if (global.console) console.warn('BoothMap: stand ' + b.boothNumber + ' has oversized geometry with no artwork cell — skipped');
+        unplaced.push(b);
+        return;
+      }
       var overlay = document.createElementNS(SVG_NS, 'rect');
-      overlay.setAttribute('x', g.x);
-      overlay.setAttribute('y', g.y);
-      overlay.setAttribute('width', g.w);
-      overlay.setAttribute('height', g.h);
+      overlay.setAttribute('x', ox);
+      overlay.setAttribute('y', oy);
+      overlay.setAttribute('width', ow);
+      overlay.setAttribute('height', oh);
       overlay.setAttribute('data-booth', b.boothNumber);
       overlay.setAttribute('data-overlay', '1');
       overlay.setAttribute('fill', 'transparent');
@@ -118,8 +152,10 @@
       var isPrimarySplit = Object.prototype.hasOwnProperty.call(splitAxisByPrimary, b.boothNumber);
       var isSplitCell = !!b.splitFrom || isPrimarySplit;
       var splitAxis = b.splitAxis || splitAxisByPrimary[b.boothNumber] || 'vertical';
+      // A split overlay doubles as the mask hiding the artwork's stale baked
+      // number/size, so its fill must stay opaque even when shortlisted.
+      if (isSplitCell && overlay.classList) overlay.classList.add('booth-split-cell');
 
-      var host = hostIdx > -1 ? artwork[hostIdx] : null;
       // Split cells go to the very end of the SVG, ABOVE the artwork's baked-in
       // number and size for the original (now-divided) stand. The overlay's own
       // status fill (white when available) then hides those stale figures — the
@@ -160,6 +196,7 @@
         box.setAttribute('stroke', '#000');
         box.setAttribute('stroke-width', '1.1');
         box.setAttribute('stroke-linejoin', 'miter');
+        box.setAttribute('data-split-box', b.boothNumber);
         box.style.pointerEvents = 'none';
         overlay.parentNode.insertBefore(box, overlay.nextSibling);
 
@@ -319,5 +356,49 @@
     }
   }
 
-  global.BoothMap = { attach: attach, rectGeom: rectGeom, fitLabel: fitLabel };
+  /**
+   * Remove everything attach() added, so it can be re-run cleanly after a
+   * structural change (split/merge/reset) — otherwise the map only reflects
+   * such changes after a full page reload, and stale overlays/handlers linger.
+   */
+  function clear(svgDoc) {
+    var added = '[data-overlay],[data-split-box],[data-split-label],[data-split-size]';
+    Array.prototype.forEach.call(svgDoc.querySelectorAll(added), function (n) {
+      if (n.parentNode) n.parentNode.removeChild(n);
+    });
+    // Painted company / exhibitor name nodes.
+    Array.prototype.forEach.call(svgDoc.querySelectorAll('text'), function (t) {
+      var id = t.getAttribute('id') || '';
+      if ((id.indexOf('text-booth-') === 0 || id.indexOf('admin-text-') === 0) && t.parentNode) {
+        t.parentNode.removeChild(t);
+      }
+    });
+    // Artwork rects tagged directly (exact matches) carry data-booth AND
+    // hover/click listeners; clone-replace strips the listeners and we reset the
+    // state classes, so a re-attach starts from a clean slate with no doubles.
+    Array.prototype.forEach.call(svgDoc.querySelectorAll('[data-booth]:not([data-overlay])'), function (el) {
+      var fresh = el.cloneNode(true);
+      fresh.removeAttribute('data-booth');
+      ['booth-interactive', 'booth-available', 'booth-sold', 'booth-held', 'booth-selected', 'booth-shortlisted']
+        .forEach(function (c) { fresh.classList.remove(c); });
+      if (el.parentNode) el.parentNode.replaceChild(fresh, el);
+    });
+  }
+
+  /**
+   * A cheap fingerprint of the STRUCTURAL state — each booth's number and
+   * rounded geometry. If it differs between two broadcasts, a split/merge/reset
+   * reshaped the plan and the map must be re-tagged; if it matches, only
+   * statuses changed and a lightweight repaint suffices.
+   */
+  function signature(booths) {
+    return booths.filter(function (b) { return b && b.geometry; })
+      .map(function (b) {
+        var g = b.geometry;
+        return b.boothNumber + ':' + Math.round(g.x) + ',' + Math.round(g.y) + ',' + Math.round(g.w) + ',' + Math.round(g.h);
+      })
+      .sort().join('|');
+  }
+
+  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel };
 })(window);

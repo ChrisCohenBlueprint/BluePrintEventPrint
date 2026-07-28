@@ -344,6 +344,10 @@ body {
   stroke: #16a34a !important; stroke-width: 3px !important;
   fill: rgba(74,222,128,.35) !important;
 }
+/* A split cell's overlay is an OPAQUE mask over the artwork's stale baked
+   number/size; a translucent shortlist fill would let those figures bleed
+   through, so keep it solid. */
+.booth-shortlisted.booth-split-cell { fill: #86efac !important; }
 
 /* ─── Consent bar ──────────────────────────────────────────────────────────── */
 .consent-bar {
