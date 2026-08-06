@@ -1,5 +1,7 @@
 const { getDb } = require('../db');
 const config    = require('../config');
+const fs        = require('fs');
+const path      = require('path');
 
 const col = () => getDb().collection('booths');
 
@@ -575,5 +577,129 @@ async function repairHalvedStands() {
   await meta.updateOne({ _id: 'repair-halved-stands-v1' }, { $set: { done: true, at: new Date() } }, { upsert: true });
 }
 
+/**
+ * ONE-SHOT: rebuild the plan from the original SVG extraction, removing every
+ * split cell and merge so the layout matches the artwork again. Existing
+ * bookings are carried onto the matching original stand by position (the same
+ * geometry match reseed.js uses), and the admin-set shown-number and sponsor
+ * flags ride along too. A booking that sat on a split cell with no original
+ * equivalent is dropped (its shape no longer exists) — that's the intended
+ * trade-off of collapsing the plan back to the original.
+ *
+ * Guarded by a meta flag so it runs exactly once, and snapshots the pre-reset
+ * booths to a `booths_snapshots` collection first (Render's filesystem is
+ * ephemeral, so a DB snapshot is the recovery path). Bump the version to run
+ * another reset later.
+ */
+async function restoreOriginalLayout() {
+  const db = getDb();
+  const FLAG = 'restore-original-layout-v1';
+  const meta = db.collection('meta');
+  if (await meta.findOne({ _id: FLAG })) return { skipped: 'already-run' };
+
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'booth_data.json'), 'utf8'));
+  } catch (e) {
+    console.warn('restoreOriginalLayout: cannot read booth_data.json —', e.message);
+    return { skipped: 'no-source' };
+  }
+  const fresh = Object.values(raw);
+  if (!fresh.length) return { skipped: 'empty-source' };
+
+  const oldBooths = await col().find({ showId: config.showId }).toArray();
+
+  const TOL = 3;
+  const centre    = g => ({ x: g.x + g.w / 2, y: g.y + g.h / 2 });
+  const fc        = f => centre({ x: f.x, y: f.y, w: f.w, h: f.h });
+  const near      = (a, b) => Math.abs(a.x - b.x) < TOL && Math.abs(a.y - b.y) < TOL;
+  const sizeClose = (a, b) => Math.abs(a.w - b.w) < TOL * 4 && Math.abs(a.h - b.h) < TOL * 4;
+  const hasState  = b => { const a = b.assignment || {}; return b.status !== 'available' || a.company || a.actualPrice || a.notes || (b.clicks || 0) > 0; };
+  // Carry a stand's data forward if it holds a booking OR an admin override.
+  const hasCarry  = b => hasState(b) || b.displayNumber || b.sponsored;
+
+  // Match each carried old stand to the nearest same-size original stand.
+  const matches = [];
+  for (const o of oldBooths.filter(hasCarry)) {
+    if (!o.geometry) continue;
+    const oc = centre(o.geometry);
+    const cands = fresh
+      .filter(f => near(fc(f), oc) && sizeClose(o.geometry, { w: f.w, h: f.h }))
+      .map(f => ({ f, d: Math.abs(fc(f).x - oc.x) + Math.abs(fc(f).y - oc.y) }))
+      .sort((p, q) => p.d - q.d);
+    if (cands.length) matches.push({ old: o, next: cands[0].f, d: cands[0].d });
+  }
+  // One original stand can only receive one old booking — keep the nearest.
+  const byNew = new Map();
+  for (const m of matches) {
+    const prev = byNew.get(m.next.boothId);
+    if (!prev || m.d < prev.d) byNew.set(m.next.boothId, m);
+  }
+  const finalMatches = [...byNew.values()];
+  const toNum = f => String(f.boothId).replace(/^booth-/, '');
+  const remap = new Map(finalMatches.map(m => [m.old.boothNumber, toNum(m.next)]));
+
+  // Snapshot before destroying anything.
+  try {
+    await db.collection('booths_snapshots').insertOne({
+      showId: config.showId, reason: FLAG, at: new Date(), count: oldBooths.length, booths: oldBooths });
+  } catch (e) { console.warn('restoreOriginalLayout: snapshot failed —', e.message); }
+
+  // Replace the whole set with the original extraction.
+  const now = new Date();
+  await col().deleteMany({ showId: config.showId });
+  const docs = fresh.map(f => ({
+    showId: config.showId,
+    boothNumber: toNum(f),
+    svgElementId: f.boothId,
+    geometry: { x: f.x, y: f.y, w: f.w, h: f.h },
+    sqm: f.sqm, sqmSource: 'estimated', listPrice: f.price,
+    status: f.status,
+    assignment: { company: null, contactId: null, actualPrice: null, notes: '' },
+    clicks: 0, createdAt: now, updatedAt: now, updatedBy: 'restore-original',
+  }));
+  await col().insertMany(docs);
+  const freshNums = new Set(docs.map(d => d.boothNumber));
+
+  // Carry bookings + admin overrides onto their matched stands.
+  for (const m of finalMatches) {
+    const a = m.old.assignment || {};
+    const $set = {
+      status: m.old.status,
+      'assignment.company': a.company ?? null,
+      'assignment.contactId': a.contactId ?? null,
+      'assignment.actualPrice': a.actualPrice ?? null,
+      'assignment.notes': a.notes ?? '',
+      clicks: m.old.clicks || 0,
+      updatedAt: now, updatedBy: 'restore-original:carried',
+    };
+    if (m.old.displayNumber) $set.displayNumber = m.old.displayNumber;
+    if (m.old.sponsored)     $set.sponsored = true;
+    await col().updateOne({ showId: config.showId, boothNumber: toNum(m.next) }, { $set });
+  }
+
+  // Re-point holds: move a matched booking's hold, drop one whose stand is gone.
+  const holds = await db.collection('holds').find({ showId: config.showId }).toArray();
+  for (const h of holds) {
+    const to = remap.get(h.boothNumber);
+    if (to && to !== h.boothNumber) await db.collection('holds').updateOne({ _id: h._id }, { $set: { boothNumber: to } });
+    else if (!to && !freshNums.has(h.boothNumber)) await db.collection('holds').deleteOne({ _id: h._id });
+  }
+
+  // Re-point lead stand references through the same map; drop refs now gone.
+  const inqs = await db.collection('inquiries').find({ showId: config.showId }).toArray();
+  for (const q of inqs) {
+    if (!Array.isArray(q.boothsOfInterest) || !q.boothsOfInterest.length) continue;
+    const mapped = q.boothsOfInterest.map(n => remap.get(n) || n).filter(n => freshNums.has(n));
+    if (mapped.join(',') !== q.boothsOfInterest.join(','))
+      await db.collection('inquiries').updateOne({ _id: q._id }, { $set: { boothsOfInterest: mapped } });
+  }
+
+  await meta.insertOne({ _id: FLAG, at: new Date(), inserted: docs.length, carried: finalMatches.length });
+  console.log(`✔ restoreOriginalLayout: ${docs.length} original stands restored, ${finalMatches.length} booking(s)/override(s) carried, splits/merges removed`);
+  return { ok: true, inserted: docs.length, carried: finalMatches.length };
+}
+
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   setDisplayNumber, setSponsored, incrementClicks, stats, consolidate, split, reset, repairHalvedStands };
+                   setDisplayNumber, setSponsored, incrementClicks, stats, consolidate, split, reset,
+                   repairHalvedStands, restoreOriginalLayout };

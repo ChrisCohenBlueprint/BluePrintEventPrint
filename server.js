@@ -41,6 +41,12 @@ async function start() {
   try { await booths.repairHalvedStands(); }
   catch (e) { console.error('Halved-stand repair skipped:', e.message); }
 
+  // One-shot: collapse the plan back to the original SVG extraction (splits and
+  // merges removed), carrying bookings + admin overrides onto the matching
+  // original stand. Guarded by its own meta flag, so it runs exactly once.
+  try { await booths.restoreOriginalLayout(); }
+  catch (e) { console.error('Original-layout restore skipped:', e.message); }
+
   const app    = express();
   const server = http.createServer(app);
 
