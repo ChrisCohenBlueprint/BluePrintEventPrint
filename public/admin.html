@@ -217,6 +217,28 @@
 
     <!-- ═══ SECTION: BOOKINGS ════════════════════════════════════════════════ -->
     <section class="admin-section" id="section-bookings">
+      <!-- Pricing & unit settings -->
+      <div class="settings-card">
+        <div class="settings-block">
+          <label class="settings-label">Price per unit</label>
+          <div class="settings-rate-row">
+            <span class="rate-current" id="rate-current">€—</span>
+            <input type="number" id="rate-input" class="admin-input" placeholder="new €/unit, e.g. 600" min="1" step="1">
+            <input type="password" id="rate-password" class="admin-input" placeholder="Your password" autocomplete="current-password">
+            <button type="button" id="rate-save" class="admin-btn success">Update rate</button>
+          </div>
+          <p class="settings-hint">Recalculates every stand's list price (size × rate) across the board. Negotiated deal prices are left unchanged. Requires your password.</p>
+        </div>
+        <div class="settings-block">
+          <label class="settings-label">Area unit</label>
+          <div class="unit-toggle">
+            <button type="button" id="unit-m"  class="admin-btn">m²</button>
+            <button type="button" id="unit-ft" class="admin-btn">ft²</button>
+          </div>
+          <p class="settings-hint">Switches the unit shown across the tool. A label only — it does not convert existing numbers.</p>
+        </div>
+      </div>
+
       <div class="bookings-toolbar">
         <div style="display:flex; gap:12px; flex:1">
           <input type="text" id="bookings-search" class="admin-input" placeholder="🔍  Search by company or stand…">
@@ -234,7 +256,7 @@
           <thead>
             <tr>
               <th>Stand</th>
-              <th>Size (m²)</th>
+              <th>Size (<span class="unit-label">m²</span>)</th>
               <th>Listed Price</th>
               <th>Deal Price</th>
               <th>Status</th>

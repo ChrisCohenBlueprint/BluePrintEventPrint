@@ -53,7 +53,7 @@ function toPublic(s) {
  * Ranking uses price server-side; the returned objects carry no price.
  */
 async function recommend(sqm) {
-  const rate = config.ratePerSqm || 600;
+  const rate = await require('./settings').rate();   // live €/unit rate, admin-editable
   const target = Math.max(1, Number(sqm) || 0) * rate;
 
   const list = await allActive();

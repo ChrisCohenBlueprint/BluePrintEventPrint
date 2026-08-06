@@ -51,6 +51,10 @@ let shortlist   = [];      // boothNumbers the visitor wants to enquire about
 // real identity. Identity (n / boothNumber) stays the key for lookups + emits.
 const shownN = (n) => (booths[n] && booths[n].displayNumber) || n;
 
+// Area unit label (m²/ft²), pushed from the server. A label only — no price or
+// numeric conversion reaches the public client.
+let UNIT = 'm²';
+
 // Floorplan (title) sponsor: a brand colour that fills sponsored stands and
 // shows as a "Sponsored" legend swatch. Pushed from the server on connect and
 // whenever an admin changes it.
@@ -198,7 +202,7 @@ function showTooltip(e, n) {
   if (!b) return;                       // stand was removed under a lingering handler
   document.getElementById('tt-label').textContent  = `Stand ${shownN(n)}`;
   document.getElementById('tt-status').textContent = STATUS_LABEL[b.status] || cap(b.status);
-  document.getElementById('tt-price').textContent  = b.status === 'available' && b.sqm ? `${b.sqm} m²` : '';
+  document.getElementById('tt-price').textContent  = b.status === 'available' && b.sqm ? `${b.sqm} ${UNIT}` : '';
   tooltip.classList.remove('hidden');
   moveTooltip(e);
 }
@@ -524,7 +528,7 @@ function renderPanel(n) {
         <div class="stand-badge badge-${esc(status)}">${esc(STATUS_LABEL[status] || cap(status))}</div>
       </div>
       <div class="stand-stats">
-        <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' m²' : '—'}</span></div>
+        <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' ' + UNIT : '—'}</span></div>
         <div class="stand-stat"><span class="stand-stat-lbl">Status</span><span class="stand-stat-val">${esc(STATUS_LABEL[status] || cap(status))}</span></div>
       </div>
       <div class="stand-taken-notice">
@@ -542,7 +546,7 @@ function renderPanel(n) {
       <div class="stand-badge badge-available">Available</div>
     </div>
     <div class="stand-stats">
-      <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' m²' : '—'}</span></div>
+      <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' ' + UNIT : '—'}</span></div>
       <div class="stand-stat"><span class="stand-stat-lbl">Viewing now</span><span class="stand-stat-val">${esc(b.viewers || 0)}</span></div>
       <div class="stand-stat"><span class="stand-stat-lbl">Interest</span><span class="stand-stat-val" style="color:var(--orange)">${esc(b.interest || 0)}</span></div>
     </div>
@@ -655,6 +659,16 @@ socket.on('viewers:count', (n) => {
 });
 
 socket.on('error:action', ({ message }) => console.warn(message));
+
+// Area unit label pushed from the server (m²/ft²). Update the static labels and
+// re-render the open panel + stats so the unit changes live.
+socket.on('settings', (s) => {
+  if (!s || !s.unit) return;
+  UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
+  document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
+  if (selectedId) renderPanel(selectedId);
+  updateStatsStrip();
+});
 
 socket.on('floorplan-sponsor', (s) => {
   sponsorColor = (s && s.color) || '';

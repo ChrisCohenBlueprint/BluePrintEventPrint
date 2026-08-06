@@ -245,6 +245,10 @@ function selectAdminBooth(id) {
 // Commercial fields now live under `assignment` on the booth document.
 const dealOf = (b) => (b && b.assignment) || {};
 
+// Show-level settings pushed from the server: area unit (m²/ft², a label only)
+// and the €/unit rate. Both update live via the 'settings' socket event.
+let UNIT = 'm²', RATE = null;
+
 // The number to SHOW for a stand: the admin-set override if present, else the
 // real identity. Identity (boothNumber) is what all lookups/emits still use.
 const shownB = (b) => (b && b.displayNumber) || (b && b.boothNumber) || '';
@@ -273,7 +277,7 @@ function renderAdminBoothAction(n) {
 
   document.getElementById('aba-id').textContent      = `Stand ${shownB(b)}`;
   document.getElementById('aba-status').textContent  = cap(b.status);
-  document.getElementById('aba-sqm').textContent     = `${b.sqm} m²`;
+  document.getElementById('aba-sqm').textContent     = `${b.sqm} ${UNIT}`;
   document.getElementById('aba-price').textContent   = `€${(b.listPrice || 0).toLocaleString()}`;
   document.getElementById('aba-company').textContent = d.company || '—';
   document.getElementById('aba-viewers').textContent = b.viewers || 0;
@@ -374,7 +378,7 @@ function renderBookingsTable() {
     strong.textContent = b.displayNumber ? `Stand ${b.displayNumber} (${n})` : `Stand ${n}`;
     stand.appendChild(strong);
 
-    cell(tr).textContent = `${b.sqm} m²`;
+    cell(tr).textContent = `${b.sqm} ${UNIT}`;
     cell(tr).textContent = `€${(b.listPrice || 0).toLocaleString()}`;
 
     const priceTd = cell(tr);
@@ -497,7 +501,7 @@ document.getElementById('bookings-filter').addEventListener('change', renderBook
 // ─── CSV Export ───────────────────────────────────────────────────────────────
 function downloadCSV(dataArray, filename) {
   if (!dataArray || dataArray.length === 0) return;
-  const headers = ['Stand', 'Size (m2)', 'Listed Price (EUR)', 'Deal Price (EUR)', 'Status', 'Company', 'Notes', 'Live Viewers', 'Total Clicks'];
+  const headers = ['Stand', `Size (${UNIT})`, 'Listed Price (EUR)', 'Deal Price (EUR)', 'Status', 'Company', 'Notes', 'Live Viewers', 'Total Clicks'];
   // Neutralise spreadsheet formula injection: company/notes are free text (often
   // pasted from a customer enquiry). A value like =HYPERLINK(...) or =cmd|... is
   // evaluated when the CSV is opened in Excel/Sheets, so prefix any cell starting
@@ -591,7 +595,7 @@ function populateToolDropdowns() {
     const cur = moveTo.value;
     const avail = all.filter(b => b.status === 'available');
     moveTo.innerHTML = '<option value="">Select…</option>' +
-      avail.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))} — ${b.sqm} m²</option>`).join('');
+      avail.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))} — ${b.sqm} ${UNIT}</option>`).join('');
     moveTo.value = cur;
   }
   // Shown Number: every stand, labelled with its current shown number and, when
@@ -706,7 +710,7 @@ function updateMovePreview() {
   el.innerHTML =
     `<span class="mv-dir">${dir}</span> ` +
     `<b>${esc(dealFrom.company || 'Booking')}</b>: ` +
-    `${from.sqm} m² → <b>${to.sqm} m²</b> · ` +
+    `${from.sqm} ${UNIT} → <b>${to.sqm} ${UNIT}</b> · ` +
     `${eur(dealFrom.actualPrice ?? from.listPrice)} → <b>${eur(newCost)}</b>` +
     (rate != null ? ` <span class="mv-rate">(rate kept)</span>` : ``);
   el.classList.remove('hidden');
@@ -723,10 +727,10 @@ document.getElementById('move-form')?.addEventListener('submit', e => {
   if (from === to) return adminToast('Pick two different stands.', 'error');
   const co = dealOf(booths[from]).company || 'this booking';
   const fSqm = booths[from]?.sqm, tSqm = booths[to]?.sqm;
-  if (!confirm(`Move ${co} from Stand ${from} (${fSqm} m²) to Stand ${to} (${tSqm} m²)? Stand ${from} will be freed.`)) return;
+  if (!confirm(`Move ${co} from Stand ${from} (${fSqm} ${UNIT}) to Stand ${to} (${tSqm} ${UNIT})? Stand ${from} will be freed.`)) return;
   socket.emit('booth:move', { from, to }, (res) => {
     if (res && res.ok) {
-      adminToast(`${res.company || 'Booking'} moved to Stand ${to} — now ${res.toSqm} m².`, 'ok');
+      adminToast(`${res.company || 'Booking'} moved to Stand ${to} — now ${res.toSqm} ${UNIT}.`, 'ok');
       document.getElementById('move-from').value = '';
       document.getElementById('move-to').value = '';
       updateMovePreview();
@@ -855,6 +859,39 @@ socket.on('floorplan-sponsor', (s) => {
   });
 });
 
+// Show settings (area unit + €/unit rate). Re-render everything that prints a
+// size or a rate so the label/price updates live.
+socket.on('settings', (s) => {
+  if (s && s.unit) UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
+  if (s && s.ratePerSqm != null) RATE = s.ratePerSqm;
+  document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
+  const rf = document.getElementById('rate-current'); if (rf && RATE != null) rf.textContent = `€${RATE}/${UNIT}`;
+  const uBtnM = document.getElementById('unit-m'), uBtnF = document.getElementById('unit-ft');
+  if (uBtnM && uBtnF) { uBtnM.classList.toggle('active', UNIT === 'm²'); uBtnF.classList.toggle('active', UNIT === 'ft²'); }
+  updateOverview(); renderBookingsTable(); populateToolDropdowns();
+});
+
+// ─── Rate + unit settings ─────────────────────────────────────────────────────
+document.getElementById('rate-save')?.addEventListener('click', () => {
+  const rate = Number(document.getElementById('rate-input').value);
+  const password = document.getElementById('rate-password').value;
+  if (!Number.isFinite(rate) || rate <= 0) return adminToast('Enter a valid rate (a positive number).', 'error');
+  if (!password) return adminToast('Enter your password to change the rate.', 'error');
+  if (!confirm(`Set the rate to €${rate}/${UNIT} and reprice every stand's list price? Negotiated deals are kept.`)) return;
+  socket.emit('settings:set-rate', { rate, password }, (res) => {
+    if (res && res.ok) {
+      adminToast(`Rate set to €${res.ratePerSqm}/${UNIT} — ${res.repriced} stands repriced.`, 'ok');
+      document.getElementById('rate-input').value = '';
+      document.getElementById('rate-password').value = '';
+    } else adminToast((res && res.error) || 'Could not update the rate.', 'error');
+  });
+});
+['m', 'ft'].forEach(u => document.getElementById(`unit-${u}`)?.addEventListener('click', () => {
+  socket.emit('settings:set-unit', { unit: u }, (res) => {
+    if (!(res && res.ok)) adminToast((res && res.error) || 'Could not change the unit.', 'error');
+  });
+}));
+
 // Rejected holds, failed merges and denied actions used to disappear silently.
 socket.on('error:action', ({ message }) => adminToast(message || 'That action could not be completed.', 'error'));
 socket.on('error:auth',   ({ message }) => adminToast(message || 'Administrator access required.', 'error'));
@@ -911,12 +948,12 @@ function updateOverview() {
   const heldPct = totalSqm > 0 ? Math.round((heldSqm / totalSqm) * 100) : 0;
 
   el('kpi-earned').textContent = `€${earnedRev.toLocaleString()}`;
-  el('kpi-earned-sqm').textContent = `${soldSqm.toLocaleString()} m² sold`;
-  el('kpi-avail-sqm').textContent = `${availSqm.toLocaleString()} m²`;
+  el('kpi-earned-sqm').textContent = `${soldSqm.toLocaleString()} ${UNIT} sold`;
+  el('kpi-avail-sqm').textContent = `${availSqm.toLocaleString()} ${UNIT}`;
   el('kpi-avail-rev').textContent = `€${availRev.toLocaleString()} potential`;
-  el('kpi-held-sqm').textContent = `${heldSqm.toLocaleString()} m²`;
+  el('kpi-held-sqm').textContent = `${heldSqm.toLocaleString()} ${UNIT}`;
   el('kpi-held-count').textContent = `${held.length} stands`;
-  el('kpi-total-sqm').textContent = `${totalSqm.toLocaleString()} m²`;
+  el('kpi-total-sqm').textContent = `${totalSqm.toLocaleString()} ${UNIT}`;
   el('kpi-total-booths').textContent = `${all.length} stands`;
   el('fill-pct').textContent = `${fillPct}%`;
   el('fill-bar-sold').style.width = `${soldPct}%`;
@@ -929,12 +966,12 @@ function updateOverview() {
 
 function updateOverviewFromStats(s) {
   el('kpi-earned').textContent = `€${s.earnedRev.toLocaleString()}`;
-  el('kpi-earned-sqm').textContent = `${s.soldSqm.toLocaleString()} m² sold`;
-  el('kpi-avail-sqm').textContent = `${s.availSqm.toLocaleString()} m²`;
+  el('kpi-earned-sqm').textContent = `${s.soldSqm.toLocaleString()} ${UNIT} sold`;
+  el('kpi-avail-sqm').textContent = `${s.availSqm.toLocaleString()} ${UNIT}`;
   el('kpi-avail-rev').textContent = `€${s.availRev.toLocaleString()} potential`;
-  el('kpi-held-sqm').textContent = `${s.heldSqm.toLocaleString()} m²`;
+  el('kpi-held-sqm').textContent = `${s.heldSqm.toLocaleString()} ${UNIT}`;
   el('kpi-held-count').textContent = `${s.heldBooths} stands`;
-  el('kpi-total-sqm').textContent = `${s.totalSqm.toLocaleString()} m²`;
+  el('kpi-total-sqm').textContent = `${s.totalSqm.toLocaleString()} ${UNIT}`;
   el('kpi-total-booths').textContent = `${s.totalBooths} stands`;
   const pct = s.totalSqm > 0 ? Math.round(((s.soldSqm + s.heldSqm) / s.totalSqm) * 100) : 0;
   const sold = s.totalSqm > 0 ? Math.round((s.soldSqm / s.totalSqm) * 100) : 0;

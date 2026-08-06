@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const config    = require('../config');
 const booths    = require('../models/booths');
 const sponsors  = require('../models/sponsors');
+const settings  = require('../models/settings');
+const users     = require('../models/users');
 const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
 const { track } = require('../services/tracking');
@@ -438,6 +440,31 @@ function register(io) {
       return { ok: true, ...r };
     }));
 
+    // Change the €/unit rate. Password-gated (re-enter the admin's own login
+    // password), because it reprices every stand's list price across the board.
+    socket.on('settings:set-rate', requireAdmin(socket, 'settings:set-rate', async ({ rate, password }) => {
+      const account = await users.findByUsername(socket.data.user);   // full doc incl. passwordHash
+      if (!account || !users.verifyPassword(String(password || ''), account.passwordHash)) {
+        users.absorbPassword(String(password || ''));          // constant-time on the failure path
+        return { ok: false, error: 'Password incorrect — rate not changed.' };
+      }
+      const saved = await settings.setRate(rate);
+      if (!saved.ok) return { ok: false, error: 'Enter a valid rate (a positive number).' };
+      const rep = await booths.recomputeListPrices(saved.ratePerSqm, { actor: socket.data.user });
+      await refresh(); broadcastState(io);
+      io.to(ADMIN_ROOM).emit('settings', { ratePerSqm: saved.ratePerSqm });
+      log(io, `💶 Rate set to €${saved.ratePerSqm}/unit — ${rep.repriced || 0} stands repriced`, 'admin');
+      return { ok: true, ratePerSqm: saved.ratePerSqm, repriced: rep.repriced };
+    }));
+
+    // Switch the area unit (m² ↔ ft²). A display label only — no numbers change.
+    socket.on('settings:set-unit', requireAdmin(socket, 'settings:set-unit', async ({ unit }) => {
+      const saved = await settings.setUnit(unit);
+      io.emit('settings', { unit: saved.unit });               // public: label only
+      log(io, `📐 Area unit set to ${saved.unit === 'ft' ? 'ft²' : 'm²'}`, 'admin');
+      return { ok: true, unit: saved.unit };
+    }));
+
     // demo:reset is gone. It wiped all 272 booths and was reachable from any
     // anonymous browser console.
 
@@ -466,6 +493,11 @@ function register(io) {
               totalSqm: s.totalSqm, availSqm: s.availSqm });
 
         socket.emit('floorplan-sponsor', await sponsors.getFloorplanSponsor());
+
+        // Unit is a harmless display label (public). The €/unit rate is
+        // admin-only: public sqm × rate would reveal list prices.
+        const st = await settings.get();
+        socket.emit('settings', { unit: st.unit, ratePerSqm: isAdmin ? st.ratePerSqm : undefined });
 
         io.emit('viewers:count', connections);
         socket.emit('ready');

@@ -551,6 +551,19 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .partners-card p { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-bottom: 16px; max-width: 70ch; }
 .partner-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .partner-form .admin-input { padding: 8px 11px; font-size: 12.5px; background: var(--bg); flex: 1; min-width: 150px; }
+/* Pricing & unit settings (Bookings) */
+.settings-card { display: flex; flex-wrap: wrap; gap: 28px; background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px 20px; margin-bottom: 18px; }
+.settings-block { flex: 1; min-width: 260px; }
+.settings-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 8px; }
+.settings-rate-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-rate-row .admin-input { flex: 1; min-width: 120px; padding: 8px 11px; font-size: 13px; background: var(--bg); }
+.rate-current { font-size: 18px; font-weight: 700; color: var(--text); white-space: nowrap; margin-right: 4px; }
+.settings-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 8px; max-width: 60ch; }
+.unit-toggle { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.unit-toggle .admin-btn { border: none; border-radius: 0; padding: 8px 20px; font-size: 14px; background: var(--bg); color: var(--muted); }
+.unit-toggle .admin-btn.active { background: var(--accent); color: #fff; }
+
 /* Floorplan sponsor controls */
 .fp-color-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
 .fp-color-field input[type="color"] { width: 42px; height: 34px; padding: 0; border: 1px solid var(--border);

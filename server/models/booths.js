@@ -96,6 +96,26 @@ async function incrementClicks(boothNumber) {
   await col().updateOne({ showId: config.showId, boothNumber }, { $inc: { clicks: 1 } });
 }
 
+/**
+ * Reprice every stand's LIST price off a new €/unit rate: listPrice = sqm × rate.
+ * Negotiated deal prices (assignment.actualPrice) are deliberately left alone —
+ * changing the rate must never silently rewrite an agreed price. Returns how
+ * many stands were repriced.
+ */
+async function recomputeListPrices(rate, { actor = null } = {}) {
+  const r = Number(rate);
+  if (!Number.isFinite(r) || r <= 0) return { ok: false, reason: 'bad_rate' };
+  const rows = await col().find({ showId: config.showId }).project({ boothNumber: 1, sqm: 1 }).toArray();
+  const now = new Date();
+  let n = 0;
+  for (const b of rows) {
+    await col().updateOne({ showId: config.showId, boothNumber: b.boothNumber },
+      { $set: { listPrice: Math.round((b.sqm || 0) * r), updatedAt: now, updatedBy: actor } });
+    n++;
+  }
+  return { ok: true, repriced: n };
+}
+
 // Flag (or unflag) a stand as the floorplan sponsor's — it then renders in the
 // sponsor's brand colour. Identity/status/booking are untouched; this is a
 // presentation flag only.
@@ -756,5 +776,5 @@ async function resetToBlankLayout() {
 }
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   setDisplayNumber, setSponsored, incrementClicks, stats, consolidate, split, reset,
+                   setDisplayNumber, setSponsored, recomputeListPrices, incrementClicks, stats, consolidate, split, reset,
                    repairHalvedStands, restoreOriginalLayout, resetToBlankLayout };
