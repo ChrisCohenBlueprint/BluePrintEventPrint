@@ -569,12 +569,15 @@ function initForm() {
     errBox.textContent = '';
 
     const payload = {
-      name:    document.getElementById('eq-contact').value.trim(),
-      email:   document.getElementById('eq-email').value.trim(),
-      company: document.getElementById('eq-company').value.trim(),
-      phone:   document.getElementById('eq-phone').value.trim(),
-      message: document.getElementById('eq-message').value.trim(),
-      website: document.getElementById('eq-website').value,   // honeypot
+      firstName: document.getElementById('eq-first').value.trim(),
+      lastName:  document.getElementById('eq-last').value.trim(),
+      email:     document.getElementById('eq-email').value.trim(),
+      phone:     document.getElementById('eq-phone').value.trim(),
+      company:   document.getElementById('eq-company').value.trim(),
+      jobTitle:  document.getElementById('eq-jobtitle').value.trim(),
+      heardAbout: document.getElementById('eq-heard').value,
+      message:   document.getElementById('eq-message').value.trim(),
+      website:   document.getElementById('eq-website').value,   // honeypot
       boothNumbers: shortlist.slice(),
       sponsorKeys: sponsorShortlist.slice(),
     };

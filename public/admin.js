@@ -1264,6 +1264,8 @@ async function openLead(id) {
     field('Email', lead.contact?.email, lead.contact?.email ? `mailto:${lead.contact.email}` : null),
     field('Phone', lead.contact?.phone, lead.contact?.phone ? `tel:${lead.contact.phone}` : null),
     field('Company', lead.contact?.company),
+    field('Job title', lead.contact?.jobTitle),
+    field('Heard about us', lead.contact?.heardAbout),
     field('Stands of interest', (lead.boothsOfInterest || []).join(', ')),
     field('Sponsorship interest', sponsorNames.join(', ')),
   );

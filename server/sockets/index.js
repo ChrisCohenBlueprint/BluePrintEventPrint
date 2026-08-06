@@ -210,8 +210,12 @@ function register(io) {
           // a duplicate submit) even though the lead was saved and the admin ping
           // below was skipped.
           const booths = Array.isArray(payload.boothNumbers) ? payload.boothNumbers : [];
-          log(io, `📩 Enquiry from <strong>${escapeHtml(payload.name)}</strong> — stands ${booths.join(', ')}`, 'inquiry');
-          io.to(ADMIN_ROOM).emit('inquiry:new', { id: res.id, name: payload.name, booths });
+          // The form now sends first/last separately; build a display name from
+          // whatever it provided (falling back to a legacy single `name`).
+          const who = [payload.firstName, payload.lastName].map(s => (s || '').trim()).filter(Boolean).join(' ')
+                    || (payload.name || '').trim() || 'someone';
+          log(io, `📩 Enquiry from <strong>${escapeHtml(who)}</strong> — stands ${booths.join(', ')}`, 'inquiry');
+          io.to(ADMIN_ROOM).emit('inquiry:new', { id: res.id, name: who, booths });
         }
         ack?.(res);
       } catch (e) {

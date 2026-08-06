@@ -124,24 +124,45 @@
         <div class="eq-shortlist" id="eq-shortlist" aria-live="polite"></div>
 
         <form id="enquiry-form" class="eq-form" novalidate>
-          <div class="eq-field">
-            <label for="eq-contact">Your name</label>
-            <input type="text" id="eq-contact" name="name" autocomplete="name" placeholder="James Smith" required>
+          <div class="eq-row">
+            <div class="eq-field">
+              <label for="eq-first">First name</label>
+              <input type="text" id="eq-first" name="given-name" autocomplete="given-name" placeholder="James" required>
+            </div>
+            <div class="eq-field">
+              <label for="eq-last">Last name</label>
+              <input type="text" id="eq-last" name="family-name" autocomplete="family-name" placeholder="Smith">
+            </div>
           </div>
           <div class="eq-field">
             <label for="eq-email">Email</label>
             <input type="email" id="eq-email" name="email" autocomplete="email" placeholder="james@company.com" required>
           </div>
           <div class="eq-field">
-            <label for="eq-company">Company</label>
-            <input type="text" id="eq-company" name="organization" autocomplete="organization" placeholder="Shell UK Ltd">
-          </div>
-          <div class="eq-field">
             <label for="eq-phone">Phone <span class="eq-opt">(optional)</span></label>
             <input type="tel" id="eq-phone" name="tel" autocomplete="tel" placeholder="+44 7700 900000">
           </div>
           <div class="eq-field">
-            <label for="eq-message">Anything we should know? <span class="eq-opt">(optional)</span></label>
+            <label for="eq-company">Company</label>
+            <input type="text" id="eq-company" name="organization" autocomplete="organization" placeholder="Shell UK Ltd">
+          </div>
+          <div class="eq-field">
+            <label for="eq-jobtitle">Job title <span class="eq-opt">(optional)</span></label>
+            <input type="text" id="eq-jobtitle" name="organization-title" autocomplete="organization-title" placeholder="Procurement Manager">
+          </div>
+          <div class="eq-field">
+            <label for="eq-heard">How did you hear about us? <span class="eq-opt">(optional)</span></label>
+            <select id="eq-heard" class="eq-select">
+              <option value="">Please select</option>
+              <option>Recommendation</option>
+              <option>Google/Bing Search</option>
+              <option>Marketing Email</option>
+              <option>Advertisement</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div class="eq-field">
+            <label for="eq-message">Comments <span class="eq-opt">(optional)</span></label>
             <textarea id="eq-message" rows="3" placeholder="Stand size, budget, preferred hall…"></textarea>
           </div>
 

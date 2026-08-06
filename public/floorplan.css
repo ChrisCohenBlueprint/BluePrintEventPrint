@@ -233,6 +233,21 @@ body {
 }
 .eq-field input:focus { border-color: var(--accent); }
 
+/* First/last name side by side; stacks on very narrow panels. */
+.eq-row { display: flex; gap: 10px; }
+.eq-row .eq-field { flex: 1; min-width: 0; }
+@media (max-width: 360px) { .eq-row { flex-direction: column; } }
+
+/* Match the select + textarea to the text inputs. */
+.eq-field select, .eq-field textarea {
+  background: #ffffff; border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 12px;
+  color: var(--text); font-family: inherit; font-size: 13px;
+  outline: none; transition: border-color 0.2s; width: 100%;
+}
+.eq-field select:focus, .eq-field textarea:focus { border-color: var(--accent); }
+.eq-field select { cursor: pointer; appearance: auto; }
+
 .eq-actions { display: flex; gap: 8px; margin-top: 4px; }
 .btn-hold, .btn-book {
   flex: 1; padding: 10px; border: none; border-radius: 8px;

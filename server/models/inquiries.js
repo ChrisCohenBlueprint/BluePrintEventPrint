@@ -7,6 +7,11 @@ const col = () => getDb().collection('inquiries');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const clean = (v, max) => typeof v === 'string' ? v.trim().slice(0, max) : '';
 
+// Fixed options for "How did you hear about us?" — anything off this list is
+// dropped so the field stays a clean, reportable dimension (with "Other" as the
+// catch-all the form itself offers).
+const HEARD_OPTIONS = ['Recommendation', 'Google/Bing Search', 'Marketing Email', 'Advertisement', 'Other'];
+
 /**
  * Validate and store an enquiry.
  *
@@ -14,12 +19,24 @@ const clean = (v, max) => typeof v === 'string' ? v.trim().slice(0, max) : '';
  * away — booth:book only ever transmitted `company`. This is the first point at
  * which those details are actually persisted.
  */
-async function create({ name, email, phone, company, message, boothNumbers = [], sponsorKeys = [], sessionId = null }) {
+async function create({ name, firstName, lastName, email, phone, company, jobTitle, heardAbout,
+                        message, boothNumbers = [], sponsorKeys = [], sessionId = null }) {
+  const first = clean(firstName, 80);
+  const last  = clean(lastName, 80);
+  // Prefer the split name; fall back to a legacy single `name` field so older
+  // clients (or an API caller) still work.
+  const fullName = [first, last].filter(Boolean).join(' ') || clean(name, 120);
+  const heard = clean(heardAbout, 60);
+
   const contact = {
-    name:    clean(name, 120),
-    email:   clean(email, 200).toLowerCase(),
-    phone:   clean(phone, 40),
-    company: clean(company, 160),
+    name:      fullName,
+    firstName: first,
+    lastName:  last,
+    email:     clean(email, 200).toLowerCase(),
+    phone:     clean(phone, 40),
+    company:   clean(company, 160),
+    jobTitle:  clean(jobTitle, 120),
+    heardAbout: HEARD_OPTIONS.includes(heard) ? heard : '',
   };
 
   const hasBooths   = Array.isArray(boothNumbers) && boothNumbers.length;
