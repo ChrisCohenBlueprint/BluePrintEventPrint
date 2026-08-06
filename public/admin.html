@@ -434,6 +434,31 @@
           </form>
         </div>
 
+        <!-- Move tool — exhibitor upgrades / downgrades to another stand -->
+        <div class="tool-card">
+          <div class="tool-header">
+            <i data-lucide="arrow-left-right"></i>
+            <h3>Move Company</h3>
+          </div>
+          <p>An exhibitor upgrading or downgrading. The booking moves to the new stand and its size and cost update to that space automatically — a negotiated rate is kept and re-applied to the new size.</p>
+          <form id="move-form" class="tool-form">
+            <div class="tool-form-row">
+              <div class="tool-field">
+                <label>From (booked stand)</label>
+                <select id="move-from" class="admin-select"><option value="">Select…</option></select>
+              </div>
+              <div class="tool-field">
+                <label>To (available stand)</label>
+                <select id="move-to" class="admin-select"><option value="">Select…</option></select>
+              </div>
+            </div>
+            <div id="move-preview" class="move-preview hidden"></div>
+            <button type="submit" class="admin-btn success full">
+              <i data-lucide="arrow-left-right"></i> Move Company
+            </button>
+          </form>
+        </div>
+
         <!-- Bulk status tool -->
         <div class="tool-card">
           <div class="tool-header">

@@ -529,7 +529,72 @@ function populateToolDropdowns() {
   statusStand.innerHTML = '<option value="">Select…</option>' +
     all.map(b => `<option value="${b.boothNumber}">Stand ${b.boothNumber}</option>`).join('');
   statusStand.value = cur2;
+
+  // Move: "from" is a stand that has a booking (sold/held) — labelled with the
+  // company so the operator can find the right one; "to" is an available stand.
+  const moveFrom = document.getElementById('move-from');
+  if (moveFrom) {
+    const cur = moveFrom.value;
+    const booked = all.filter(b => b.status === 'sold' || b.status === 'held');
+    moveFrom.innerHTML = '<option value="">Select…</option>' + booked.map(b => {
+      const co = esc(dealOf(b).company || '(no company)');
+      return `<option value="${esc(b.boothNumber)}">Stand ${esc(b.boothNumber)} — ${co}</option>`;
+    }).join('');
+    moveFrom.value = cur;
+  }
+  const moveTo = document.getElementById('move-to');
+  if (moveTo) {
+    const cur = moveTo.value;
+    const avail = all.filter(b => b.status === 'available');
+    moveTo.innerHTML = '<option value="">Select…</option>' +
+      avail.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(b.boothNumber)} — ${b.sqm} m²</option>`).join('');
+    moveTo.value = cur;
+  }
+  updateMovePreview();
 }
+
+// Live preview of the size/cost change so the move is never a surprise.
+function updateMovePreview() {
+  const el = document.getElementById('move-preview');
+  if (!el) return;
+  const from = booths[document.getElementById('move-from')?.value];
+  const to   = booths[document.getElementById('move-to')?.value];
+  if (!from || !to) { el.classList.add('hidden'); return; }
+  const eur = n => '€' + Number(n || 0).toLocaleString();
+  const dealFrom = dealOf(from);
+  const rate = (dealFrom.actualPrice != null && from.sqm > 0) ? dealFrom.actualPrice / from.sqm : null;
+  const newCost = rate != null ? Math.round(rate * to.sqm) : to.listPrice;
+  const dir = to.sqm > from.sqm ? 'Upgrade ↑' : to.sqm < from.sqm ? 'Downgrade ↓' : 'Move';
+  el.innerHTML =
+    `<span class="mv-dir">${dir}</span> ` +
+    `<b>${esc(dealFrom.company || 'Booking')}</b>: ` +
+    `${from.sqm} m² → <b>${to.sqm} m²</b> · ` +
+    `${eur(dealFrom.actualPrice ?? from.listPrice)} → <b>${eur(newCost)}</b>` +
+    (rate != null ? ` <span class="mv-rate">(rate kept)</span>` : ``);
+  el.classList.remove('hidden');
+}
+document.getElementById('move-from')?.addEventListener('change', updateMovePreview);
+document.getElementById('move-to')?.addEventListener('change', updateMovePreview);
+
+// ─── Move Form ────────────────────────────────────────────────────────────────
+document.getElementById('move-form')?.addEventListener('submit', e => {
+  e.preventDefault();
+  const from = document.getElementById('move-from').value;
+  const to   = document.getElementById('move-to').value;
+  if (!from || !to) return adminToast('Pick the booked stand and the destination.', 'error');
+  if (from === to) return adminToast('Pick two different stands.', 'error');
+  const co = dealOf(booths[from]).company || 'this booking';
+  const fSqm = booths[from]?.sqm, tSqm = booths[to]?.sqm;
+  if (!confirm(`Move ${co} from Stand ${from} (${fSqm} m²) to Stand ${to} (${tSqm} m²)? Stand ${from} will be freed.`)) return;
+  socket.emit('booth:move', { from, to }, (res) => {
+    if (res && res.ok) {
+      adminToast(`${res.company || 'Booking'} moved to Stand ${to} — now ${res.toSqm} m².`, 'ok');
+      document.getElementById('move-from').value = '';
+      document.getElementById('move-to').value = '';
+      updateMovePreview();
+    } else adminToast((res && res.error) || 'Move failed.', 'error');
+  });
+});
 
 // ─── Consolidation Form ───────────────────────────────────────────────────────
 document.getElementById('consolidation-form').addEventListener('submit', e => {

@@ -293,6 +293,35 @@ function register(io) {
       log(io, `🛠 Admin set Stand ${escapeHtml(n)} → ${escapeHtml(status)}`, 'admin');
     }));
 
+    // Move a booking from one stand to another — an exhibitor upgrading or
+    // downgrading. Size and cost follow because they belong to the stand.
+    socket.on('booth:move', requireAdmin(socket, 'booth:move', async ({ from, to }) => {
+      const f = stand(from), t = stand(to);
+      const r = await booths.move(f, t, { actor: socket.data.user });
+      if (!r.ok) {
+        const why = r.reason === 'nothing_to_move'  ? 'the first stand has no booking to move'
+                  : r.reason === 'to_not_available' ? 'the destination stand is not available'
+                  : r.reason === 'same_booth'       ? 'pick two different stands'
+                  : r.reason;
+        return { ok: false, error: `Could not move — ${why}.` };
+      }
+      // A held booking carries a hold document; move it to the new stand so the
+      // expiry sweep doesn't reclaim the destination (held with no doc) in 60s,
+      // and doesn't leave a stale doc on the freed source.
+      if (r.status === 'held') {
+        await holdsSvc.drop(f);
+        await holdsSvc.forceHold(t, { company: r.company || 'Pending', actor: socket.data.user });
+      }
+      track({ type: 'booth.move', boothNumber: t, socket, meta: {
+        from: f, to: t, company: r.company, status: r.status,
+        fromSqm: r.fromSqm, toSqm: r.toSqm, fromListPrice: r.fromListPrice, toListPrice: r.toListPrice,
+        newActualPrice: r.newActualPrice,
+      } });
+      await refresh(); broadcastState(io);
+      log(io, `↕ <strong>${escapeHtml(r.company || 'Booking')}</strong> moved from Stand ${escapeHtml(f)} (${r.fromSqm} m²) to Stand ${escapeHtml(t)} (${r.toSqm} m²)`, 'booking');
+      return { ok: true, ...r };
+    }));
+
     // Merge two stands into one. The admin client emitted this for a long time
     // with no server handler at all, so the button did nothing.
     socket.on('booth:consolidate', requireAdmin(socket, 'booth:consolidate', async ({ primary, secondary }) => {

@@ -85,6 +85,57 @@ async function incrementClicks(boothNumber) {
   await col().updateOne({ showId: config.showId, boothNumber }, { $inc: { clicks: 1 } });
 }
 
+/**
+ * Move a booking from one stand to another — an exhibitor upgrading or
+ * downgrading their space. The company (and any notes) move to the destination;
+ * the source is freed. Because size and list price belong to the STAND, the
+ * exhibitor's size and cost update to the new space automatically. A negotiated
+ * per-m² rate is preserved and re-applied to the new size; if they were on the
+ * list price, they stay on the (new) list price.
+ *
+ * Writes are conditional and destination-first, so a booking is never lost or
+ * double-created if another admin acts on either stand at the same time.
+ */
+async function move(fromNum, toNum, { actor = null } = {}) {
+  if (fromNum === toNum) return { ok: false, reason: 'same_booth' };
+  const from = await get(fromNum);
+  const to   = await get(toNum);
+  if (!from || !to) return { ok: false, reason: 'missing_booth' };
+  if (from.status === 'available') return { ok: false, reason: 'nothing_to_move' };  // no booking on the source
+  if (to.status !== 'available')   return { ok: false, reason: 'to_not_available' };
+
+  const movedStatus = from.status;   // captured before any write, so it can't alias
+  const a = from.assignment || {};
+  // Preserve their negotiated rate: €/m² on the old stand × the new size. No
+  // negotiated price means they were on list, so leave it on the new list.
+  let newActual = null;
+  if (a.actualPrice != null && from.sqm > 0) newActual = Math.round((a.actualPrice / from.sqm) * (to.sqm || 0));
+
+  const assignment = { company: a.company || null, contactId: a.contactId || null, actualPrice: newActual, notes: a.notes || '' };
+
+  // Claim the destination FIRST, only while it is still available — so we can
+  // never overwrite a booking that landed on it a moment ago.
+  const claim = await col().updateOne(
+    { showId: config.showId, boothNumber: toNum, status: 'available' },
+    { $set: { status: from.status, assignment, updatedAt: new Date(), updatedBy: actor } }
+  );
+  if (!claim.matchedCount) return { ok: false, reason: 'to_not_available' };
+
+  // Free the source, only if it still holds the booking we just moved.
+  await col().updateOne(
+    { showId: config.showId, boothNumber: fromNum, status: from.status },
+    { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '' }, updatedAt: new Date(), updatedBy: actor } }
+  );
+
+  return {
+    ok: true, status: from.status, company: a.company || null,
+    from: fromNum, to: toNum,
+    fromSqm: from.sqm, toSqm: to.sqm,
+    fromListPrice: from.listPrice, toListPrice: to.listPrice,
+    newActualPrice: newActual,
+  };
+}
+
 async function stats() {
   const [agg] = await col().aggregate([
     { $match: { showId: config.showId } },
@@ -429,5 +480,5 @@ async function repairHalvedStands() {
   await meta.updateOne({ _id: 'repair-halved-stands-v1' }, { $set: { done: true, at: new Date() } }, { upsert: true });
 }
 
-module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal,
+module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
                    incrementClicks, stats, consolidate, split, reset, repairHalvedStands };
