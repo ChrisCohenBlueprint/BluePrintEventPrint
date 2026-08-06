@@ -726,15 +726,13 @@ function applyVisual(n) {
       textNode.style.pointerEvents = 'none';
       el.parentNode.appendChild(textNode);
     }
-    // getBBox throws if the element isn't rendered/laid out yet. Mirror the
-    // admin guard: skip labelling this frame rather than letting it throw.
-    let bbox;
-    try { bbox = el.getBBox(); } catch { return; }
+    // VISUAL box (post-transform): most LEX27 stands are rotated, so the local
+    // getBBox would place the name off the stand and fit it to swapped
+    // dimensions. Null means the stand isn't laid out yet — skip this frame.
+    const vbox = BoothMap.visualBox(el);
+    if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) return;
     // Wrap / hyphenate / shrink to fit — never truncate.
-    // Match the weight/size of the artwork's baked-in exhibitor labels (e.g.
-    // NYNAS), which are lighter and a touch smaller than the previous 700/14px
-    // default — otherwise our live names looked bolder and larger than the plan.
-    BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
+    BoothMap.fitLabel(textNode, company, vbox,
       { family: 'Raleway, sans-serif', weight: '600', maxFont: 12 });
     // Keep the name legible on a dark brand fill (white text), dark ink otherwise.
     textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');

@@ -26,6 +26,27 @@
 
   function centre(g) { return { x: g.x + g.w / 2, y: g.y + g.h / 2 }; }
 
+  // The element's VISUAL (post-transform) axis-aligned box, in the coordinate
+  // space of its parent. getBBox() alone returns the LOCAL box (before the
+  // element's own transform), so on the many rotated LEX27 stands it reports the
+  // wrong position and swapped width/height — which mis-places and mis-fits the
+  // exhibitor label. This applies the element's transform to the local box.
+  function visualBox(el) {
+    var b;
+    try { b = el.getBBox(); } catch (e) { return null; }
+    var list = el.transform && el.transform.baseVal;
+    var m = (list && list.numberOfItems) ? list.consolidate() : null;
+    if (!m) return { x: b.x, y: b.y, w: b.width, h: b.height };   // no transform
+    m = m.matrix;
+    var xs = [], ys = [], X = [b.x, b.x + b.width], Y = [b.y, b.y + b.height];
+    for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) {
+      xs.push(m.a * X[i] + m.c * Y[j] + m.e);
+      ys.push(m.b * X[i] + m.d * Y[j] + m.f);
+    }
+    var minx = Math.min.apply(null, xs), miny = Math.min.apply(null, ys);
+    return { x: minx, y: miny, w: Math.max.apply(null, xs) - minx, h: Math.max.apply(null, ys) - miny };
+  }
+
   function rectGeom(el) {
     var x = parseFloat(el.getAttribute('x'));
     var y = parseFloat(el.getAttribute('y'));
@@ -410,5 +431,5 @@
       .sort().join('|');
   }
 
-  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel };
+  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, visualBox: visualBox };
 })(window);
