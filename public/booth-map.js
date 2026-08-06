@@ -266,7 +266,9 @@
   function fitLabel(textEl, str, box, opts) {
     opts = opts || {};
     var maxFont = opts.maxFont || 14;
-    var minFont = opts.minFont || 6;
+    // Shrink as far as needed so the name always fits — visitors can zoom, and
+    // text spilling outside a stand looks far worse than tiny-but-contained text.
+    var minFont = opts.minFont || 0.5;
     var family  = opts.family  || 'Raleway, sans-serif';
     var weight  = opts.weight  || '700';
     var pad     = opts.pad != null ? opts.pad : 6;
@@ -326,16 +328,22 @@
       return lines;
     }
 
-    // Largest font from max→min whose wrapped block fits the height; if none
-    // fits we keep the minimum (still every character, just tighter). The
-    // measurement node is removed in a finally so an exception mid-measure
-    // can't leave hidden <text> nodes accumulating in the SVG.
+    // Largest font from max→min whose wrapped block fits BOTH the height and the
+    // width (every line inside maxW) — so the name never spills out of the box.
+    // If even the minimum doesn't fit we keep it (never truncate); at 0.5px the
+    // text is contained and readable once zoomed. The measurement node is removed
+    // in a finally so an exception mid-measure can't leak hidden <text> nodes.
     var chosen = null, chosenFont = minFont;
     try {
       for (var fs = maxFont; fs >= minFont; fs -= 0.5) {
         var lines = layout(fs);
-        if (lines.length * fs * lineRatio <= maxH) { chosen = lines; chosenFont = fs; break; }
         chosen = lines; chosenFont = fs;           // remember the smallest tried
+        if (lines.length * fs * lineRatio > maxH) continue;   // too tall — shrink
+        var widthOk = true;
+        for (var li = 0; li < lines.length; li++) {
+          if (widthOf(lines[li], fs) > maxW) { widthOk = false; break; }
+        }
+        if (widthOk) break;                        // fully contained — take it
       }
     } finally {
       if (meas.parentNode) meas.parentNode.removeChild(meas);
