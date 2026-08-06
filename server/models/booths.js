@@ -713,7 +713,9 @@ async function restoreOriginalLayout() {
  */
 async function resetToBlankLayout() {
   const db = getDb();
-  const FLAG = 'reset-blank-layout-v1';
+  // v2 re-seeds from the LEX27 consolidated plan (262 stands). Bump the version
+  // whenever booth_data.json changes and the plan needs a fresh re-seed.
+  const FLAG = 'reset-blank-layout-v2';
   const meta = db.collection('meta');
   if (await meta.findOne({ _id: FLAG })) return { skipped: 'already-run' };
 

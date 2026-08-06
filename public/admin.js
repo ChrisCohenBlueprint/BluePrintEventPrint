@@ -129,7 +129,7 @@ let adminTagged = false;
 async function loadAdminSVG() {
   const mount = document.getElementById('admin-svg-mount');
   try {
-    const svgRes = await fetch('/LEX26_Floorplan_Web-Format_57.svg');
+    const svgRes = await fetch('/LEX27_Floorplan_Consolidated.svg');
     mount.innerHTML = await svgRes.text();
     svgDoc = mount.querySelector('svg');
     svgDoc.setAttribute('width', '100%');

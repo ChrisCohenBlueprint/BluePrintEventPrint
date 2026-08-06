@@ -20,7 +20,9 @@
   'use strict';
 
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var ARTWORK_SELECTOR = '.cls-13, .cls-11, .cls-14, .cls-8, .cls-9';
+  // Sellable booth rects. LEX27 draws stands as .cls-10 (white) / .cls-7
+  // (yellow); the older classes are kept so a previous plan still maps.
+  var ARTWORK_SELECTOR = '.cls-10, .cls-7, .cls-13, .cls-11, .cls-14, .cls-9';
 
   function centre(g) { return { x: g.x + g.w / 2, y: g.y + g.h / 2 }; }
 
