@@ -302,6 +302,7 @@ function register(io) {
         const why = r.reason === 'nothing_to_move'  ? 'the first stand has no booking to move'
                   : r.reason === 'to_not_available' ? 'the destination stand is not available'
                   : r.reason === 'same_booth'       ? 'pick two different stands'
+                  : r.reason === 'move_conflict'    ? 'the first stand changed while moving — nothing was moved, please try again'
                   : r.reason;
         return { ok: false, error: `Could not move — ${why}.` };
       }

@@ -117,18 +117,31 @@ async function move(fromNum, toNum, { actor = null } = {}) {
   // never overwrite a booking that landed on it a moment ago.
   const claim = await col().updateOne(
     { showId: config.showId, boothNumber: toNum, status: 'available' },
-    { $set: { status: from.status, assignment, updatedAt: new Date(), updatedBy: actor } }
+    { $set: { status: movedStatus, assignment, updatedAt: new Date(), updatedBy: actor } }
   );
   if (!claim.matchedCount) return { ok: false, reason: 'to_not_available' };
 
   // Free the source, only if it still holds the booking we just moved.
-  await col().updateOne(
-    { showId: config.showId, boothNumber: fromNum, status: from.status },
+  const freed = await col().updateOne(
+    { showId: config.showId, boothNumber: fromNum, status: movedStatus },
     { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '' }, updatedAt: new Date(), updatedBy: actor } }
   );
+  if (!freed.matchedCount) {
+    // The source changed under us between read and free (another admin released
+    // it, or converted a hold to a booking) — the precondition no longer holds.
+    // Roll the destination claim back to available so we never leave the same
+    // company occupying both stands, and report the conflict. The rollback is
+    // itself conditional on our own write still standing, so it can't clobber a
+    // booking a third admin may have just placed on the destination.
+    await col().updateOne(
+      { showId: config.showId, boothNumber: toNum, status: movedStatus, 'assignment.company': assignment.company },
+      { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '' }, updatedAt: new Date(), updatedBy: actor } }
+    );
+    return { ok: false, reason: 'move_conflict' };
+  }
 
   return {
-    ok: true, status: from.status, company: a.company || null,
+    ok: true, status: movedStatus, company: a.company || null,
     from: fromNum, to: toNum,
     fromSqm: from.sqm, toSqm: to.sqm,
     fromListPrice: from.listPrice, toListPrice: to.listPrice,
