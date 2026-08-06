@@ -77,8 +77,15 @@ async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
   }
   if (notes !== undefined) $set['assignment.notes'] = String(notes).slice(0, 2000);
 
-  await col().updateOne({ showId: config.showId, boothNumber }, { $set });
-  return { before, after: await get(boothNumber), changed: true };
+  // A deal only exists on a stand that is booked or held. Guarding the write
+  // means an edit racing a release/expiry can't paint a price and notes onto a
+  // stand that just went available (where they'd linger until the next booking
+  // overwrote them), and `changed` lets the caller report the conflict.
+  const res = await col().updateOne(
+    { showId: config.showId, boothNumber, status: { $in: ['booked', 'held'] } },
+    { $set }
+  );
+  return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };
 }
 
 async function incrementClicks(boothNumber) {
@@ -278,17 +285,29 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
   // undo the first — so a booking made mid-merge is never silently destroyed.
   // (No multi-document transaction: it would require a replica set and break
   // local single-node Mongo.)
-  const del = await col().deleteOne({ showId: config.showId, boothNumber: secondaryNum, status: 'available' });
-  if (!del.deletedCount) return { ok: false, reason: 'not_available' };
-
+  //
+  // Enlarge the primary FIRST, delete the secondary SECOND. If the process dies
+  // between the two writes, the failure mode is an over-count (primary already
+  // grown, secondary still present) that `reset` recovers — never a silently
+  // lost stand, which the old delete-first order risked.
   const upd = await col().updateOne(
     { showId: config.showId, boothNumber: primaryNum, status: 'available' },
     { $set }
   );
-  if (!upd.matchedCount) {
-    // Primary was taken between the read and now — restore the secondary we
-    // just removed so no stand is lost, and report the conflict.
-    await col().insertOne(b);
+  if (!upd.matchedCount) return { ok: false, reason: 'not_available' };   // primary taken; nothing to undo
+
+  const del = await col().deleteOne({ showId: config.showId, boothNumber: secondaryNum, status: 'available' });
+  if (!del.deletedCount) {
+    // Secondary was booked/held between the read and now. Roll the primary back
+    // to exactly its pre-merge shape so the enlargement doesn't stick. Fields
+    // that didn't exist before the merge (first-ever merge) are removed, not set
+    // to null, so the record matches its original form.
+    const restore = { $set: { sqm: a.sqm, listPrice: a.listPrice, updatedAt: new Date(), updatedBy: actor }, $unset: {} };
+    if (a.geometry)      restore.$set.geometry      = a.geometry;      else restore.$unset.geometry = '';
+    if (a.mergedFrom)    restore.$set.mergedFrom    = a.mergedFrom;    else restore.$unset.mergedFrom = '';
+    if (a.mergeSnapshot) restore.$set.mergeSnapshot = a.mergeSnapshot; else restore.$unset.mergeSnapshot = '';
+    if (!Object.keys(restore.$unset).length) delete restore.$unset;
+    await col().updateOne({ showId: config.showId, boothNumber: primaryNum }, restore);
     return { ok: false, reason: 'not_available' };
   }
   return { ok: true, primary: await get(primaryNum) };

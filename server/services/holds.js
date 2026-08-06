@@ -115,7 +115,14 @@ async function reconcile() {
     );
     if (!res.matchedCount) continue;   // status changed under us; leave it alone
 
-    await drop(boothNumber);
+    // Delete only the EXPIRED hold documents, not every doc for this booth.
+    // Between the status flip above and this delete, an admin's create() can
+    // free-then-re-hold the stand and insert a fresh, future-dated hold doc; an
+    // unbounded deleteMany(boothNumber) would erase that new hold, leaving the
+    // booth 'held' with no document for the next tick to reclaim. `now` is from
+    // the top of this sweep, so a hold placed in the gap (expiresAt in the
+    // future) is not matched.
+    await col().deleteMany({ showId: config.showId, boothNumber, expiresAt: { $lte: now } });
     expired.push(boothNumber);
     track({ type: 'hold.expire', boothNumber, meta: {}, actor: 'system:expiry' });
     console.log(`⏱  Hold expired — stand ${boothNumber} released`);

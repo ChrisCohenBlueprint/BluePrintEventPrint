@@ -101,7 +101,16 @@ async function main() {
   console.log(`✅ Booths — ${res.upsertedCount} inserted, ${res.modifiedCount} updated (${entries.length} total)`);
 
   // ── Legacy state rescue ─────────────────────────────────────────────────────
-  if (fs.existsSync(statePath)) {
+  // ONE-SHOT. This block does an unconditional $set of status/company/price/
+  // notes/clicks for every booth named in the state file, and imports its click
+  // history. Re-running it after real bookings exist would revert those bookings
+  // and duplicate the history. A meta marker guarantees it applies at most once,
+  // even if booth_state.json reappears or the script is re-run.
+  const LEGACY_FLAG = 'legacy-state-import-v1';
+  const alreadyImported = await db.collection('meta').findOne({ _id: LEGACY_FLAG });
+  if (alreadyImported) {
+    console.log(`ℹ  Legacy state already imported (${new Date(alreadyImported.at).toISOString()}) — skipping`);
+  } else if (fs.existsSync(statePath)) {
     const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
     let restored = 0;
 
@@ -140,7 +149,9 @@ async function main() {
         ).catch(e => console.warn('  history import warning:', e.message));
       }
     }
-    console.log(`✅ Legacy state — ${restored} booths restored from ${statePath}`);
+    await db.collection('meta').updateOne(
+      { _id: LEGACY_FLAG }, { $set: { at: new Date() } }, { upsert: true });
+    console.log(`✅ Legacy state — ${restored} booths restored from ${statePath} (marked one-shot)`);
   } else {
     console.log(`ℹ  No legacy booth_state.json at ${statePath} — nothing to rescue`);
   }
