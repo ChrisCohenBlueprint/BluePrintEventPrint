@@ -20,6 +20,14 @@ if (missing.length) {
   console.warn('   Set these in .env before deploying.');
 }
 
+// The session cookie is a bare HMAC over its payload, so a short/guessable
+// SESSION_SECRET lets an attacker brute-force the key offline and then forge a
+// cookie for any user — including {role:'owner'}. Require real entropy in prod.
+if (isProd && (process.env.SESSION_SECRET || '').length < 32) {
+  console.error('FATAL: SESSION_SECRET must be at least 32 characters in production.');
+  process.exit(1);
+}
+
 module.exports = {
   isProd,
   port:      process.env.PORT || 3000,

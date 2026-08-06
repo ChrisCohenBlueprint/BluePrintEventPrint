@@ -84,6 +84,7 @@ router.post('/login', async (req, res) => {
     // secret is handed out, so an intercepted temp password alone can't claim
     // the account. Accounts without a claim code (owner, legacy) skip this.
     if (users.needsClaim(user) && !users.checkClaim(user, req.body?.claim)) {
+      noteFailure(username);   // a wrong invite code counts toward account lockout too
       return res.status(401).json({ ok: false, error: 'This account needs its one-time invite code (first login only). Ask the owner for it.' });
     }
     const { secret, recoveryCodes, otpauth } = await users.startEnrolment(user.username);
@@ -103,9 +104,16 @@ router.post('/login/enrol', async (req, res) => {
   if (!throttle(req.ip)) return res.status(429).json({ ok: false, error: 'Too many attempts.' });
   const username = auth.verifyPending(req.body?.pending, 'enrol');
   if (!username) return res.status(440).json({ ok: false, error: 'Session expired. Please start again.' });
+  if (accountLocked(username)) return res.status(429).json({ ok: false, error: 'Too many attempts. Try again in a few minutes.' });
 
   const done = await users.confirmEnrolment(username, req.body?.token);
-  if (!done) return res.status(401).json({ ok: false, error: 'That code did not match. Try the current code from your app.' });
+  if (!done) {
+    // Per-account lockout on the second factor too — the per-IP throttle alone
+    // is defeated by a botnet, letting one pending token seed unlimited guesses.
+    noteFailure(username);
+    return res.status(401).json({ ok: false, error: 'That code did not match. Try the current code from your app.' });
+  }
+  clearFailures(username);
 
   auth.consumePending(req.body?.pending);   // one successful use per pending token
   const user = await users.findByUsername(username);
@@ -118,6 +126,7 @@ router.post('/login/verify', async (req, res) => {
   if (!throttle(req.ip)) return res.status(429).json({ ok: false, error: 'Too many attempts.' });
   const username = auth.verifyPending(req.body?.pending, 'verify');
   if (!username) return res.status(440).json({ ok: false, error: 'Session expired. Please start again.' });
+  if (accountLocked(username)) return res.status(429).json({ ok: false, error: 'Too many attempts. Try again in a few minutes.' });
 
   const user = await users.findByUsername(username);
   // The account can be deleted between the password step and here; without this
@@ -127,7 +136,13 @@ router.post('/login/verify', async (req, res) => {
 
   const ok = (await users.verifyTotpAndConsume(user, token)) ||
              (req.body?.recovery && await users.useRecoveryCode(username, token));
-  if (!ok) return res.status(401).json({ ok: false, error: 'Incorrect code.' });
+  if (!ok) {
+    // Per-account lockout on the code step too (see /login/enrol) — a leaked
+    // temp password otherwise buys unlimited 6-digit guesses via one IP botnet.
+    noteFailure(username);
+    return res.status(401).json({ ok: false, error: 'Incorrect code.' });
+  }
+  clearFailures(username);
 
   auth.consumePending(req.body?.pending);   // one successful use per pending token
   auth.setSessionCookie(res, user);
