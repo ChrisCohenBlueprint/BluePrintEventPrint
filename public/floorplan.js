@@ -46,6 +46,10 @@ function initConsent() {
 let booths      = {};      // boothNumber → booth
 let selectedId  = null;
 let shortlist   = [];      // boothNumbers the visitor wants to enquire about
+
+// The number to SHOW for a stand — the admin-set override if present, else the
+// real identity. Identity (n / boothNumber) stays the key for lookups + emits.
+const shownN = (n) => (booths[n] && booths[n].displayNumber) || n;
 let svgDoc      = null;
 let submitted   = false;
 let svgReady    = false;
@@ -174,7 +178,7 @@ const tooltip = document.getElementById('fp-tooltip');
 function showTooltip(e, n) {
   const b = booths[n];
   if (!b) return;                       // stand was removed under a lingering handler
-  document.getElementById('tt-label').textContent  = `Stand ${n}`;
+  document.getElementById('tt-label').textContent  = `Stand ${shownN(n)}`;
   document.getElementById('tt-status').textContent = STATUS_LABEL[b.status] || cap(b.status);
   document.getElementById('tt-price').textContent  = b.status === 'available' && b.sqm ? `${b.sqm} m²` : '';
   tooltip.classList.remove('hidden');
@@ -237,8 +241,8 @@ function renderShortlist() {
   if (!submitted) card.classList.remove('hidden');
 
   const standChips = shortlist.map(n => `
-    <button type="button" class="eq-chip" data-remove-booth="${esc(n)}" aria-label="Remove stand ${esc(n)}">
-      Stand ${esc(n)} <span aria-hidden="true">×</span>
+    <button type="button" class="eq-chip" data-remove-booth="${esc(n)}" aria-label="Remove stand ${esc(shownN(n))}">
+      Stand ${esc(shownN(n))} <span aria-hidden="true">×</span>
     </button>`).join('');
 
   const sponsorChips = sponsorShortlist.map(k => `
@@ -498,7 +502,7 @@ function renderPanel(n) {
   if (status !== 'available') {
     panel.innerHTML = `
       <div class="stand-header">
-        <div class="stand-id">Stand ${esc(n)}</div>
+        <div class="stand-id">Stand ${esc(shownN(n))}</div>
         <div class="stand-badge badge-${esc(status)}">${esc(STATUS_LABEL[status] || cap(status))}</div>
       </div>
       <div class="stand-stats">

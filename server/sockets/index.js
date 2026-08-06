@@ -391,6 +391,26 @@ function register(io) {
       return { ok: true, ...r };
     }));
 
+    // Set (or clear) a stand's shown number — a display label only; the internal
+    // identity (boothNumber) is unchanged, so nothing else needs to move.
+    socket.on('booth:set-number', requireAdmin(socket, 'booth:set-number', async ({ boothNumber, displayNumber }) => {
+      const n = stand(boothNumber);
+      const r = await booths.setDisplayNumber(n, displayNumber, { actor: socket.data.user });
+      if (!r.ok) {
+        const why = r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'bad_value'     ? 'use only letters, numbers, spaces, . / or -'
+                  : r.reason === 'duplicate'     ? `that number is already used by Stand ${r.clashWith}`
+                  : r.reason;
+        return { ok: false, error: `Could not update — ${why}.` };
+      }
+      track({ type: 'booth.set_number', boothNumber: n, socket, meta: { displayNumber: r.value || null, cleared: !!r.cleared } });
+      await refresh(); broadcastState(io);
+      log(io, r.cleared
+        ? `#️⃣ Stand ${escapeHtml(n)} shown number cleared — back to ${escapeHtml(n)}`
+        : `#️⃣ Stand ${escapeHtml(n)} now shown as ${escapeHtml(r.value)}`, 'admin');
+      return { ok: true, ...r };
+    }));
+
     // demo:reset is gone. It wiped all 272 booths and was reachable from any
     // anonymous browser console.
 

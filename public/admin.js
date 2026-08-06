@@ -211,7 +211,7 @@ function applyAdminVisual(el, status) {
 const adminTooltip = document.getElementById('admin-tooltip');
 function showAdminTooltip(e, id) {
   const b = booths[id];
-  document.getElementById('att-label').textContent = `Stand ${id}`;
+  document.getElementById('att-label').textContent = `Stand ${shownB(b) || id}`;
   document.getElementById('att-status').textContent = cap(b?.status || 'unknown');
   document.getElementById('att-price').textContent = (b && b.listPrice != null) ? `€${b.listPrice.toLocaleString()}` : '';
   adminTooltip.classList.remove('hidden');
@@ -237,6 +237,11 @@ function selectAdminBooth(id) {
 // Commercial fields now live under `assignment` on the booth document.
 const dealOf = (b) => (b && b.assignment) || {};
 
+// The number to SHOW for a stand: the admin-set override if present, else the
+// real identity. Identity (boothNumber) is what all lookups/emits still use.
+const shownB = (b) => (b && b.displayNumber) || (b && b.boothNumber) || '';
+const shownN = (n) => shownB(booths[n]) || n;
+
 function renderAdminBoothAction(n) {
   const b = booths[n];
   if (!b) return;
@@ -244,7 +249,7 @@ function renderAdminBoothAction(n) {
   const panel = document.getElementById('admin-booth-action');
   panel.classList.remove('hidden');
 
-  document.getElementById('aba-id').textContent      = `Stand ${n}`;
+  document.getElementById('aba-id').textContent      = `Stand ${shownB(b)}`;
   document.getElementById('aba-status').textContent  = cap(b.status);
   document.getElementById('aba-sqm').textContent     = `${b.sqm} m²`;
   document.getElementById('aba-price').textContent   = `€${(b.listPrice || 0).toLocaleString()}`;
@@ -328,6 +333,7 @@ function renderBookingsTable() {
     const matchFilter = filter === 'all' || b.status === filter;
     const matchSearch = !search ||
       String(b.boothNumber).toLowerCase().includes(search) ||
+      String(b.displayNumber || '').toLowerCase().includes(search) ||
       (d.company || '').toLowerCase().includes(search);
     return matchFilter && matchSearch;
   });
@@ -341,7 +347,9 @@ function renderBookingsTable() {
 
     const stand = cell(tr);
     const strong = document.createElement('strong');
-    strong.textContent = `Stand ${n}`;
+    // Show the override when set, with the real identity in parentheses so the
+    // operator can still cross-reference bookings/history keyed by identity.
+    strong.textContent = b.displayNumber ? `Stand ${b.displayNumber} (${n})` : `Stand ${n}`;
     stand.appendChild(strong);
 
     cell(tr).textContent = `${b.sqm} m²`;
@@ -478,7 +486,7 @@ function downloadCSV(dataArray, filename) {
     return `"${s.replace(/"/g, '""')}"`;
   };
   const rows = dataArray.map(b => [
-    cell(b.boothNumber),
+    cell(shownB(b)),
     cell(b.sqm),
     cell(b.listPrice || 0),
     cell(dealOf(b).actualPrice ?? ''),
@@ -508,7 +516,7 @@ document.getElementById('export-all-csv').onclick = () => {
 
   let rows = Object.values(booths).filter(b => {
     const matchFilter = filter === 'all' || b.status === filter;
-    const matchSearch = !search || String(b.boothNumber).toLowerCase().includes(search) || (dealOf(b).company || '').toLowerCase().includes(search);
+    const matchSearch = !search || String(b.boothNumber).toLowerCase().includes(search) || String(b.displayNumber || '').toLowerCase().includes(search) || (dealOf(b).company || '').toLowerCase().includes(search);
     return matchFilter && matchSearch;
   });
 
@@ -531,14 +539,14 @@ function populateToolDropdowns() {
     if (!sel) return;
     const cur = sel.value;
     sel.innerHTML = '<option value="">Select…</option>' +
-      all.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(b.boothNumber)}</option>`).join('');
+      all.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))}</option>`).join('');
     sel.value = cur;
   });
 
   const statusStand = document.getElementById('status-stand');
   const cur2 = statusStand.value;
   statusStand.innerHTML = '<option value="">Select…</option>' +
-    all.map(b => `<option value="${b.boothNumber}">Stand ${b.boothNumber}</option>`).join('');
+    all.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))}</option>`).join('');
   statusStand.value = cur2;
 
   // Move: "from" is a stand that has a booking (sold/held) — labelled with the
@@ -549,7 +557,7 @@ function populateToolDropdowns() {
     const booked = all.filter(b => b.status === 'sold' || b.status === 'held');
     moveFrom.innerHTML = '<option value="">Select…</option>' + booked.map(b => {
       const co = esc(dealOf(b).company || '(no company)');
-      return `<option value="${esc(b.boothNumber)}">Stand ${esc(b.boothNumber)} — ${co}</option>`;
+      return `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))} — ${co}</option>`;
     }).join('');
     moveFrom.value = cur;
   }
@@ -558,11 +566,57 @@ function populateToolDropdowns() {
     const cur = moveTo.value;
     const avail = all.filter(b => b.status === 'available');
     moveTo.innerHTML = '<option value="">Select…</option>' +
-      avail.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(b.boothNumber)} — ${b.sqm} m²</option>`).join('');
+      avail.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))} — ${b.sqm} m²</option>`).join('');
     moveTo.value = cur;
   }
+  // Shown Number: every stand, labelled with its current shown number and, when
+  // overridden, its real identity so the operator knows which stand it is.
+  const numberStand = document.getElementById('number-stand');
+  if (numberStand) {
+    const cur = numberStand.value;
+    numberStand.innerHTML = '<option value="">Select…</option>' + all.map(b => {
+      const idn = esc(b.boothNumber);
+      const label = b.displayNumber ? `${esc(b.displayNumber)} (id ${idn})` : idn;
+      return `<option value="${idn}">Stand ${label}</option>`;
+    }).join('');
+    numberStand.value = cur;
+    syncNumberField();
+  }
+
   updateMovePreview();
 }
+
+// Prefill the text box with the selected stand's current shown number.
+function syncNumberField() {
+  const sel = document.getElementById('number-stand');
+  const inp = document.getElementById('number-value');
+  const prev = document.getElementById('number-preview');
+  if (!sel || !inp) return;
+  const b = booths[sel.value];
+  inp.value = (b && b.displayNumber) || '';
+  if (prev) {
+    if (b) {
+      const to = inp.value.trim() || b.boothNumber;
+      prev.innerHTML = `Stand <b>${esc(b.boothNumber)}</b> → shown as <b>${esc(to)}</b>` +
+        (to === b.boothNumber ? ' <span class="mv-rate">(own number)</span>' : '');
+      prev.classList.remove('hidden');
+    } else prev.classList.add('hidden');
+  }
+}
+document.getElementById('number-stand')?.addEventListener('change', syncNumberField);
+document.getElementById('number-value')?.addEventListener('input', syncNumberField);
+document.getElementById('number-form')?.addEventListener('submit', e => {
+  e.preventDefault();
+  const boothNumber = document.getElementById('number-stand').value;
+  const displayNumber = document.getElementById('number-value').value.trim();
+  if (!boothNumber) return adminToast('Pick a stand.', 'error');
+  socket.emit('booth:set-number', { boothNumber, displayNumber }, (res) => {
+    if (res && res.ok) {
+      adminToast(res.cleared ? `Stand ${boothNumber} reverted to its own number.`
+                             : `Stand ${boothNumber} now shown as ${res.value}.`, 'ok');
+    } else adminToast((res && res.error) || 'Could not update.', 'error');
+  });
+});
 
 // Live preview of the size/cost change so the move is never a surprise.
 function updateMovePreview() {

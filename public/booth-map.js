@@ -217,7 +217,7 @@
           return t;
         };
 
-        var num = makeText(x1 + 5, y1 + 14, b.boothNumber);
+        var num = makeText(x1 + 5, y1 + 14, b.displayNumber || b.boothNumber);
         num.setAttribute('font-size', '12px');
         num.setAttribute('data-split-label', b.boothNumber);
         overlay.parentNode.insertBefore(num, overlay.nextSibling);

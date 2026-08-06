@@ -459,6 +459,31 @@
           </form>
         </div>
 
+        <!-- Shown Number tool — override the number displayed on a stand -->
+        <div class="tool-card">
+          <div class="tool-header">
+            <i data-lucide="hash"></i>
+            <h3>Shown Number</h3>
+          </div>
+          <p>Change the number shown on a stand — e.g. to match the printed plan. This is a label only: the stand keeps its internal identity, so bookings, enquiries and history are untouched. Leave blank and save to revert.</p>
+          <form id="number-form" class="tool-form">
+            <div class="tool-form-row">
+              <div class="tool-field">
+                <label>Stand</label>
+                <select id="number-stand" class="admin-select"><option value="">Select…</option></select>
+              </div>
+              <div class="tool-field">
+                <label>Shown as</label>
+                <input id="number-value" class="admin-input" type="text" maxlength="20" placeholder="e.g. 1037" autocomplete="off">
+              </div>
+            </div>
+            <div id="number-preview" class="move-preview hidden"></div>
+            <button type="submit" class="admin-btn full">
+              <i data-lucide="hash"></i> Save Shown Number
+            </button>
+          </form>
+        </div>
+
         <!-- Bulk status tool -->
         <div class="tool-card">
           <div class="tool-header">

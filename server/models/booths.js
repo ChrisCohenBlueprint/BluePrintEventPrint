@@ -25,6 +25,7 @@ function toPublic(b) {
     company: b.assignment?.company || null,
     sqm:     b.sqm,
     geometry: b.geometry,
+    displayNumber: b.displayNumber || null,   // admin-set label shown in place of boothNumber (identity is unchanged)
     splitFrom: b.splitFrom || null,   // lets the client draw + number split cells
     splitAxis: b.splitAxis || null,   // 'vertical' | 'horizontal' — which edge is the divider
     viewers: b.viewers || 0,
@@ -90,6 +91,52 @@ async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
 
 async function incrementClicks(boothNumber) {
   await col().updateOne({ showId: config.showId, boothNumber }, { $inc: { clicks: 1 } });
+}
+
+/**
+ * Set (or clear) the human-facing "shown number" for a stand.
+ *
+ * This is a DISPLAY LABEL only. `boothNumber` stays the immutable identity that
+ * holds, enquiries, activity history and split/merge records all reference — so
+ * this never cascades and is fully reversible. Its purpose is to let an admin
+ * make the app show the printed artwork number (e.g. "1037") on a stand whose
+ * internal key is a positional index (e.g. "198").
+ *
+ * An empty value clears the override. The label must be unique across the show —
+ * it can't collide with another stand's shown number OR with any stand's real
+ * identity, or two stands would read as the same number.
+ */
+async function setDisplayNumber(boothNumber, value, { actor = null } = {}) {
+  const booth = await get(boothNumber);
+  if (!booth) return { ok: false, reason: 'missing_booth' };
+
+  const raw = String(value == null ? '' : value).trim().slice(0, 20);
+
+  if (!raw) {                          // clear the override
+    await col().updateOne({ showId: config.showId, boothNumber },
+      { $unset: { displayNumber: '' }, $set: { updatedAt: new Date(), updatedBy: actor } });
+    return { ok: true, cleared: true, before: booth, after: await get(boothNumber) };
+  }
+
+  if (!/^[A-Za-z0-9 /.\-]{1,20}$/.test(raw)) return { ok: false, reason: 'bad_value' };
+  if (raw === boothNumber) {            // "showing its own identity" = no override needed
+    await col().updateOne({ showId: config.showId, boothNumber },
+      { $unset: { displayNumber: '' }, $set: { updatedAt: new Date(), updatedBy: actor } });
+    return { ok: true, cleared: true, before: booth, after: await get(boothNumber) };
+  }
+
+  // Reject a label that another stand already shows, or that is any stand's real
+  // identity — otherwise two stands would present the same number.
+  const clash = await col().findOne({
+    showId: config.showId,
+    boothNumber: { $ne: boothNumber },
+    $or: [{ displayNumber: raw }, { boothNumber: raw }],
+  });
+  if (clash) return { ok: false, reason: 'duplicate', clashWith: clash.boothNumber };
+
+  await col().updateOne({ showId: config.showId, boothNumber },
+    { $set: { displayNumber: raw, updatedAt: new Date(), updatedBy: actor } });
+  return { ok: true, value: raw, before: booth, after: await get(boothNumber) };
 }
 
 /**
@@ -513,4 +560,4 @@ async function repairHalvedStands() {
 }
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   incrementClicks, stats, consolidate, split, reset, repairHalvedStands };
+                   setDisplayNumber, incrementClicks, stats, consolidate, split, reset, repairHalvedStands };
