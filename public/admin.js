@@ -197,8 +197,10 @@ function applyAdminVisual(el, status) {
       const bbox = el.getBBox();
       // Wrap / hyphenate / shrink to fit — never truncate. Raleway to match the
       // public floorplan exactly, so a stand looks the same on both.
+      // Same weight/size as the public plan and the artwork's baked labels,
+      // so the admin and front-end views render exhibitor names identically.
       BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
-        { family: 'Raleway, sans-serif' });
+        { family: 'Raleway, sans-serif', weight: '600', maxFont: 12 });
     } catch { /* SVG not laid out yet — repaints on next broadcast */ }
   } else if (textNode) {
     textNode.remove();

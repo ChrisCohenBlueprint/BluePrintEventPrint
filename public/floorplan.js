@@ -660,8 +660,11 @@ function applyVisual(n) {
     let bbox;
     try { bbox = el.getBBox(); } catch { return; }
     // Wrap / hyphenate / shrink to fit — never truncate.
+    // Match the weight/size of the artwork's baked-in exhibitor labels (e.g.
+    // NYNAS), which are lighter and a touch smaller than the previous 700/14px
+    // default — otherwise our live names looked bolder and larger than the plan.
     BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
-      { family: 'Raleway, sans-serif' });
+      { family: 'Raleway, sans-serif', weight: '600', maxFont: 12 });
   } else if (textNode) {
     textNode.remove();
   }
