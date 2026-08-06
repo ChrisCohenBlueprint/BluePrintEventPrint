@@ -329,16 +329,23 @@
       return pieces;
     }
 
-    // Flow the words into lines at a given font size.
-    function layout(fs) {
+    // Flow the words into lines at a given font size. In hyphenate mode an
+    // over-long word is chopped with a trailing "-"; otherwise it simply takes
+    // its own line (and may overflow at this size — the caller then shrinks the
+    // font until it fits, which keeps names whole instead of hyphenating them).
+    function layout(fs, hyphenate) {
       var lines = [], line = '';
       for (var w = 0; w < words.length; w++) {
         var word = words[w];
-        if (widthOf(word, fs) > maxW) {          // too wide even alone → hyphenate
+        if (widthOf(word, fs) > maxW) {          // too wide even alone
           if (line) { lines.push(line); line = ''; }
-          var pieces = breakWord(word, fs);
-          for (var p = 0; p < pieces.length - 1; p++) lines.push(pieces[p]);
-          line = pieces[pieces.length - 1];
+          if (hyphenate) {
+            var pieces = breakWord(word, fs);
+            for (var p = 0; p < pieces.length - 1; p++) lines.push(pieces[p]);
+            line = pieces[pieces.length - 1];
+          } else {
+            lines.push(word);                    // own line; search shrinks to fit
+          }
           continue;
         }
         var test = line ? line + ' ' + word : word;
@@ -349,22 +356,33 @@
       return lines;
     }
 
-    // Largest font from max→min whose wrapped block fits BOTH the height and the
-    // width (every line inside maxW) — so the name never spills out of the box.
-    // If even the minimum doesn't fit we keep it (never truncate); at 0.5px the
-    // text is contained and readable once zoomed. The measurement node is removed
-    // in a finally so an exception mid-measure can't leak hidden <text> nodes.
+    // Does every line fit the width at this font size?
+    function fitsWidth(lines, fs) {
+      for (var i = 0; i < lines.length; i++) {
+        if (widthOf(lines[i], fs) > maxW) return false;
+      }
+      return true;
+    }
+
+    // Keep the WHOLE name on tidy lines: prefer shrinking the font so each word
+    // fits on its own line (wrapping only at spaces) over chopping words with
+    // hyphens — "Kline" should shrink, not become "Klin-e". Take the largest
+    // such font that also fits the height. Only if a name still can't fit the
+    // width even at the minimum (a single word longer than the box) do we fall
+    // back to hyphenating. Never truncate — tiny text is fine, visitors zoom.
+    // The measurement node is removed in a finally so an exception mid-measure
+    // can't leak hidden <text> nodes.
     var chosen = null, chosenFont = minFont;
     try {
       for (var fs = maxFont; fs >= minFont; fs -= 0.5) {
-        var lines = layout(fs);
+        var lines = layout(fs, false);             // space-only wrapping, no hyphens
         chosen = lines; chosenFont = fs;           // remember the smallest tried
-        if (lines.length * fs * lineRatio > maxH) continue;   // too tall — shrink
-        var widthOk = true;
-        for (var li = 0; li < lines.length; li++) {
-          if (widthOf(lines[li], fs) > maxW) { widthOk = false; break; }
-        }
-        if (widthOk) break;                        // fully contained — take it
+        var tooTall = lines.length * fs * lineRatio > maxH;
+        if (!tooTall && fitsWidth(lines, fs)) break;   // whole name fits cleanly
+      }
+      // Only an unbreakable word wider than the box at the min size lands here.
+      if (chosen && !fitsWidth(chosen, chosenFont)) {
+        chosen = layout(minFont, true); chosenFont = minFont;
       }
     } finally {
       if (meas.parentNode) meas.parentNode.removeChild(meas);

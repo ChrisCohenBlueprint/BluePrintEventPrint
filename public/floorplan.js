@@ -733,7 +733,7 @@ function applyVisual(n) {
     if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) return;
     // Wrap / hyphenate / shrink to fit — never truncate.
     BoothMap.fitLabel(textNode, company, vbox,
-      { family: 'Raleway, sans-serif', weight: '600', maxFont: 12 });
+      { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });
     // Keep the name legible on a dark brand fill (white text), dark ink otherwise.
     textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');
   } else if (textNode) {

@@ -206,7 +206,7 @@ function applyAdminVisual(el, status) {
       // Wrap / hyphenate / shrink to fit — never truncate. Same weight/size as
       // the public plan so a stand looks identical on both.
       BoothMap.fitLabel(textNode, company, vbox,
-        { family: 'Raleway, sans-serif', weight: '600', maxFont: 12 });
+        { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });
       textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');
     } catch { /* SVG not laid out yet — repaints on next broadcast */ }
   } else if (textNode) {
