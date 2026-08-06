@@ -700,6 +700,59 @@ async function restoreOriginalLayout() {
   return { ok: true, inserted: docs.length, carried: finalMatches.length };
 }
 
+/**
+ * ONE-SHOT: reset to a completely blank original plan. Rebuilds the 273 stands
+ * from the SVG extraction with EVERY stand available — all bookings, holds,
+ * sponsor flags and shown-number overrides cleared, nothing carried. The
+ * original 'sold' flags baked into the extraction are forced available too, so
+ * the result is a clean, fully sell-able plan.
+ *
+ * Snapshots the pre-reset booths to `booths_snapshots` first (recovery path),
+ * and guarded by its own meta flag so it runs exactly once. Leads/enquiries are
+ * deliberately left untouched — they are sales records, not plan state.
+ */
+async function resetToBlankLayout() {
+  const db = getDb();
+  const FLAG = 'reset-blank-layout-v1';
+  const meta = db.collection('meta');
+  if (await meta.findOne({ _id: FLAG })) return { skipped: 'already-run' };
+
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'booth_data.json'), 'utf8'));
+  } catch (e) {
+    console.warn('resetToBlankLayout: cannot read booth_data.json —', e.message);
+    return { skipped: 'no-source' };
+  }
+  const fresh = Object.values(raw);
+  if (!fresh.length) return { skipped: 'empty-source' };
+
+  const oldBooths = await col().find({ showId: config.showId }).toArray();
+  try {
+    await db.collection('booths_snapshots').insertOne({
+      showId: config.showId, reason: FLAG, at: new Date(), count: oldBooths.length, booths: oldBooths });
+  } catch (e) { console.warn('resetToBlankLayout: snapshot failed —', e.message); }
+
+  const now = new Date();
+  await col().deleteMany({ showId: config.showId });
+  const docs = fresh.map(f => ({
+    showId: config.showId,
+    boothNumber: String(f.boothId).replace(/^booth-/, ''),
+    svgElementId: f.boothId,
+    geometry: { x: f.x, y: f.y, w: f.w, h: f.h },
+    sqm: f.sqm, sqmSource: 'estimated', listPrice: f.price,
+    status: 'available',                 // FORCE available — blank, sell-able plan
+    assignment: { company: null, contactId: null, actualPrice: null, notes: '' },
+    clicks: 0, createdAt: now, updatedAt: now, updatedBy: 'reset-blank',
+  }));
+  await col().insertMany(docs);
+  await db.collection('holds').deleteMany({ showId: config.showId });
+
+  await meta.insertOne({ _id: FLAG, at: new Date(), inserted: docs.length });
+  console.log(`✔ resetToBlankLayout: ${docs.length} stands restored, all available, bookings + holds cleared`);
+  return { ok: true, inserted: docs.length };
+}
+
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
                    setDisplayNumber, setSponsored, incrementClicks, stats, consolidate, split, reset,
-                   repairHalvedStands, restoreOriginalLayout };
+                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout };
