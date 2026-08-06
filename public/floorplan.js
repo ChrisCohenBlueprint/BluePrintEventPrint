@@ -655,7 +655,10 @@ function applyVisual(n) {
       textNode.style.pointerEvents = 'none';
       el.parentNode.appendChild(textNode);
     }
-    const bbox = el.getBBox();
+    // getBBox throws if the element isn't rendered/laid out yet. Mirror the
+    // admin guard: skip labelling this frame rather than letting it throw.
+    let bbox;
+    try { bbox = el.getBBox(); } catch { return; }
     // Wrap / hyphenate / shrink to fit — never truncate.
     BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
       { family: 'Raleway, sans-serif' });

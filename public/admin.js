@@ -211,7 +211,7 @@ function showAdminTooltip(e, id) {
   const b = booths[id];
   document.getElementById('att-label').textContent = `Stand ${id}`;
   document.getElementById('att-status').textContent = cap(b?.status || 'unknown');
-  document.getElementById('att-price').textContent = b ? `€${b.listPrice?.toLocaleString()}` : '';
+  document.getElementById('att-price').textContent = (b && b.listPrice != null) ? `€${b.listPrice.toLocaleString()}` : '';
   adminTooltip.classList.remove('hidden');
   moveAdminTooltip(e);
 }
@@ -466,16 +466,25 @@ document.getElementById('bookings-filter').addEventListener('change', renderBook
 function downloadCSV(dataArray, filename) {
   if (!dataArray || dataArray.length === 0) return;
   const headers = ['Stand', 'Size (m2)', 'Listed Price (EUR)', 'Deal Price (EUR)', 'Status', 'Company', 'Notes', 'Live Viewers', 'Total Clicks'];
+  // Neutralise spreadsheet formula injection: company/notes are free text (often
+  // pasted from a customer enquiry). A value like =HYPERLINK(...) or =cmd|... is
+  // evaluated when the CSV is opened in Excel/Sheets, so prefix any cell starting
+  // with a formula trigger with a single quote, then quote + escape as normal.
+  const cell = (v) => {
+    let s = String(v ?? '').replace(/\n/g, ' ');
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return `"${s.replace(/"/g, '""')}"`;
+  };
   const rows = dataArray.map(b => [
-    b.boothNumber,
-    b.sqm,
-    b.listPrice || 0,
-    dealOf(b).actualPrice ?? '',
-    b.status,
-    `"${(dealOf(b).company || '').replace(/"/g, '""')}"`,
-    `"${(dealOf(b).notes || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
-    b.viewers || 0,
-    b.clicks || 0
+    cell(b.boothNumber),
+    cell(b.sqm),
+    cell(b.listPrice || 0),
+    cell(dealOf(b).actualPrice ?? ''),
+    cell(b.status),
+    cell(dealOf(b).company || ''),
+    cell(dealOf(b).notes || ''),
+    cell(b.viewers || 0),
+    cell(b.clicks || 0)
   ]);
 
   const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
@@ -1086,8 +1095,8 @@ async function openLead(id) {
   if (alreadySent) {
     const sent = document.createElement('div');
     sent.className = 'lead-sent-note';
-    sent.textContent = `Sent ${lead.sendCount}× — last to ${lead.lastSentTo || '—'} on ` +
-      new Date(lead.lastSentAt).toLocaleString('en-GB');
+    sent.textContent = `Sent ${lead.sendCount}× — last to ${lead.lastSentTo || '—'}` +
+      (lead.lastSentAt ? ` on ${new Date(lead.lastSentAt).toLocaleString('en-GB')}` : '');
     panel.appendChild(sent);
   }
 

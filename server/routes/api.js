@@ -322,7 +322,7 @@ router.get('/booths/:n/activity', async (req, res, next) => {
 // full event stream.
 router.get('/analytics/demand', async (req, res, next) => {
   try {
-    const days  = Number(req.query.days) || 30;
+    const days  = Math.max(1, Math.min(Number(req.query.days) || 30, 365));   // clamp: no full-collection scan, no Invalid Date
     const since = new Date(Date.now() - days * 86400_000);
 
     const rows = await getDb().collection('activity').aggregate([
@@ -348,7 +348,7 @@ router.get('/analytics/demand', async (req, res, next) => {
 // ─── Funnel ───────────────────────────────────────────────────────────────────
 router.get('/analytics/funnel', async (req, res, next) => {
   try {
-    const days  = Number(req.query.days) || 30;
+    const days  = Math.max(1, Math.min(Number(req.query.days) || 30, 365));   // clamp (see /analytics/demand)
     const since = new Date(Date.now() - days * 86400_000);
     const act   = getDb().collection('activity');
 
