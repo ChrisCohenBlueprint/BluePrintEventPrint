@@ -532,14 +532,17 @@ window.exportSingleCSV = exportSingleCSV;
 function populateToolDropdowns() {
   const all = Object.values(booths);
 
-  // Merge and split operate on all stands, not only available ones — you may
-  // need to reshape a stand regardless of its booking status.
-  ['merge-1', 'merge-2', 'split-stand', 'reset-stand'].forEach(id => {
+  // Split and merge only apply to AVAILABLE stands — a purchased stand is locked
+  // so its paid area can't be divided or absorbed (the server enforces this too).
+  // Reset lists every stand: it undoes a merge/split or clears a stray cell.
+  const openStands = all.filter(b => b.status === 'available' && !(dealOf(b).company));
+  const dropdownSets = { 'merge-1': openStands, 'merge-2': openStands, 'split-stand': openStands, 'reset-stand': all };
+  Object.entries(dropdownSets).forEach(([id, list]) => {
     const sel = document.getElementById(id);
     if (!sel) return;
     const cur = sel.value;
     sel.innerHTML = '<option value="">Select…</option>' +
-      all.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))}</option>`).join('');
+      list.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))}</option>`).join('');
     sel.value = cur;
   });
 

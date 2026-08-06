@@ -283,7 +283,10 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
 
   // Only merge available stands. Consolidating a sold or held stand would delete
   // its booking along with the record and orphan any hold document — refuse it.
-  if (a.status !== 'available' || b.status !== 'available') {
+  // The company checks lock a purchased stand even if its status glitched to
+  // 'available', so a paid booking can never be absorbed and lost.
+  if (a.status !== 'available' || b.status !== 'available' ||
+      (a.assignment && a.assignment.company) || (b.assignment && b.assignment.company)) {
     return { ok: false, reason: 'not_available' };
   }
 
@@ -370,7 +373,9 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
   if (!b) return { ok: false, reason: 'missing_booth' };
   // Splitting is a pre-sale layout operation. On a sold/held stand it would
   // shrink a paid booking to 1/n of its area, so only available stands split.
-  if (b.status !== 'available') return { ok: false, reason: 'not_available' };
+  // Also lock a stand that carries a company even if its status somehow reads
+  // 'available' (a glitched write) — a purchased stand must never be divided.
+  if (b.status !== 'available' || (b.assignment && b.assignment.company)) return { ok: false, reason: 'not_available' };
   // A stand already shaped by a merge or an earlier split of its own must be
   // reset first — splitting a merged stand would leave it carrying both a
   // merge and a split snapshot, which reset can only half-undo. (A split CHILD
