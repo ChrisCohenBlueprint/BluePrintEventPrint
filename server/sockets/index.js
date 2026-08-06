@@ -187,7 +187,11 @@ function register(io) {
 
     socket.on('plan:zoom', ({ level, cx, cy }) => {
       if (!allowView()) return;
-      track({ type: 'plan.zoom', socket, meta: { level, cx, cy } });
+      // Coerce to finite numbers — the client controls these and they land in a
+      // stored `meta`; an arbitrarily large string/object would bloat memory and
+      // could even produce a >16 MB document Mongo rejects. Non-finite → null.
+      const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
+      track({ type: 'plan.zoom', socket, meta: { level: num(level), cx: num(cx), cy: num(cy) } });
     });
 
     // Replaces booth:book / booth:hold on the public floorplan. Captures the
@@ -199,8 +203,14 @@ function register(io) {
       try {
         const res = await inquiries.create({ ...payload, sessionId: socket.data.sessionId });
         if (res.ok) {
-          log(io, `📩 Enquiry from <strong>${escapeHtml(payload.name)}</strong> — stands ${(payload.boothNumbers || []).join(', ')}`, 'inquiry');
-          io.to(ADMIN_ROOM).emit('inquiry:new', { id: res.id, name: payload.name, booths: payload.boothNumbers });
+          // create() accepts an enquiry on sponsorKeys alone, so boothNumbers may
+          // be absent or a non-array. Guard the .join — a raw string would throw
+          // here, drop into the catch, and tell the visitor it failed (prompting
+          // a duplicate submit) even though the lead was saved and the admin ping
+          // below was skipped.
+          const booths = Array.isArray(payload.boothNumbers) ? payload.boothNumbers : [];
+          log(io, `📩 Enquiry from <strong>${escapeHtml(payload.name)}</strong> — stands ${booths.join(', ')}`, 'inquiry');
+          io.to(ADMIN_ROOM).emit('inquiry:new', { id: res.id, name: payload.name, booths });
         }
         ack?.(res);
       } catch (e) {

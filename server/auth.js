@@ -45,7 +45,16 @@ function verifyToken(token) {
 function parseCookies(header = '') {
   return header.split(';').reduce((acc, part) => {
     const i = part.indexOf('=');
-    if (i > 0) acc[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0) {
+      const k = part.slice(0, i).trim();
+      const v = part.slice(i + 1).trim();
+      // A malformed value (e.g. a lone "%") makes decodeURIComponent throw a
+      // URIError. This runs on every request before auth — including the
+      // unauthenticated /login path — so an unhandled throw here would let any
+      // visitor hang requests with `Cookie: bp_admin=%`. Fall back to the raw
+      // value instead of rejecting.
+      try { acc[k] = decodeURIComponent(v); } catch { acc[k] = v; }
+    }
     return acc;
   }, {});
 }

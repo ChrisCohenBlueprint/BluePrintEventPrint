@@ -31,8 +31,25 @@ async function flush() {
     } catch (e) {
       console.error('Activity flush failed:', e.message);
       // Re-queue rather than drop, so a transient DB blip doesn't silently lose
-      // events — bounded, and only if newer events haven't already filled it.
-      if (buffer.length + batch.length <= MAX_BUFFER) { buffer = batch.concat(buffer); flushSoon(); }
+      // events — but ONLY the docs that genuinely didn't land. The driver stamps
+      // each doc with an _id before sending; re-queuing the whole batch after a
+      // *partial* success (ordered:false inserts what it can, then throws) would
+      // re-send already-inserted docs, which then dup-key, throw again, and loop
+      // forever. So: on a BulkWriteError re-queue only the failed indices and
+      // drop poison docs (duplicate-key / too-large); otherwise the whole batch
+      // never landed. Strip _id so a doc the server actually wrote — despite the
+      // client seeing a rejection (e.g. a timeout) — can't dup-key on retry.
+      let failed;
+      if (e && Array.isArray(e.writeErrors)) {
+        const POISON = new Set([11000, 10334, 17419]);   // dup key, doc/BSON too large
+        failed = e.writeErrors.filter(we => !POISON.has(we.code)).map(we => batch[we.index]).filter(Boolean);
+      } else {
+        failed = batch;
+      }
+      for (const d of failed) { if (d) delete d._id; }
+      if (failed.length && buffer.length + failed.length <= MAX_BUFFER) {
+        buffer = failed.concat(buffer); flushSoon();
+      }
     } finally {
       inFlight = null;
     }
