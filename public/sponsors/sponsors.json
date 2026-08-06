@@ -1,12 +1,5 @@
 {
-  "_comment": "Sponsor strip under the floorplan. Drop logo files into public/sponsors/ and list them here. Delete an entry to remove it; empty the list to hide the strip entirely. No code changes needed.",
+  "_comment": "File-based fallback for the public 'In partnership with' strip. Prefer the admin Sponsors page (stored in the database) to manage logos without a deploy. Keep this list EMPTY so the strip stays hidden when there is no sponsor; add entries only if you want a file-based logo without the admin.",
   "heading": "In partnership with",
-  "sponsors": [
-    {
-      "name": "Example Sponsor",
-      "image": "/sponsors/example-sponsor.svg",
-      "url": "https://example.com",
-      "alt": "Example Sponsor logo"
-    }
-  ]
+  "sponsors": []
 }

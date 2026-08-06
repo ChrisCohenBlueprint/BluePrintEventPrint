@@ -638,6 +638,7 @@ socket.on('state:full', (rows) => {
 
   if (selectedId) renderPanel(selectedId);
   updateStatsStrip();
+  renderSponsorLegend();   // a stand may have just been (un)flagged sponsored
 });
 
 // Re-run the SVG↔booth mapping from a clean slate after a structural change.
@@ -678,11 +679,14 @@ socket.on('floorplan-sponsor', (s) => {
   if (tagged) Object.keys(booths).forEach(applyVisual);
 });
 
-// Show/hide the "Sponsored" legend swatch and colour it to match the brand.
+// Show the "Sponsored" legend swatch only when there is actually a sponsor to
+// explain: a brand colour is set AND at least one stand is flagged sponsored.
+// With no sponsor it stays hidden, so the public plan shows no empty field.
 function renderSponsorLegend() {
   const item = document.getElementById('leg-sponsored');
   if (!item) return;
-  if (sponsorColor) {
+  const anySponsored = Object.values(booths).some(b => b && b.sponsored);
+  if (sponsorColor && anySponsored) {
     const dot = item.querySelector('.leg-dot');
     if (dot) { dot.style.background = sponsorColor; dot.style.borderColor = sponsorColor; }
     item.hidden = false;
