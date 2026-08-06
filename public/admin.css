@@ -551,6 +551,18 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .partners-card p { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-bottom: 16px; max-width: 70ch; }
 .partner-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .partner-form .admin-input { padding: 8px 11px; font-size: 12.5px; background: var(--bg); flex: 1; min-width: 150px; }
+/* Floorplan sponsor controls */
+.fp-color-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.fp-color-field input[type="color"] { width: 42px; height: 34px; padding: 0; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg); cursor: pointer; }
+.fp-sponsor-swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border); display: inline-block; }
+.fp-sponsor-booths { margin-top: 6px; }
+.fp-sponsor-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.fp-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text); cursor: pointer; }
+.fp-chip:hover { border-color: var(--danger, #ef4444); color: var(--danger, #ef4444); }
+.fp-chips-empty { font-size: 12px; color: var(--muted); }
+
 .partners-table-wrap { overflow-x: auto; }
 .partners-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 760px; }
 .partners-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;

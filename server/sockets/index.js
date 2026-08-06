@@ -2,6 +2,7 @@ const crypto = require('crypto');
 
 const config    = require('../config');
 const booths    = require('../models/booths');
+const sponsors  = require('../models/sponsors');
 const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
 const { track } = require('../services/tracking');
@@ -411,6 +412,28 @@ function register(io) {
       return { ok: true, ...r };
     }));
 
+    // Set the floorplan (title) sponsor: name + brand colour. Broadcast to every
+    // client so the legend swatch and any sponsored-booth fills update live.
+    socket.on('sponsor:set-floorplan', requireAdmin(socket, 'sponsor:set-floorplan', async ({ name, color }) => {
+      const saved = await sponsors.setFloorplanSponsor({ name, color });
+      io.emit('floorplan-sponsor', saved);
+      log(io, saved.color
+        ? `🎨 Floorplan sponsor set — ${escapeHtml(saved.name || 'unnamed')} (${escapeHtml(saved.color)})`
+        : `🎨 Floorplan sponsor cleared`, 'admin');
+      return { ok: true, ...saved };
+    }));
+
+    // Flag/unflag a stand as the sponsor's, so it fills with the brand colour.
+    socket.on('booth:set-sponsored', requireAdmin(socket, 'booth:set-sponsored', async ({ boothNumber, sponsored }) => {
+      const n = stand(boothNumber);
+      const r = await booths.setSponsored(n, sponsored === true, { actor: socket.data.user });
+      if (!r.ok) return { ok: false, error: `Could not update Stand ${n}.` };
+      await refresh(); broadcastState(io);
+      log(io, r.sponsored ? `🎨 Stand ${escapeHtml(n)} marked as sponsor booth`
+                          : `🎨 Stand ${escapeHtml(n)} unmarked as sponsor booth`, 'admin');
+      return { ok: true, ...r };
+    }));
+
     // demo:reset is gone. It wiped all 272 booths and was reachable from any
     // anonymous browser console.
 
@@ -437,6 +460,8 @@ function register(io) {
           ? { ...s, connections }
           : { totalBooths: s.totalBooths, availableBooths: s.availableBooths,
               totalSqm: s.totalSqm, availSqm: s.availSqm });
+
+        socket.emit('floorplan-sponsor', await sponsors.getFloorplanSponsor());
 
         io.emit('viewers:count', connections);
         socket.emit('ready');

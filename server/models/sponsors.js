@@ -112,4 +112,33 @@ async function setFields(key, fields) {
   return col().findOne({ showId: config.showId, key });
 }
 
-module.exports = { col, all, allActive, toPublic, recommend, setFields };
+// ─── Floorplan (title) sponsor ────────────────────────────────────────────────
+// A single show-level sponsor: a name and a brand colour. Booths flagged as
+// `sponsored` are filled with this colour on the plan, and the legend shows a
+// matching "Sponsored" swatch. Stored once per show in a settings document.
+const settings = () => getDb().collection('settings');
+
+// Accept only a #RGB / #RRGGBB hex colour — this value flows into an inline
+// `fill` / CSS background on the client, so anything else must be rejected to
+// avoid style injection.
+const HEX = /^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$/;
+function cleanColor(c) {
+  const s = String(c == null ? '' : c).trim();
+  return HEX.test(s) ? s : '';
+}
+
+async function getFloorplanSponsor() {
+  const doc = await settings().findOne({ _id: config.showId });
+  const fp = (doc && doc.floorplanSponsor) || {};
+  return { name: fp.name || '', color: fp.color || '' };
+}
+
+async function setFloorplanSponsor({ name, color } = {}) {
+  const value = { name: String(name == null ? '' : name).trim().slice(0, 80), color: cleanColor(color) };
+  await settings().updateOne({ _id: config.showId },
+    { $set: { floorplanSponsor: value, updatedAt: new Date() } }, { upsert: true });
+  return value;
+}
+
+module.exports = { col, all, allActive, toPublic, recommend, setFields,
+                   getFloorplanSponsor, setFloorplanSponsor };

@@ -26,6 +26,7 @@ function toPublic(b) {
     sqm:     b.sqm,
     geometry: b.geometry,
     displayNumber: b.displayNumber || null,   // admin-set label shown in place of boothNumber (identity is unchanged)
+    sponsored: b.sponsored === true,          // filled with the floorplan sponsor's brand colour on the plan
     splitFrom: b.splitFrom || null,   // lets the client draw + number split cells
     splitAxis: b.splitAxis || null,   // 'vertical' | 'horizontal' — which edge is the divider
     viewers: b.viewers || 0,
@@ -91,6 +92,16 @@ async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
 
 async function incrementClicks(boothNumber) {
   await col().updateOne({ showId: config.showId, boothNumber }, { $inc: { clicks: 1 } });
+}
+
+// Flag (or unflag) a stand as the floorplan sponsor's — it then renders in the
+// sponsor's brand colour. Identity/status/booking are untouched; this is a
+// presentation flag only.
+async function setSponsored(boothNumber, on, { actor = null } = {}) {
+  const res = await col().updateOne(
+    { showId: config.showId, boothNumber },
+    { $set: { sponsored: on === true, updatedAt: new Date(), updatedBy: actor } });
+  return { ok: res.matchedCount === 1, sponsored: on === true };
 }
 
 /**
@@ -565,4 +576,4 @@ async function repairHalvedStands() {
 }
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   setDisplayNumber, incrementClicks, stats, consolidate, split, reset, repairHalvedStands };
+                   setDisplayNumber, setSponsored, incrementClicks, stats, consolidate, split, reset, repairHalvedStands };

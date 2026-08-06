@@ -50,6 +50,24 @@ let shortlist   = [];      // boothNumbers the visitor wants to enquire about
 // The number to SHOW for a stand — the admin-set override if present, else the
 // real identity. Identity (n / boothNumber) stays the key for lookups + emits.
 const shownN = (n) => (booths[n] && booths[n].displayNumber) || n;
+
+// Floorplan (title) sponsor: a brand colour that fills sponsored stands and
+// shows as a "Sponsored" legend swatch. Pushed from the server on connect and
+// whenever an admin changes it.
+let sponsorColor = '', sponsorName = '';
+
+// Readable text colour for a given background — dark ink on light brands, white
+// on dark ones (WCAG relative-luminance threshold).
+function contrastText(hex) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return '#111827';
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return L > 0.4 ? '#111827' : '#ffffff';
+}
 let svgDoc      = null;
 let submitted   = false;
 let svgReady    = false;
@@ -635,6 +653,25 @@ socket.on('viewers:count', (n) => {
 
 socket.on('error:action', ({ message }) => console.warn(message));
 
+socket.on('floorplan-sponsor', (s) => {
+  sponsorColor = (s && s.color) || '';
+  sponsorName  = (s && s.name)  || '';
+  renderSponsorLegend();
+  // Repaint so sponsored stands pick up (or drop) the brand fill.
+  if (tagged) Object.keys(booths).forEach(applyVisual);
+});
+
+// Show/hide the "Sponsored" legend swatch and colour it to match the brand.
+function renderSponsorLegend() {
+  const item = document.getElementById('leg-sponsored');
+  if (!item) return;
+  if (sponsorColor) {
+    const dot = item.querySelector('.leg-dot');
+    if (dot) { dot.style.background = sponsorColor; dot.style.borderColor = sponsorColor; }
+    item.hidden = false;
+  } else item.hidden = true;
+}
+
 function applyVisual(n) {
   const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   if (!el) return;
@@ -645,6 +682,15 @@ function applyVisual(n) {
 
   if (shortlist.includes(n)) el.classList.add('booth-shortlisted');
   else el.classList.remove('booth-shortlisted');
+
+  // Floorplan-sponsor fill: a sponsored stand is painted in the brand colour,
+  // overriding its status fill. Cleared inline when unsponsored so the status
+  // class shows through again.
+  const sponsored = booths[n]?.sponsored && sponsorColor;
+  el.classList.toggle('booth-sponsored', !!sponsored);
+  // The status fills are `!important`; an inline `important` property beats them.
+  if (sponsored) el.style.setProperty('fill', sponsorColor, 'important');
+  else el.style.removeProperty('fill');
 
   // Exhibitor name painted onto the stand, as before. textContent, never
   // innerHTML — the value reaches here from the public enquiry form.
@@ -669,6 +715,8 @@ function applyVisual(n) {
     // default — otherwise our live names looked bolder and larger than the plan.
     BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
       { family: 'Raleway, sans-serif', weight: '600', maxFont: 12 });
+    // Keep the name legible on a dark brand fill (white text), dark ink otherwise.
+    textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');
   } else if (textNode) {
     textNode.remove();
   }

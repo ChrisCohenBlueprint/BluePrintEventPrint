@@ -179,6 +179,13 @@ function applyAdminVisual(el, status) {
   el.classList.add(`booth-${status}`);
 
   const id = el.getAttribute('data-booth');
+  // Sponsor fill — brand colour overrides the status fill for a sponsored stand.
+  const sponsored = booths[id]?.sponsored && sponsorColor;
+  el.classList.toggle('booth-sponsored', !!sponsored);
+  // The status fills are `!important`; an inline `important` property beats them.
+  if (sponsored) el.style.setProperty('fill', sponsorColor, 'important');
+  else el.style.removeProperty('fill');
+
   let textNode = svgDoc.querySelector(`[id="admin-text-${id}"]`);
   const company = dealOf(booths[id]).company;
 
@@ -201,6 +208,7 @@ function applyAdminVisual(el, status) {
       // so the admin and front-end views render exhibitor names identically.
       BoothMap.fitLabel(textNode, company, { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
         { family: 'Raleway, sans-serif', weight: '600', maxFont: 12 });
+      textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');
     } catch { /* SVG not laid out yet — repaints on next broadcast */ }
   } else if (textNode) {
     textNode.remove();
@@ -241,6 +249,20 @@ const dealOf = (b) => (b && b.assignment) || {};
 // real identity. Identity (boothNumber) is what all lookups/emits still use.
 const shownB = (b) => (b && b.displayNumber) || (b && b.boothNumber) || '';
 const shownN = (n) => shownB(booths[n]) || n;
+
+// Floorplan (title) sponsor — brand colour that fills sponsored stands. Pushed
+// from the server on connect and whenever it changes.
+let sponsorColor = '', sponsorName = '';
+function contrastText(hex) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return '#111827';
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return L > 0.4 ? '#111827' : '#ffffff';
+}
 
 function renderAdminBoothAction(n) {
   const b = booths[n];
@@ -587,6 +609,7 @@ function populateToolDropdowns() {
   }
 
   updateMovePreview();
+  renderSponsorBooths();
 }
 
 // Prefill the text box with the selected stand's current shown number.
@@ -618,6 +641,53 @@ document.getElementById('number-form')?.addEventListener('submit', e => {
       adminToast(res.cleared ? `Stand ${boothNumber} reverted to its own number.`
                              : `Stand ${boothNumber} now shown as ${res.value}.`, 'ok');
     } else adminToast((res && res.error) || 'Could not update.', 'error');
+  });
+});
+
+// ─── Floorplan sponsor ────────────────────────────────────────────────────────
+document.getElementById('fp-sponsor-form')?.addEventListener('submit', e => {
+  e.preventDefault();
+  const name  = document.getElementById('fp-sponsor-name').value.trim();
+  const color = document.getElementById('fp-sponsor-color').value;
+  socket.emit('sponsor:set-floorplan', { name, color }, (res) => {
+    adminToast(res && res.ok ? 'Floorplan sponsor saved.' : (res && res.error) || 'Could not save.', res && res.ok ? 'ok' : 'error');
+  });
+});
+document.getElementById('fp-sponsor-clear')?.addEventListener('click', () => {
+  if (!confirm('Clear the floorplan sponsor colour? Sponsored stands revert to their status colour.')) return;
+  socket.emit('sponsor:set-floorplan', { name: '', color: '' }, () => adminToast('Floorplan sponsor cleared.', 'ok'));
+});
+document.getElementById('fp-sponsor-add')?.addEventListener('click', () => {
+  const boothNumber = document.getElementById('fp-sponsor-stand').value;
+  if (!boothNumber) return adminToast('Pick a stand to mark.', 'error');
+  socket.emit('booth:set-sponsored', { boothNumber, sponsored: true }, (res) => {
+    adminToast(res && res.ok ? `Stand ${boothNumber} marked as sponsored.` : (res && res.error) || 'Could not update.', res && res.ok ? 'ok' : 'error');
+  });
+});
+
+// Populate the stand picker and render a chip per sponsored stand (with remove).
+function renderSponsorBooths() {
+  const sel = document.getElementById('fp-sponsor-stand');
+  if (sel) {
+    const cur = sel.value;
+    const opts = Object.values(booths).filter(b => !b.sponsored);
+    sel.innerHTML = '<option value="">Select…</option>' +
+      opts.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))}</option>`).join('');
+    sel.value = cur;
+  }
+  const chips = document.getElementById('fp-sponsor-chips');
+  if (chips) {
+    const marked = Object.values(booths).filter(b => b.sponsored);
+    chips.innerHTML = marked.length
+      ? marked.map(b => `<button type="button" class="fp-chip" data-unsponsor="${esc(b.boothNumber)}">Stand ${esc(shownB(b))} <span aria-hidden="true">×</span></button>`).join('')
+      : '<span class="fp-chips-empty">No sponsored stands yet.</span>';
+  }
+}
+document.getElementById('fp-sponsor-chips')?.addEventListener('click', e => {
+  const btn = e.target.closest('[data-unsponsor]');
+  if (!btn) return;
+  socket.emit('booth:set-sponsored', { boothNumber: btn.getAttribute('data-unsponsor'), sponsored: false }, (res) => {
+    if (!(res && res.ok)) adminToast((res && res.error) || 'Could not update.', 'error');
   });
 });
 
@@ -767,6 +837,23 @@ function retagAdminMap() {
   adminTagged = false;
   tagAdminBooths();
 }
+
+socket.on('floorplan-sponsor', (s) => {
+  sponsorColor = (s && s.color) || '';
+  sponsorName  = (s && s.name)  || '';
+  // Reflect into the Sponsors-section controls if they're present.
+  const nameEl = document.getElementById('fp-sponsor-name');
+  const colEl  = document.getElementById('fp-sponsor-color');
+  const swEl   = document.getElementById('fp-sponsor-swatch');
+  if (nameEl && document.activeElement !== nameEl) nameEl.value = sponsorName;
+  if (colEl && sponsorColor) colEl.value = sponsorColor;
+  if (swEl) swEl.style.background = sponsorColor || 'transparent';
+  // Repaint every stand so sponsored fills appear/clear.
+  if (svgDoc && adminTagged) Object.values(booths).forEach(b => {
+    const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
+    if (el) applyAdminVisual(el, b.status);
+  });
+});
 
 // Rejected holds, failed merges and denied actions used to disappear silently.
 socket.on('error:action', ({ message }) => adminToast(message || 'That action could not be completed.', 'error'));

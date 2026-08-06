@@ -339,6 +339,34 @@
         </div>
       </div>
 
+      <!-- Floorplan (title) sponsor: brand colour + which stands it fills -->
+      <div class="partners-card">
+        <h3>Floorplan sponsor</h3>
+        <p>The show's title sponsor. Pick a brand colour — ideally one that contrasts with their logo — and mark their stand(s). Sponsored stands fill with this colour on the plan, and a “Sponsored” swatch appears in the legend.</p>
+        <form id="fp-sponsor-form" class="partner-form">
+          <div class="partner-fields">
+            <input type="text" id="fp-sponsor-name" class="admin-input" placeholder="Sponsor name (e.g. NYNAS)" maxlength="80">
+            <label class="fp-color-field">
+              <span>Colour</span>
+              <input type="color" id="fp-sponsor-color" value="#e4002b">
+              <span class="fp-sponsor-swatch" id="fp-sponsor-swatch" aria-hidden="true"></span>
+            </label>
+            <button type="submit" class="admin-btn success"><i data-lucide="palette"></i> Save sponsor</button>
+            <button type="button" id="fp-sponsor-clear" class="admin-btn">Clear</button>
+          </div>
+        </form>
+        <div class="fp-sponsor-booths">
+          <div class="tool-form-row">
+            <div class="tool-field">
+              <label>Mark a stand as sponsored</label>
+              <select id="fp-sponsor-stand" class="admin-select"><option value="">Select…</option></select>
+            </div>
+            <button type="button" id="fp-sponsor-add" class="admin-btn success">Add stand</button>
+          </div>
+          <div id="fp-sponsor-chips" class="fp-sponsor-chips"></div>
+        </div>
+      </div>
+
       <h3 class="sponsors-cat-title">Sponsorship catalogue</h3>
       <div class="sponsors-admin-wrap">
         <table class="sponsors-admin-table" id="sponsors-admin-table">
