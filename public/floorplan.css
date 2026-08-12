@@ -115,9 +115,14 @@ body {
 }
 .zoom-btn:hover { border-color: var(--accent); color: var(--accent); }
 .zoom-btn svg { width: 15px; height: 15px; }
-/* Download is the primary action here, so accent it and set it slightly apart
-   from the view controls. */
-.download-btn { color: var(--accent); border-color: var(--accent); margin-right: 6px; }
+/* Download is the primary action here, so give it a label + accent and set it
+   slightly apart from the icon-only view controls. */
+.download-btn {
+  width: auto; padding: 0 13px; gap: 7px;
+  color: var(--accent); border-color: var(--accent);
+  font-family: 'Raleway', sans-serif; font-weight: 600; font-size: 13px;
+  white-space: nowrap; margin-right: 6px;
+}
 .download-btn:hover { background: var(--accent); color: #fff; }
 .download-btn:disabled { opacity: .5; pointer-events: none; }
 
