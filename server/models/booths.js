@@ -287,18 +287,21 @@ function adjacent(g1, g2, tol = 3) {
   const b2x = g2.x + g2.w, b2y = g2.y + g2.h;
   const xOverlap = Math.min(a2x, b2x) - Math.max(g1.x, g2.x);
   const yOverlap = Math.min(a2y, b2y) - Math.max(g1.y, g2.y);
-  // Overlapping in BOTH axes = nested/overlapping footprints, not a clean
-  // side-by-side merge — reject (folding overlapping stands is corruption).
-  if (xOverlap > tol && yOverlap > tol) return false;
-  const gapX = Math.max(g1.x, g2.x) - Math.min(a2x, b2x);
-  const gapY = Math.max(g1.y, g2.y) - Math.min(a2y, b2y);
-  // A genuine shared edge: real overlap along one axis, and the OTHER axis
-  // touches (gap ≈ 0). A whole-aisle gap (large positive) is rejected; a deep
-  // overlap (large negative) is caught above. tol is a few units for the .75pt
-  // artwork stroke and float geometry — not a whole ~50-unit aisle.
-  const shareV = yOverlap > tol && Math.abs(gapX) <= tol;
-  const shareH = xOverlap > tol && Math.abs(gapY) <= tol;
-  return shareV || shareH;
+  // "Aligned" in an axis = the two cover (nearly) the same span there, i.e. they
+  // share that whole edge — columns line up for a vertical stack, rows for a
+  // side-by-side. Measured against the SMALLER extent so equal-size stands match.
+  const xAligned = xOverlap >= Math.min(g1.w, g2.w) - tol;
+  const yAligned = yOverlap >= Math.min(g1.h, g2.h) - tol;
+  // Aligned in BOTH axes = one footprint sits on/inside the other (a nested stand
+  // or an exact duplicate) — corruption, never a merge.
+  if (xAligned && yAligned) return false;
+  // A vertical stack (columns aligned, offset top-to-bottom) or a side-by-side
+  // (rows aligned, offset left-to-right). The gap/overlap along the OFFSET axis
+  // is bounded by contiguousMerge() — a whole-aisle gap is still rejected there —
+  // so we tolerate the small overlap some plans store between stacked stands
+  // (e.g. LEX27's ~54-stride, 80-tall boxes), which the old touch-only rule
+  // wrongly refused, blocking every vertical merge.
+  return xAligned || yAligned;
 }
 
 /**
