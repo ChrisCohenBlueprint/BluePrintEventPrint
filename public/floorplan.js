@@ -283,9 +283,12 @@ function toggleShortlist(n) {
 function renderShortlist() {
   const card = document.getElementById('enquiry-card');
   const box  = document.getElementById('eq-shortlist');
+  const foot = document.getElementById('eq-footer');   // fixed Send button bar
 
-  if (!shortlist.length && !sponsorShortlist.length) { card.classList.add('hidden'); box.innerHTML = ''; return; }
-  if (!submitted) card.classList.remove('hidden');
+  if (!shortlist.length && !sponsorShortlist.length) {
+    card.classList.add('hidden'); if (foot) foot.hidden = true; box.innerHTML = ''; return;
+  }
+  if (!submitted) { card.classList.remove('hidden'); if (foot) foot.hidden = false; }
 
   const standChips = shortlist.map(n => `
     <button type="button" class="eq-chip" data-remove-booth="${esc(n)}" aria-label="Remove stand ${esc(shownN(n))}">
@@ -366,24 +369,13 @@ function updatePanelWidth() {
   side.classList.toggle('has-selection', showing);
 }
 
-// Cap the sponsorship column to the enquiry column's height so the two end on
-// the same line rather than the sponsorship list being cut off early. Below the
-// wide-panel breakpoint the columns stack, so the cap is removed.
+// The whole selection column now scrolls as one (with a fixed action bar below),
+// so the sponsorship no longer needs a height cap to end level with the enquiry —
+// they scroll together. Kept as a no-op-ish hook (clears any stale cap) so the
+// many existing call sites stay valid.
 function matchSponsorHeight() {
   const sponsors = document.getElementById('fp-sponsors');
-  const col = document.querySelector('.fp-enquiry-col');
-  if (!sponsors || !col) return;
-  // When either box is folded away the columns no longer need to end level, and
-  // capping the sponsors to a collapsed enquiry column would hide its content.
-  const enq = document.getElementById('enquiry-card');
-  const collapsed = sponsors.classList.contains('collapsed') || (enq && enq.classList.contains('collapsed'));
-  if (window.innerWidth <= WIDE_BREAKPOINT || collapsed) { sponsors.style.maxHeight = ''; return; }
-  // Measure on the next frame so the enquiry column has settled after any
-  // shortlist or form change.
-  requestAnimationFrame(() => {
-    const h = col.offsetHeight;
-    if (h > 0) sponsors.style.maxHeight = h + 'px';
-  });
+  if (sponsors) sponsors.style.maxHeight = '';
 }
 window.addEventListener('resize', matchSponsorHeight);
 
@@ -627,6 +619,7 @@ function initForm() {
       if (res && res.ok) {
         submitted = true;
         form.classList.add('hidden');
+        document.getElementById('eq-footer').hidden = true;   // hide the Send bar
         document.getElementById('eq-shortlist').classList.add('hidden');
         success.classList.remove('hidden');
         lucide.createIcons();

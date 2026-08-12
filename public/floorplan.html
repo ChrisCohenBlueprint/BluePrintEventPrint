@@ -177,14 +177,6 @@
 
           <div class="eq-errors hidden" id="eq-errors" role="alert"></div>
 
-          <div class="eq-actions">
-            <button type="submit" class="btn-book" id="eq-submit">
-              <i data-lucide="send"></i> Send enquiry
-            </button>
-          </div>
-          <p class="eq-privacy">
-            We'll only use these details to respond to your enquiry.
-          </p>
         </form>
 
         <div class="eq-success hidden" id="eq-success">
@@ -196,19 +188,29 @@
       </div><!-- /.fp-enquiry-col -->
      </div><!-- /.fp-selection -->
 
-      <!-- Quick stats strip -->
-      <div class="fp-stats-strip">
-        <div class="stat-chip">
-          <span class="chip-val" id="stat-avail">—</span>
-          <span class="chip-lbl">Available</span>
+      <!-- Fixed action bar — always visible at the bottom of the panel. The Send
+           button lives here (bound to the form via form="enquiry-form") so it
+           stays in view while the fields scroll above; the stats sit beneath it. -->
+      <div class="fp-foot">
+        <div class="eq-footer" id="eq-footer" hidden>
+          <button type="submit" form="enquiry-form" class="btn-book" id="eq-submit">
+            <i data-lucide="send"></i> Send enquiry
+          </button>
+          <p class="eq-privacy">We'll only use these details to respond to your enquiry.</p>
         </div>
-        <div class="stat-chip">
-          <span class="chip-val" id="stat-sqm">—</span>
-          <span class="chip-lbl"><span class="unit-label">m²</span> left</span>
-        </div>
-        <div class="stat-chip">
-          <span class="chip-val" id="stat-held">—</span>
-          <span class="chip-lbl">On Hold</span>
+        <div class="fp-stats-strip">
+          <div class="stat-chip">
+            <span class="chip-val" id="stat-avail">—</span>
+            <span class="chip-lbl">Available</span>
+          </div>
+          <div class="stat-chip">
+            <span class="chip-val" id="stat-sqm">—</span>
+            <span class="chip-lbl"><span class="unit-label">m²</span> left</span>
+          </div>
+          <div class="stat-chip">
+            <span class="chip-val" id="stat-held">—</span>
+            <span class="chip-lbl">On Hold</span>
+          </div>
         </div>
       </div>
     </aside>

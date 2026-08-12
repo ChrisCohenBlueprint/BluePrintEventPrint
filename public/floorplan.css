@@ -171,10 +171,18 @@ body {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  overflow-y: auto;
+  overflow: hidden;                 /* the inner .fp-selection scrolls, not the shell */
   border-left: 1px solid var(--border);
   background: rgba(255,255,255,0.55);
 }
+/* The action bar below the scrollable selection stays fixed, so the Send button
+   and stats are always visible at the panel bottom. */
+.fp-foot { flex-shrink: 0; display: flex; flex-direction: column; gap: 12px;
+  border-top: 1px solid var(--border); padding-top: 12px; }
+.eq-footer { display: flex; flex-direction: column; gap: 8px; }
+.eq-footer[hidden] { display: none; }
+.eq-footer .btn-book { width: 100%; flex: none; }
+.eq-footer .eq-privacy { margin-top: 0; }
 
 .fp-side-card {
   background: var(--surface);
@@ -262,7 +270,7 @@ body {
 .eq-field select:focus, .eq-field textarea:focus { border-color: var(--accent); }
 .eq-field select { cursor: pointer; appearance: auto; }
 
-.eq-actions { display: flex; gap: 8px; margin-top: 4px; }
+.eq-actions { display: flex; gap: 8px; }
 .btn-hold, .btn-book {
   flex: 1; padding: 10px; border: none; border-radius: 8px;
   font-family: inherit; font-size: 13px; font-weight: 600;
@@ -280,7 +288,6 @@ body {
    content overflows, the auto margin collapses and it just follows the content. */
 .fp-stats-strip {
   display: flex; gap: 8px;
-  margin-top: auto;
 }
 .stat-chip {
   flex: 1;
@@ -453,21 +460,11 @@ body {
 /* ─── Wide selection panel: sponsorship (left) + enquiry (right) ────────────── */
 .fp-side { transition: width .22s ease; }
 .fp-side.has-selection { width: 680px; max-width: 60vw; }
-/* flex:1 so the selection fills the panel above the stats strip; the enquiry
-   column then stretches full-height and its Send button drops to the bottom
-   (see below), mirroring the pinned stats. Sponsorship keeps to the top. */
-.fp-selection { display: flex; gap: 14px; align-items: stretch; flex: 1 1 auto; }
-.fp-sponsors { align-self: flex-start; }
+.fp-selection { display: flex; gap: 14px; align-items: flex-start;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .fp-enquiry-col { flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-
-/* Enquiry card fills the column and lays its form out as a column so the Send
-   button can sit at the very bottom; a folded card stays compact instead. */
-.enquiry-card { display: flex; flex-direction: column; flex: 1 1 auto; }
-.enquiry-card.collapsed { flex: 0 0 auto; }
-.enquiry-card .eq-form { flex: 1 1 auto; }
-.eq-actions { margin-top: auto; }
 .fp-sponsors { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 12px;
-  overflow-y: auto; padding-right: 4px; }
+  overflow: visible; padding-right: 4px; }   /* the whole .fp-selection scrolls now */
 .fp-sponsors.hidden { display: none; }
 
 /* Collapsing sponsorship pulls the panel IN, not down: the panel narrows to a
@@ -476,7 +473,7 @@ body {
    the freed space. */
 .fp-side.sponsors-collapsed.has-selection { width: 360px; max-width: 46vw; }
 .fp-side.sponsors-collapsed .fp-selection { flex-direction: column; }
-.fp-side.sponsors-collapsed .fp-enquiry-col { flex: 1 1 auto; width: 100%; order: 1; }
+.fp-side.sponsors-collapsed .fp-enquiry-col { flex: 0 0 auto; width: 100%; order: 1; }
 .fp-side.sponsors-collapsed .fp-sponsors { flex: 0 0 auto; width: 100%; order: 0; overflow: visible; }
 
 .sp-head { position: sticky; top: 0; background: rgba(244,246,249,.92); backdrop-filter: blur(8px);
@@ -582,7 +579,10 @@ body {
   .fp-map-panel { height: 62vh; min-height: 360px; flex: none; }
   .fp-side,
   .fp-side.has-selection { width: 100%; max-width: none; height: auto; max-height: none;
-    overflow-y: visible; border-left: none; border-top: 1px solid var(--border); }
+    overflow: visible; border-left: none; border-top: 1px solid var(--border); }
+  /* No fixed action bar on mobile — the whole page scrolls, so let the panel and
+     its selection flow naturally and the footer follows the content. */
+  .fp-selection { overflow: visible; flex: 0 1 auto; }
   body { overflow: auto; }
 }
 @media (max-width: 600px) {
