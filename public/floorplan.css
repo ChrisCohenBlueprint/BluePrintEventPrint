@@ -235,7 +235,7 @@ body {
 }
 
 /* Enquiry form */
-.enquiry-card { }
+.enquiry-card { position: relative; }
 .eq-form { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
 .eq-field { display: flex; flex-direction: column; gap: 5px; }
 .eq-field label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.7px; color: var(--muted); }
@@ -459,6 +459,30 @@ body {
 .sp-title { font-size: 15px; font-weight: 700; }
 .sp-sub { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
 
+/* Collapse chevron at the top-right of the sponsorship + enquiry boxes, so a
+   visitor can fold either away. Scoped to .fp-sponsors/.enquiry-card so it never
+   clashes with the per-card .sponsor-card.collapsed above. */
+.box-collapse {
+  position: absolute; top: 0; right: 0; z-index: 4;
+  width: 26px; height: 26px; padding: 0; border-radius: 50%;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.enquiry-card > .box-collapse { top: 16px; right: 16px; }
+.box-collapse:hover { border-color: var(--accent); color: var(--accent); }
+.box-collapse svg { width: 15px; height: 15px; transition: transform .2s; }
+.fp-sponsors.collapsed .box-collapse svg,
+.enquiry-card.collapsed .box-collapse svg { transform: rotate(180deg); }
+.sp-head { padding-right: 32px; }
+.eq-shortlist-lbl { padding-right: 30px; }
+/* Folded: hide the body, keep the header row (title / "Enquiring about…"). */
+.fp-sponsors.collapsed { overflow: visible; max-height: none !important; }
+.fp-sponsors.collapsed .sp-sub,
+.fp-sponsors.collapsed .sponsor-recos { display: none; }
+.enquiry-card.collapsed #enquiry-form { display: none; }
+
 .sponsor-recos { display: flex; flex-direction: column; gap: 10px; }
 
 /* Tier drives the accent. platinum > gold > silver conveys weight without a price. */
@@ -522,7 +546,8 @@ body {
   .fp-selection { flex-direction: column; }
   .fp-enquiry-col { flex: 1 1 auto; width: 100%; order: 0; }
   .fp-sponsors { order: 1; max-height: none !important; width: 100%; overflow: visible; }
-  .sp-head { position: static; }
+  /* relative (not static) so the collapse chevron still anchors to the header. */
+  .sp-head { position: relative; }
 }
 
 @media (max-width: 900px) {

@@ -117,8 +117,26 @@ function initPanZoom() {
   if (dl) dl.onclick = downloadPlan;
 }
 
+// Wire the collapse chevrons on the sponsorship + enquiry boxes. Each folds its
+// body away (client-side only, per visitor) and rotates its chevron; the height
+// cap between the two columns is re-evaluated so the layout stays tidy.
+function wireCollapsers() {
+  [['fp-sponsors', 'sp-collapse', 'sponsorship'], ['enquiry-card', 'eq-collapse', 'enquiry']]
+    .forEach(([boxId, btnId, label]) => {
+      const box = document.getElementById(boxId), btn = document.getElementById(btnId);
+      if (!box || !btn) return;
+      btn.addEventListener('click', () => {
+        const collapsed = box.classList.toggle('collapsed');
+        btn.setAttribute('aria-expanded', String(!collapsed));
+        btn.title = (collapsed ? 'Show ' : 'Hide ') + label;
+        matchSponsorHeight();
+      });
+    });
+}
+
 // ─── Load ─────────────────────────────────────────────────────────────────────
 async function load() {
+  wireCollapsers();
   const mount = document.getElementById('svg-mount');
   try {
     const svgRes = await fetch('/LEX27_Floorplan_Consolidated.svg');
@@ -350,7 +368,11 @@ function matchSponsorHeight() {
   const sponsors = document.getElementById('fp-sponsors');
   const col = document.querySelector('.fp-enquiry-col');
   if (!sponsors || !col) return;
-  if (window.innerWidth <= WIDE_BREAKPOINT) { sponsors.style.maxHeight = ''; return; }
+  // When either box is folded away the columns no longer need to end level, and
+  // capping the sponsors to a collapsed enquiry column would hide its content.
+  const enq = document.getElementById('enquiry-card');
+  const collapsed = sponsors.classList.contains('collapsed') || (enq && enq.classList.contains('collapsed'));
+  if (window.innerWidth <= WIDE_BREAKPOINT || collapsed) { sponsors.style.maxHeight = ''; return; }
   // Measure on the next frame so the enquiry column has settled after any
   // shortlist or form change.
   requestAnimationFrame(() => {
