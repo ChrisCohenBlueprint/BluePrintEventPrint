@@ -170,8 +170,14 @@ function focusAdminBooth(n) {
   const cx = (r.left + r.width / 2 - f.left - t.x) / t.scale;   // booth centre in content space
   const cy = (r.top  + r.height / 2 - f.top  - t.y) / t.scale;
   const S = 2.5;                                                // target zoom
+  // Aim for the centre of the SCREEN (clamped into the map frame), not the
+  // centre of the frame: the frame sits right of the left nav, so its own centre
+  // reads as off to the right. Landing the stand mid-viewport looks centred.
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const targetSx = clamp(window.innerWidth  / 2, f.left, f.right);
+  const targetSy = clamp(window.innerHeight / 2, f.top,  f.bottom);
   pzAdmin.zoomAbs(0, 0, S);                                     // set the scale…
-  pzAdmin.moveTo(f.width / 2 - cx * S, f.height / 2 - cy * S);  // …then place it centre-frame
+  pzAdmin.moveTo(targetSx - f.left - cx * S, targetSy - f.top - cy * S);   // …place it at screen centre
   return true;
 }
 
