@@ -113,6 +113,8 @@ function initPanZoom() {
   document.getElementById('zoom-in').onclick  = () => zoomBy(1.5);
   document.getElementById('zoom-out').onclick = () => zoomBy(0.66);
   document.getElementById('zoom-reset').onclick = () => { pz.moveTo(0, 0); pz.zoomAbs(0, 0, 1); };
+  const dl = document.getElementById('download-plan');
+  if (dl) dl.onclick = downloadPlan;
 }
 
 // ─── Load ─────────────────────────────────────────────────────────────────────
@@ -691,6 +693,121 @@ function renderSponsorLegend() {
     if (dot) { dot.style.background = sponsorColor; dot.style.borderColor = sponsorColor; }
     item.hidden = false;
   } else item.hidden = true;
+}
+
+// ─── Download / export ──────────────────────────────────────────────────────
+// Snapshot the plan exactly as it stands right now — every stand's status colour
+// and exhibitor name, plus the baked numbers, sizes and event branding — as a
+// PNG, with a colour key and (if one is set) the floorplan sponsor along the
+// bottom. Built by cloning the live SVG, baking the status fills inline (the
+// standalone file carries none of the app's CSS), appending a footer band, then
+// rasterising through a canvas. Coordinates are SVG user units.
+const STATUS_FILL = { available: '#ffffff', sold: '#fcdf6d', held: '#f97316' };
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+async function downloadPlan() {
+  if (!svgDoc || !svgDoc.viewBox) return;
+  const btn = document.getElementById('download-plan');
+  if (btn) btn.disabled = true;
+  try {
+    const vb = svgDoc.viewBox.baseVal;
+    const W = vb.width, H = vb.height;
+    const hasSponsor = !!(sponsorName && sponsorColor);
+    const footerH = hasSponsor ? 190 : 96;
+
+    const clone = svgDoc.cloneNode(true);
+
+    // Bake each stand's status/sponsor colour inline. An inline `!important`
+    // beats the SVG's own .cls-* fills and any leftover state class, so the
+    // standalone file shows the live statuses rather than the blank artwork.
+    const live = svgDoc.querySelectorAll('[data-booth]');
+    const cloned = clone.querySelectorAll('[data-booth]');
+    live.forEach((el, i) => {
+      const b = booths[el.getAttribute('data-booth')];
+      const fill = (b && b.sponsored && sponsorColor) ? sponsorColor
+                 : (STATUS_FILL[b && b.status] || '#ffffff');
+      const c = cloned[i];
+      if (!c) return;
+      c.style.setProperty('fill', fill, 'important');
+      c.classList && c.classList.remove('booth-selected', 'booth-shortlisted');
+    });
+
+    // Grow the canvas downward for the footer band.
+    clone.setAttribute('viewBox', `0 0 ${W} ${H + footerH}`);
+    clone.setAttribute('width', W);
+    clone.setAttribute('height', H + footerH);
+    clone.removeAttribute('style');
+
+    const add = (tag, attrs, text) => {
+      const e = document.createElementNS(SVG_NS, tag);
+      for (const k in attrs) e.setAttribute(k, attrs[k]);
+      if (text != null) e.textContent = text;
+      clone.appendChild(e);
+      return e;
+    };
+    const FONT = 'Raleway, Arial, sans-serif';
+    add('rect', { x: 0, y: H, width: W, height: footerH, fill: '#ffffff' });
+    add('line', { x1: 40, y1: H + 1, x2: W - 40, y2: H + 1, stroke: '#e2e8f0', 'stroke-width': 2 });
+
+    // Centred colour key.
+    const keys = [['#ffffff', 'Available', true], ['#fcdf6d', 'Taken'], ['#f97316', 'On Hold']];
+    if (hasSponsor && Object.values(booths).some(b => b && b.sponsored)) keys.push([sponsorColor, 'Sponsored']);
+    const itemW = (label) => 26 + Math.ceil(label.length * 9.5) + 44;
+    const total = keys.reduce((s, k) => s + itemW(k[1]), 0);
+    let kx = Math.max(44, (W - total) / 2);
+    const ky = H + 46;
+    keys.forEach(([col, label, bordered]) => {
+      add('rect', { x: kx, y: ky - 15, width: 20, height: 20, rx: 3, fill: col,
+        stroke: bordered ? '#94a3b8' : col, 'stroke-width': 1 });
+      add('text', { x: kx + 28, y: ky + 1, 'font-family': FONT, 'font-size': 18, fill: '#334155' }, label);
+      kx += itemW(label);
+    });
+
+    // Sponsor line along the very bottom, in the brand colour.
+    if (hasSponsor) {
+      add('text', { x: W / 2, y: H + 118, 'text-anchor': 'middle', 'font-family': FONT,
+        'font-size': 15, 'letter-spacing': 3, fill: '#64748b' }, 'IN PARTNERSHIP WITH');
+      add('text', { x: W / 2, y: H + 160, 'text-anchor': 'middle', 'font-family': FONT,
+        'font-size': 34, 'font-weight': 800, fill: sponsorColor }, sponsorName.toUpperCase());
+    }
+
+    // Rasterise the self-contained SVG through an <img> onto a canvas. The SVG
+    // has no external refs (no sponsor logo, no foreignObject), so the canvas
+    // stays untainted and toBlob works.
+    const xml = new XMLSerializer().serializeToString(clone);
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
+    const img = new Image();
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = () => rej(new Error('SVG render failed'));
+      img.src = url;
+    });
+    const scale = 3000 / W;                       // ~3000px wide keeps numbers crisp
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(W * scale);
+    canvas.height = Math.round((H + footerH) * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    const blob = await new Promise((res, rej) =>
+      canvas.toBlob(b => b ? res(b) : rej(new Error('encode failed')), 'image/png'));
+    const d = new Date();
+    const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `LEX-2026-Floorplan-${stamp}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) {
+    console.error('Floorplan download failed:', e);
+    alert('Sorry — the floorplan download could not be generated. Please try again.');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function applyVisual(n) {
