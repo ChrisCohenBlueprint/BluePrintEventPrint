@@ -274,9 +274,13 @@ body {
 .btn-book { background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff; }
 .btn-book:hover { opacity: 0.88; }
 
-/* Stats strip */
+/* Stats strip — pinned to the bottom of the side panel (margin-top:auto eats the
+   free space above it) so it stays on the bottom edge and rides up/down as the
+   page height changes, instead of floating mid-panel when content is short. When
+   content overflows, the auto margin collapses and it just follows the content. */
 .fp-stats-strip {
   display: flex; gap: 8px;
+  margin-top: auto;
 }
 .stat-chip {
   flex: 1;
@@ -447,12 +451,22 @@ body {
 }
 
 /* ─── Wide selection panel: sponsorship (left) + enquiry (right) ────────────── */
+.fp-side { transition: width .22s ease; }
 .fp-side.has-selection { width: 680px; max-width: 60vw; }
 .fp-selection { display: flex; gap: 14px; align-items: flex-start; }
 .fp-enquiry-col { flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .fp-sponsors { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 12px;
   overflow-y: auto; padding-right: 4px; }
 .fp-sponsors.hidden { display: none; }
+
+/* Collapsing sponsorship pulls the panel IN, not down: the panel narrows to a
+   single column, the folded sponsorship becomes a slim bar on top and the
+   enquiry takes the full width — so no empty column is left and the map reclaims
+   the freed space. */
+.fp-side.sponsors-collapsed.has-selection { width: 360px; max-width: 46vw; }
+.fp-side.sponsors-collapsed .fp-selection { flex-direction: column; }
+.fp-side.sponsors-collapsed .fp-enquiry-col { flex: 0 0 auto; width: 100%; order: 1; }
+.fp-side.sponsors-collapsed .fp-sponsors { flex: 0 0 auto; width: 100%; order: 0; overflow: visible; }
 
 .sp-head { position: sticky; top: 0; background: rgba(244,246,249,.92); backdrop-filter: blur(8px);
   padding-bottom: 8px; z-index: 2; }
@@ -473,8 +487,10 @@ body {
 .enquiry-card > .box-collapse { top: 16px; right: 16px; }
 .box-collapse:hover { border-color: var(--accent); color: var(--accent); }
 .box-collapse svg { width: 15px; height: 15px; transition: transform .2s; }
+/* Folded: chevron turns sideways (points to the header), matching the package
+   cards — a disclosure that opens, not an up/down flip. */
 .fp-sponsors.collapsed .box-collapse svg,
-.enquiry-card.collapsed .box-collapse svg { transform: rotate(180deg); }
+.enquiry-card.collapsed .box-collapse svg { transform: rotate(-90deg); }
 .sp-head { padding-right: 32px; }
 .eq-shortlist-lbl { padding-right: 30px; }
 /* Folded: hide the body, keep the header row (title / "Enquiring about…"). */

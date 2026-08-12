@@ -129,6 +129,11 @@ function wireCollapsers() {
         const collapsed = box.classList.toggle('collapsed');
         btn.setAttribute('aria-expanded', String(!collapsed));
         btn.title = (collapsed ? 'Show ' : 'Hide ') + label;
+        // Folding sponsorship narrows the whole panel (see .sponsors-collapsed) so
+        // the plan reclaims the space rather than leaving an empty column.
+        if (boxId === 'fp-sponsors') {
+          document.getElementById('fp-side').classList.toggle('sponsors-collapsed', collapsed);
+        }
         matchSponsorHeight();
       });
     });
