@@ -446,6 +446,17 @@ document.getElementById('bookings-tbody').addEventListener('change', (e) => {
   inlineUpdateDeal(input.dataset.booth, input.dataset.field, input.value);
 });
 
+// Pressing Enter should save. A standalone input frequently fires 'change' only
+// on blur, not on Enter — so blur it, which commits the value and triggers the
+// 'change' handler above. (preventDefault stops any implicit form behaviour.)
+document.getElementById('bookings-tbody').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const input = e.target.closest('input[data-field]');
+  if (!input) return;
+  e.preventDefault();
+  input.blur();
+});
+
 function adminAction(action, boothNumber) {
   const done = (verb) => (res) => {
     if (res && res.ok) adminToast(`Stand ${boothNumber} ${verb}.`, 'ok');
@@ -495,9 +506,18 @@ function inlineUpdateDeal(boothNumber, field, value) {
   const b = booths[boothNumber];
   if (!b) return;
   const d = dealOf(b);
-  const actualPrice = field === 'price' ? (parseFloat(value) || null) : d.actualPrice;
-  const notes       = field === 'notes' ? value : d.notes;
-  socket.emit('booth:update-deal', { boothNumber, actualPrice, notes });
+  // Send the price as typed (empty → clear); the server parses + validates, so a
+  // literal "0" is kept rather than turned into null by a falsy check.
+  const actualPrice = field === 'price'
+    ? (String(value).trim() === '' ? null : value)
+    : d.actualPrice;
+  const notes = field === 'notes' ? value : d.notes;
+  // Ack so a save actually confirms (or surfaces why it didn't) instead of
+  // failing silently and reverting on the next broadcast.
+  socket.emit('booth:update-deal', { boothNumber, actualPrice, notes }, (res) => {
+    if (res && res.ok) adminToast(`Stand ${boothNumber} ${field} saved.`, 'ok');
+    else adminToast((res && res.error) || `Could not save ${field} for stand ${boothNumber}.`, 'error');
+  });
 }
 
 // Search/filter live update

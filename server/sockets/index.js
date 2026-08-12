@@ -282,6 +282,10 @@ function register(io) {
       const r = await booths.updateDeal(n, { actualPrice, notes, actor: socket.data.user });
       if (!r) return { ok: false, error: `Stand ${n} not found.` };
       if (r.error === 'bad_price') return { ok: false, error: 'Price must be a non-negative number.' };
+      // The write is guarded to sold/held stands; `changed:false` means it didn't
+      // match, so report it instead of falsely acking success (which left the UI
+      // showing "saved" while the value reverted on the next broadcast).
+      if (!r.changed) return { ok: false, error: `Stand ${n} must be sold or on hold to hold a price or notes.` };
       track({ type: 'deal.update', boothNumber: n, socket, meta: {
         fromPrice: r.before.assignment?.actualPrice ?? null, toPrice: actualPrice ?? null,
         notesChanged: notes !== undefined && notes !== r.before.assignment?.notes,
