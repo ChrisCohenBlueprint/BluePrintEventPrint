@@ -120,6 +120,64 @@ function initAdminPanZoom() {
     pzAdmin.moveTo(0, 0);
     pzAdmin.zoomAbs(0, 0, 1);
   });
+
+  // Floorplan search — jump straight to a booth by number.
+  const fpSearch = document.getElementById('admin-fp-search');
+  if (fpSearch) {
+    fpSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); runAdminBoothSearch(); }
+    });
+    fpSearch.addEventListener('change', runAdminBoothSearch);   // datalist pick
+  }
+}
+
+// Fill the search autocomplete with every booth (number + company), so a couple
+// of keystrokes surface the stand. Re-run whenever state changes.
+function populateAdminSearchList() {
+  const dl = document.getElementById('admin-fp-booths');
+  if (!dl) return;
+  dl.innerHTML = Object.values(booths)
+    .sort((a, b) => String(shownB(a)).localeCompare(String(shownB(b)), undefined, { numeric: true }))
+    .map((b) => {
+      const co = dealOf(b).company ? ` — ${esc(dealOf(b).company)}` : '';
+      return `<option value="${esc(b.boothNumber)}" label="Stand ${esc(shownB(b))}${co}"></option>`;
+    }).join('');
+}
+
+// Resolve a typed query (booth id OR shown/display number) to a booth id.
+function findAdminBooth(q) {
+  q = String(q).trim();
+  if (!q) return null;
+  if (booths[q]) return q;                       // exact id
+  const lc = q.toLowerCase();
+  const hit = Object.values(booths).find((b) =>
+    String(b.boothNumber).toLowerCase() === lc ||
+    String(b.displayNumber || '').toLowerCase() === lc);
+  return hit ? hit.boothNumber : null;
+}
+
+// Zoom + centre the plan on a booth (bounds may keep an edge stand off-centre).
+function focusAdminBooth(n) {
+  const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
+  if (!el || !pzAdmin) return false;
+  const f = aFrame.getBoundingClientRect();
+  pzAdmin.zoomAbs(f.width / 2, f.height / 2, 3);   // zoom in, frame centre fixed
+  requestAnimationFrame(() => {
+    const r = el.getBoundingClientRect();
+    pzAdmin.moveBy((f.left + f.width / 2) - (r.left + r.width / 2),
+                   (f.top  + f.height / 2) - (r.top  + r.height / 2), true);
+  });
+  return true;
+}
+
+function runAdminBoothSearch() {
+  const input = document.getElementById('admin-fp-search');
+  const v = input.value.trim();
+  if (!v) return;
+  const n = findAdminBooth(v);
+  if (!n) { adminToast(`No booth matching "${v}".`, 'error'); return; }
+  selectAdminBooth(n);
+  focusAdminBooth(n);
 }
 
 // ─── Load Admin SVG ───────────────────────────────────────────────────────────
@@ -844,6 +902,7 @@ socket.on('state:full', (serverBooths) => {
   updateOverview();
   renderBookingsTable();
   populateToolDropdowns();
+  populateAdminSearchList();
 
   // Tag on the first state if the floorplan tab is already open; otherwise
   // loadAdminSVG() tags when the tab is first shown.
