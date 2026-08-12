@@ -259,7 +259,15 @@ function register(io) {
       log(io, `⏳ Stand ${escapeHtml(n)} held for ${escapeHtml(company || 'Pending')} until ${r.expiresAt.toLocaleString('en-GB')}`, 'hold');
     }));
 
-    socket.on('booth:release', requireAdmin(socket, 'booth:release', async ({ boothNumber }) => {
+    // Password-gated (re-enter the admin's own login password): release now frees
+    // a SOLD stand too, which drops the sale, so a stray click can't un-book an
+    // exhibitor without the password.
+    socket.on('booth:release', requireAdmin(socket, 'booth:release', async ({ boothNumber, password }) => {
+      const account = await users.findByUsername(socket.data.user);   // full doc incl. passwordHash
+      if (!account || !users.verifyPassword(String(password || ''), account.passwordHash)) {
+        users.absorbPassword(String(password || ''));          // constant-time on the failure path
+        return { ok: false, error: 'Password incorrect — stand not released.' };
+      }
       const n = stand(boothNumber);
       const before = await booths.get(n);
       await holdsSvc.release(n, { actor: socket.data.user });

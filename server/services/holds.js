@@ -67,10 +67,10 @@ async function forceHold(boothNumber, { company = 'Pending', durationMs = config
 
 async function release(boothNumber, { actor = null } = {}) {
   await drop(boothNumber);
-  // Release frees a HELD stand. Guarding on 'held' means clicking release on a
-  // stand that has since been sold won't blank the exhibitor and drop the sale
-  // — to un-book a sale the admin uses the explicit status change instead.
-  await booths.setStatus(boothNumber, 'available', { company: null, actor, expect: ['held'] });
+  // Release frees a held OR sold stand back to available (blanking the exhibitor
+  // and clearing the deal). The admin action is password-gated in the socket
+  // handler, so an accidental click can't silently drop a sale.
+  await booths.setStatus(boothNumber, 'available', { company: null, actor, expect: ['held', 'sold'] });
   track({ type: 'hold.release', boothNumber, meta: {}, actor });
 }
 

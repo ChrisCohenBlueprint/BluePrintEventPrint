@@ -54,12 +54,20 @@ async function setStatus(boothNumber, status, { company = null, actor = null, ex
   const filter = { showId: config.showId, boothNumber };
   if (Array.isArray(expect) && expect.length) filter.status = { $in: expect };
 
-  const res = await col().updateOne(filter, { $set: {
+  const $set = {
     status,
     'assignment.company': company,
     updatedAt: new Date(),
     updatedBy: actor,
-  } });
+  };
+  // Freeing a stand clears its whole deal, so releasing a sale can't leave a
+  // stale price/notes/contact lingering on the now-available stand.
+  if (status === 'available') {
+    $set['assignment.actualPrice'] = null;
+    $set['assignment.notes'] = '';
+    $set['assignment.contactId'] = null;
+  }
+  const res = await col().updateOne(filter, { $set });
   return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };
 }
 
@@ -81,12 +89,14 @@ async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
   }
   if (notes !== undefined) $set['assignment.notes'] = String(notes).slice(0, 2000);
 
-  // A deal only exists on a stand that is booked or held. Guarding the write
-  // means an edit racing a release/expiry can't paint a price and notes onto a
-  // stand that just went available (where they'd linger until the next booking
-  // overwrote them), and `changed` lets the caller report the conflict.
+  // A deal only exists on a sold or held stand. Guarding the write means an edit
+  // racing a release/expiry can't paint a price and notes onto a stand that just
+  // went available (where they'd linger until the next booking overwrote them),
+  // and `changed` lets the caller report the conflict. ('sold' — the booked
+  // status — was previously the never-matching 'booked', which silently blocked
+  // price/notes edits on sold stands.)
   const res = await col().updateOne(
-    { showId: config.showId, boothNumber, status: { $in: ['booked', 'held'] } },
+    { showId: config.showId, boothNumber, status: { $in: ['sold', 'held'] } },
     { $set }
   );
   return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };

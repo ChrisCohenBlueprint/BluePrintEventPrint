@@ -462,7 +462,14 @@ function adminAction(action, boothNumber) {
     const hours = parseFloat(prompt('Hold for how many hours?', '24')) || 24;
     socket.emit('booth:hold', { boothNumber, company: company.trim() || 'Pending', hours }, done('held'));
   }
-  if (action === 'release') socket.emit('booth:release', { boothNumber }, done('released'));
+  if (action === 'release') {
+    // Releasing now frees sold stands too (dropping the sale), so require the
+    // admin's password — matching the rate change and other high-impact actions.
+    const password = prompt(`Enter your admin password to release stand ${boothNumber}.\nThis frees the stand and clears any booking.`);
+    if (password === null) return;                       // cancelled
+    if (!password) return adminToast('Password required to release a stand.', 'error');
+    socket.emit('booth:release', { boothNumber, password }, done('released'));
+  }
 }
 
 // ─── Toast ──────────────────────────────────────────────────────────────────
