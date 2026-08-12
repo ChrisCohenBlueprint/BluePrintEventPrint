@@ -453,8 +453,19 @@ body {
 /* ─── Wide selection panel: sponsorship (left) + enquiry (right) ────────────── */
 .fp-side { transition: width .22s ease; }
 .fp-side.has-selection { width: 680px; max-width: 60vw; }
-.fp-selection { display: flex; gap: 14px; align-items: flex-start; }
+/* flex:1 so the selection fills the panel above the stats strip; the enquiry
+   column then stretches full-height and its Send button drops to the bottom
+   (see below), mirroring the pinned stats. Sponsorship keeps to the top. */
+.fp-selection { display: flex; gap: 14px; align-items: stretch; flex: 1 1 auto; }
+.fp-sponsors { align-self: flex-start; }
 .fp-enquiry-col { flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Enquiry card fills the column and lays its form out as a column so the Send
+   button can sit at the very bottom; a folded card stays compact instead. */
+.enquiry-card { display: flex; flex-direction: column; flex: 1 1 auto; }
+.enquiry-card.collapsed { flex: 0 0 auto; }
+.enquiry-card .eq-form { flex: 1 1 auto; }
+.eq-actions { margin-top: auto; }
 .fp-sponsors { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 12px;
   overflow-y: auto; padding-right: 4px; }
 .fp-sponsors.hidden { display: none; }
@@ -465,7 +476,7 @@ body {
    the freed space. */
 .fp-side.sponsors-collapsed.has-selection { width: 360px; max-width: 46vw; }
 .fp-side.sponsors-collapsed .fp-selection { flex-direction: column; }
-.fp-side.sponsors-collapsed .fp-enquiry-col { flex: 0 0 auto; width: 100%; order: 1; }
+.fp-side.sponsors-collapsed .fp-enquiry-col { flex: 1 1 auto; width: 100%; order: 1; }
 .fp-side.sponsors-collapsed .fp-sponsors { flex: 0 0 auto; width: 100%; order: 0; overflow: visible; }
 
 .sp-head { position: sticky; top: 0; background: rgba(244,246,249,.92); backdrop-filter: blur(8px);
