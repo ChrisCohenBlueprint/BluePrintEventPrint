@@ -350,6 +350,19 @@ body {
 .booth-held  { fill: var(--orange) !important; animation: holdPulse 1.8s ease-in-out infinite; }
 .booth-selected { stroke: #fff !important; stroke-width: 8px !important; filter: drop-shadow(0 0 12px rgba(255,255,255,0.8)) !important; }
 
+/* Search hit: a bold, pulsing rose outline so the found stand is unmistakable on
+   any fill (white / yellow / orange). Defined after .booth-selected so it wins
+   the stroke. It pulses a few times to catch the eye, then holds a solid ring. */
+.booth-search-hit {
+  stroke: #f43f5e !important; stroke-width: 4px !important;
+  filter: drop-shadow(0 0 10px rgba(244,63,94,0.95)) !important;
+  animation: searchPulse 0.85s ease-in-out 4;
+}
+@keyframes searchPulse {
+  0%, 100% { stroke-width: 3px; filter: drop-shadow(0 0 6px  rgba(244,63,94,0.55)) !important; }
+  50%      { stroke-width: 9px; filter: drop-shadow(0 0 22px rgba(244,63,94,1))    !important; }
+}
+
 @keyframes holdPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 .spin-icon { animation: spin 1s linear infinite; }

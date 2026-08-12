@@ -176,8 +176,16 @@ function runAdminBoothSearch() {
   if (!v) return;
   const n = findAdminBooth(v);
   if (!n) { adminToast(`No booth matching "${v}".`, 'error'); return; }
-  selectAdminBooth(n);
+  selectAdminBooth(n);   // clears prior search hit + sets the selection
   focusAdminBooth(n);
+  // Flag the found stand with a pulsing highlight so it's obvious which box it
+  // is. Remove + reflow + re-add so the pulse restarts even on a repeat search.
+  const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
+  if (el) {
+    el.classList.remove('booth-search-hit');
+    void el.getBoundingClientRect();
+    el.classList.add('booth-search-hit');
+  }
 }
 
 // ─── Load Admin SVG ───────────────────────────────────────────────────────────
@@ -294,6 +302,9 @@ function selectAdminBooth(id) {
   if (selectedAdminId) {
     svgDoc.querySelector(`[data-booth="${CSS.escape(selectedAdminId)}"]`)?.classList.remove('booth-selected');
   }
+  // Drop any lingering search highlight when the selection changes (e.g. a click
+  // elsewhere), so only the current search hit ever pulses.
+  svgDoc.querySelectorAll('.booth-search-hit').forEach((e) => e.classList.remove('booth-search-hit'));
   selectedAdminId = id;
   svgDoc.querySelector(`[data-booth="${CSS.escape(id)}"]`)?.classList.add('booth-selected');
   renderAdminBoothAction(id);
