@@ -156,17 +156,22 @@ function findAdminBooth(q) {
   return hit ? hit.boothNumber : null;
 }
 
-// Zoom + centre the plan on a booth (bounds may keep an edge stand off-centre).
+// Zoom + centre the plan on a booth. Computed directly from the current
+// transform (invert pan/zoom → booth centre in content space → set scale and
+// translate it to the frame centre) rather than via moveBy, which was flinging
+// the plan off-screen. bounds:true may keep an edge stand slightly off-centre.
 function focusAdminBooth(n) {
   const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   if (!el || !pzAdmin) return false;
+  const t = pzAdmin.getTransform();
+  if (!t || !t.scale) return false;
   const f = aFrame.getBoundingClientRect();
-  pzAdmin.zoomAbs(f.width / 2, f.height / 2, 3);   // zoom in, frame centre fixed
-  requestAnimationFrame(() => {
-    const r = el.getBoundingClientRect();
-    pzAdmin.moveBy((f.left + f.width / 2) - (r.left + r.width / 2),
-                   (f.top  + f.height / 2) - (r.top  + r.height / 2), true);
-  });
+  const r = el.getBoundingClientRect();
+  const cx = (r.left + r.width / 2 - f.left - t.x) / t.scale;   // booth centre in content space
+  const cy = (r.top  + r.height / 2 - f.top  - t.y) / t.scale;
+  const S = 2.5;                                                // target zoom
+  pzAdmin.zoomAbs(0, 0, S);                                     // set the scale…
+  pzAdmin.moveTo(f.width / 2 - cx * S, f.height / 2 - cy * S);  // …then place it centre-frame
   return true;
 }
 
