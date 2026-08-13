@@ -327,6 +327,7 @@ const dealOf = (b) => (b && b.assignment) || {};
 // Show-level settings pushed from the server: area unit (m²/ft², a label only)
 // and the €/unit rate. Both update live via the 'settings' socket event.
 let UNIT = 'm²', RATE = null;
+let recoveryRequired = false;   // failsafe: destructive actions need the recovery key
 
 // The number to SHOW for a stand: the admin-set override if present, else the
 // real identity. Identity (boothNumber) is what all lookups/emits still use.
@@ -554,12 +555,14 @@ function adminAction(action, boothNumber) {
     socket.emit('booth:hold', { boothNumber, company: company.trim() || 'Pending', hours }, done('held'));
   }
   if (action === 'release') {
-    // Releasing now frees sold stands too (dropping the sale), so require the
-    // admin's password — matching the rate change and other high-impact actions.
-    const password = prompt(`Enter your admin password to release stand ${boothNumber}.\nThis frees the stand and clears any booking.`);
-    if (password === null) return;                       // cancelled
-    if (!password) return adminToast('Password required to release a stand.', 'error');
-    socket.emit('booth:release', { boothNumber, password }, done('released'));
+    // Releasing frees a stand and clears its booking, so it's gated: the recovery
+    // key when the failsafe is on, otherwise the admin's own password.
+    const secret = prompt(recoveryRequired
+      ? `Enter your RECOVERY KEY to release stand ${boothNumber}.\nThis frees the stand and clears any booking.`
+      : `Enter your admin password to release stand ${boothNumber}.\nThis frees the stand and clears any booking.`);
+    if (secret === null) return;                       // cancelled
+    if (!secret) return adminToast(`${recoveryRequired ? 'Recovery key' : 'Password'} required to release a stand.`, 'error');
+    socket.emit('booth:release', { boothNumber, password: secret }, done('released'));
   }
 }
 
@@ -893,7 +896,16 @@ document.getElementById('status-form').addEventListener('submit', e => {
   const status = document.getElementById('status-new').value;
   const company = document.getElementById('status-company').value.trim();
   if (!boothNumber) return;
-  socket.emit('admin:setStatus', { boothNumber, status, company }, (res) => {
+  // Forcing a booked/held stand back to Available un-books it — gate with the
+  // recovery key when the failsafe is on.
+  const cur = booths[boothNumber];
+  let key;
+  if (status === 'available' && cur && cur.status !== 'available' && recoveryRequired) {
+    key = prompt(`Enter your RECOVERY KEY to set stand ${boothNumber} back to Available.\nThis clears its booking.`);
+    if (key === null) return;
+    if (!key) return adminToast('Recovery key required.', 'error');
+  }
+  socket.emit('admin:setStatus', { boothNumber, status, company, key }, (res) => {
     if (res && res.ok) adminToast(`Stand ${boothNumber} set to ${status}.`, 'ok');
     else adminToast((res && res.error) || 'Status update failed.', 'error');
   });
@@ -971,6 +983,7 @@ socket.on('floorplan-sponsor', (s) => {
 socket.on('settings', (s) => {
   if (s && s.unit) UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
   if (s && s.ratePerSqm != null) RATE = s.ratePerSqm;
+  if (s && s.recoveryRequired !== undefined) recoveryRequired = !!s.recoveryRequired;
   document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
   const rf = document.getElementById('rate-current'); if (rf && RATE != null) rf.textContent = `€${RATE}/${UNIT}`;
   const uBtnM = document.getElementById('unit-m'), uBtnF = document.getElementById('unit-ft');

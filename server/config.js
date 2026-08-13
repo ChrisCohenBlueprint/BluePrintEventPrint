@@ -61,4 +61,22 @@ module.exports = {
   // Optional. A webhook URL that receives each new enquiry as JSON — point it at
   // Zapier / Make / Slack / your CRM to turn enquiries into emails or tasks.
   notifyWebhook: process.env.NOTIFY_WEBHOOK || null,
+
+  // ─── Data failsafe ──────────────────────────────────────────────────────────
+  // A recovery key that ONLY you know: set RECOVERY_KEY on the server (never in
+  // the code, and NOT your admin login). When set, the data-destroying admin
+  // actions — un-booking a stand (Release, or forcing a booked stand back to
+  // Available) — require it, so a stolen admin session still cannot erase your
+  // bookings. Unset = off (opt-in): behaviour is unchanged until you set it.
+  recoveryKey: process.env.RECOVERY_KEY || '',
+  recoveryEnabled() { return !!(process.env.RECOVERY_KEY || ''); },
+  recoveryOk(key) {
+    const rk = process.env.RECOVERY_KEY || '';
+    if (!rk) return true;                                   // failsafe disabled → allow
+    const a = Buffer.from(String(key == null ? '' : key), 'utf8');
+    const b = Buffer.from(rk, 'utf8');
+    // timingSafeEqual throws on length mismatch; keep the compare constant-time.
+    if (a.length !== b.length) { crypto.timingSafeEqual(b, b); return false; }
+    return crypto.timingSafeEqual(a, b);
+  },
 };

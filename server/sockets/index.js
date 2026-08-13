@@ -263,10 +263,17 @@ function register(io) {
     // a SOLD stand too, which drops the sale, so a stray click can't un-book an
     // exhibitor without the password.
     socket.on('booth:release', requireAdmin(socket, 'booth:release', async ({ boothNumber, password }) => {
-      const account = await users.findByUsername(socket.data.user);   // full doc incl. passwordHash
-      if (!account || !users.verifyPassword(String(password || ''), account.passwordHash)) {
-        users.absorbPassword(String(password || ''));          // constant-time on the failure path
-        return { ok: false, error: 'Password incorrect — stand not released.' };
+      // Releasing un-books a stand (destroys the booking). When the recovery-key
+      // failsafe is on, require THAT key (not the admin login, so a stolen admin
+      // session can't erase bookings); otherwise fall back to the admin password.
+      if (config.recoveryEnabled()) {
+        if (!config.recoveryOk(password)) return { ok: false, error: 'Recovery key incorrect — stand not released.' };
+      } else {
+        const account = await users.findByUsername(socket.data.user);   // full doc incl. passwordHash
+        if (!account || !users.verifyPassword(String(password || ''), account.passwordHash)) {
+          users.absorbPassword(String(password || ''));          // constant-time on the failure path
+          return { ok: false, error: 'Password incorrect — stand not released.' };
+        }
       }
       const n = stand(boothNumber);
       const before = await booths.get(n);
@@ -294,12 +301,19 @@ function register(io) {
       log(io, `📝 Deal updated for Stand ${escapeHtml(n)}`, 'admin');
     }));
 
-    socket.on('admin:setStatus', requireAdmin(socket, 'admin:setStatus', async ({ boothNumber, status, company }) => {
+    socket.on('admin:setStatus', requireAdmin(socket, 'admin:setStatus', async ({ boothNumber, status, company, key }) => {
       const allowed = ['available', 'held', 'sold'];
       if (!allowed.includes(status)) return;
       const n = stand(boothNumber);
       const before = await booths.get(n);
       if (!before) return;
+
+      // Forcing a booked/held stand back to Available un-books it (destroys the
+      // booking) — same failsafe as Release: require the recovery key when on.
+      const unbooking = status === 'available' && before.status !== 'available';
+      if (unbooking && config.recoveryEnabled() && !config.recoveryOk(key)) {
+        return { ok: false, error: 'Recovery key incorrect — status not changed.' };
+      }
 
       // Forcing 'held' without a hold document left the booth to be reclaimed
       // by the expiry sweep within 60 seconds — the stand silently went back on
@@ -509,7 +523,10 @@ function register(io) {
         // Unit is a harmless display label (public). The €/unit rate is
         // admin-only: public sqm × rate would reveal list prices.
         const st = await settings.get();
-        socket.emit('settings', { unit: st.unit, ratePerSqm: isAdmin ? st.ratePerSqm : undefined });
+        socket.emit('settings', { unit: st.unit, ratePerSqm: isAdmin ? st.ratePerSqm : undefined,
+          // Whether destructive admin actions need the recovery key, so the UI
+          // knows to prompt for it. Admin-only — never advertised to the public.
+          recoveryRequired: isAdmin ? config.recoveryEnabled() : undefined });
 
         io.emit('viewers:count', connections);
         socket.emit('ready');
