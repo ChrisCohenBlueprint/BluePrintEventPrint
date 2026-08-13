@@ -403,6 +403,28 @@ function register(io) {
       return { ok: true, created: r.created };
     }));
 
+    // Custom split: re-carve a stand into cells with the admin's own numbers and
+    // sizes (parts = [{ number, sqm }]). Works on a merged block too.
+    socket.on('booth:split-custom', requireAdmin(socket, 'booth:split-custom', async ({ boothNumber, axis, parts }) => {
+      const n = stand(boothNumber);
+      const r = await booths.splitCustom(n, { axis, parts, actor: socket.data.user });
+      if (!r.ok) {
+        const why = r.reason === 'reset_first' ? 'it is already split — reset it first'
+                  : r.reason === 'not_available' ? 'the stand must be available'
+                  : r.reason === 'bad_parts' ? 'give 2–8 parts, each with a number and a size'
+                  : r.reason === 'size_mismatch' ? `the sizes must add up to the stand's ${r.total} — you entered ${r.got}`
+                  : r.reason === 'dup_number' ? 'each part needs a different number'
+                  : r.reason === 'suffix_exists' ? 'a generated cell id already exists — reset the stand first'
+                  : r.reason === 'no_geometry' ? 'the stand has no geometry to divide'
+                  : r.reason;
+        return { ok: false, error: `Could not split — ${why}.` };
+      }
+      track({ type: 'booth.split', boothNumber: n, socket, meta: { custom: true, axis, created: r.created } });
+      await refresh(); broadcastState(io);
+      log(io, `✂️ Stand ${escapeHtml(n)} custom-split into ${r.created.length + 1}`, 'admin');
+      return { ok: true, created: r.created };
+    }));
+
     // Undo a merge or split (or clear a stray leftover cell).
     socket.on('booth:reset', requireAdmin(socket, 'booth:reset', async ({ boothNumber }) => {
       const n = stand(boothNumber);

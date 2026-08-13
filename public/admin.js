@@ -671,7 +671,7 @@ function populateToolDropdowns() {
   // so its paid area can't be divided or absorbed (the server enforces this too).
   // Reset lists every stand: it undoes a merge/split or clears a stray cell.
   const openStands = all.filter(b => b.status === 'available' && !(dealOf(b).company));
-  const dropdownSets = { 'merge-1': openStands, 'merge-2': openStands, 'split-stand': openStands, 'reset-stand': all };
+  const dropdownSets = { 'merge-1': openStands, 'merge-2': openStands, 'split-stand': openStands, 'csplit-stand': openStands, 'reset-stand': all };
   Object.entries(dropdownSets).forEach(([id, list]) => {
     const sel = document.getElementById(id);
     if (!sel) return;
@@ -872,6 +872,58 @@ document.getElementById('split-form').addEventListener('submit', e => {
                res && res.ok ? 'ok' : 'error');
   });
 });
+
+// ─── Custom Split (your own numbers + sizes) ──────────────────────────────────
+const csplitRows = document.getElementById('csplit-rows');
+function csplitAddRow() {
+  if (!csplitRows || csplitRows.children.length >= 8) return;
+  const row = document.createElement('div');
+  row.className = 'csplit-row';
+  const num = document.createElement('input');  num.className = 'csplit-num';  num.type = 'text';   num.placeholder = 'Number';
+  const size = document.createElement('input'); size.className = 'csplit-size'; size.type = 'number'; size.min = '1'; size.step = '1'; size.placeholder = 'Size';
+  const del = document.createElement('button');  del.type = 'button'; del.className = 'csplit-del'; del.title = 'Remove'; del.textContent = '×';
+  row.append(num, size, del);
+  csplitRows.appendChild(row);
+}
+function csplitTotal() { const b = booths[document.getElementById('csplit-stand')?.value]; return b ? (b.sqm || 0) : 0; }
+function csplitUpdateTally() {
+  const tally = document.getElementById('csplit-tally'); if (!tally) return;
+  const total = csplitTotal();
+  let sum = 0; csplitRows.querySelectorAll('.csplit-size').forEach(i => { sum += Number(i.value) || 0; });
+  if (!total) { tally.textContent = 'Select a stand to see its total size.'; tally.className = 'csplit-tally'; return; }
+  const left = total - sum;
+  tally.textContent = `Total ${total} ${UNIT} · placed ${sum} · left ${left}`;
+  tally.className = 'csplit-tally' + (left === 0 ? ' ok' : (left < 0 ? ' over' : ''));
+}
+if (csplitRows) {
+  document.getElementById('csplit-add').addEventListener('click', () => { csplitAddRow(); csplitUpdateTally(); });
+  csplitRows.addEventListener('click', (e) => { const d = e.target.closest('.csplit-del'); if (d) { d.closest('.csplit-row').remove(); csplitUpdateTally(); } });
+  csplitRows.addEventListener('input', (e) => { if (e.target.classList.contains('csplit-size')) csplitUpdateTally(); });
+  document.getElementById('csplit-stand').addEventListener('change', csplitUpdateTally);
+  csplitAddRow(); csplitAddRow(); csplitUpdateTally();   // start with two parts
+
+  document.getElementById('csplit-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const boothNumber = document.getElementById('csplit-stand').value;
+    const axis = document.getElementById('csplit-axis').value;
+    if (!boothNumber) return adminToast('Select a stand to split.', 'error');
+    const parts = [];
+    csplitRows.querySelectorAll('.csplit-row').forEach(r => {
+      const number = r.querySelector('.csplit-num').value.trim();
+      const sqm = Number(r.querySelector('.csplit-size').value);
+      if (number && sqm > 0) parts.push({ number, sqm });
+    });
+    if (parts.length < 2) return adminToast('Enter at least two parts, each with a number and a size.', 'error');
+    const total = csplitTotal(), sum = parts.reduce((s, p) => s + p.sqm, 0);
+    if (Math.abs(sum - total) > 1) return adminToast(`Sizes must add up to ${total} ${UNIT} — you have ${sum}.`, 'error');
+    socket.emit('booth:split-custom', { boothNumber, axis, parts }, (res) => {
+      if (res && res.ok) {
+        adminToast(`Stand ${boothNumber} split into ${(res.created || []).length + 1}.`, 'ok');
+        csplitRows.innerHTML = ''; csplitAddRow(); csplitAddRow(); csplitUpdateTally();
+      } else adminToast((res && res.error) || 'Custom split failed.', 'error');
+    });
+  });
+}
 
 // ─── Reset Form (undo a merge or split) ───────────────────────────────────────
 document.getElementById('reset-form')?.addEventListener('submit', e => {

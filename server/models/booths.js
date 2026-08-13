@@ -514,6 +514,85 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
  *
  * Only touches available stands, so it can never disturb a booking.
  */
+
+/**
+ * Custom split: re-carve one available stand (which may be a merged block) into
+ * cells with the admin's OWN numbers and sizes. `parts` is [{ number, sqm }].
+ * The sizes must add up to the stand's total; the geometry is divided in those
+ * proportions along `axis`. Each cell is a split cell (so the plan masks the
+ * stale baked figures and draws the given number + size), the survivor keeps the
+ * original identity, and any merge is subsumed (reset restores THIS block, not
+ * the pre-merge originals — reset before re-carving to get those back).
+ */
+async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = null } = {}) {
+  const b = await get(boothNum);
+  if (!b) return { ok: false, reason: 'missing_booth' };
+  if (b.status !== 'available' || (b.assignment && b.assignment.company)) return { ok: false, reason: 'not_available' };
+  if (b.splitSnapshot) return { ok: false, reason: 'reset_first' };   // already split; a MERGED block is fine
+  const g = b.geometry;
+  if (!g) return { ok: false, reason: 'no_geometry' };
+
+  const clean = (parts || []).map(p => ({
+    displayNumber: String(p && p.number != null ? p.number : '').trim(),
+    sqm: Math.round(Number(p && p.sqm)),
+  })).filter(p => p.displayNumber && p.sqm > 0);
+  if (clean.length < 2 || clean.length > 8) return { ok: false, reason: 'bad_parts' };
+
+  const totalSqm = b.sqm || 0;
+  const sumParts = clean.reduce((s, p) => s + p.sqm, 0);
+  if (Math.abs(sumParts - totalSqm) > 1) return { ok: false, reason: 'size_mismatch', total: totalSqm, got: sumParts };
+  if (new Set(clean.map(p => p.displayNumber.toLowerCase())).size !== clean.length) return { ok: false, reason: 'dup_number' };
+
+  // Geometry divides proportionally to the sizes along the axis; the last cell
+  // takes the remainder so the cells tile the block exactly.
+  const vertical = axis === 'vertical';
+  const totalLen = vertical ? g.w : g.h;
+  const cells = [];
+  let offset = 0;
+  clean.forEach((p, i) => {
+    const len = (i === clean.length - 1) ? (totalLen - offset) : totalLen * (p.sqm / sumParts);
+    cells.push({ ...p, geometry: vertical ? { x: g.x + offset, y: g.y, w: len, h: g.h }
+                                          : { x: g.x, y: g.y + offset, w: g.w, h: len } });
+    offset += len;
+  });
+
+  const totalPrice = b.listPrice || 0;
+  const priceOf = (sqm) => Math.round(totalPrice * (sqm / (sumParts || 1)));
+
+  const nums = [];
+  for (let i = 1; i < cells.length; i++) {
+    const num = `${boothNum}-${i + 1}`;
+    if (await get(num)) return { ok: false, reason: 'suffix_exists' };
+    nums.push(num);
+  }
+
+  const splitSnapshot = { self: { geometry: g, sqm: totalSqm, listPrice: totalPrice }, created: nums };
+  const p0 = cells[0];
+  const primRes = await col().updateOne(
+    { showId: config.showId, boothNumber: boothNum, status: 'available' },
+    { $set: { geometry: p0.geometry, sqm: p0.sqm, listPrice: priceOf(p0.sqm),
+              displayNumber: p0.displayNumber, splitSnapshot,
+              splitAxis: vertical ? 'vertical' : 'horizontal', updatedAt: new Date(), updatedBy: actor },
+      $unset: { mergeSnapshot: '', mergedFrom: '' } }   // the re-carve subsumes any merge
+  );
+  if (!primRes.matchedCount) return { ok: false, reason: 'not_available' };
+
+  const created = [];
+  for (let i = 1; i < cells.length; i++) {
+    const c = cells[i];
+    await col().insertOne({
+      showId: config.showId, boothNumber: nums[i - 1], svgElementId: null,
+      geometry: c.geometry, sqm: c.sqm, sqmSource: 'split', listPrice: priceOf(c.sqm),
+      displayNumber: c.displayNumber, status: 'available',
+      assignment: { company: null, contactId: null, actualPrice: null, notes: '' },
+      clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
+      createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
+    });
+    created.push(nums[i - 1]);
+  }
+  return { ok: true, created };
+}
+
 async function reset(boothNumber) {
   const booth = await get(boothNumber);
   if (!booth) return { ok: false, reason: 'missing_booth' };
@@ -798,5 +877,5 @@ async function resetToBlankLayout() {
 }
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   setDisplayNumber, setSponsored, recomputeListPrices, incrementClicks, stats, consolidate, split, reset,
+                   setDisplayNumber, setSponsored, recomputeListPrices, incrementClicks, stats, consolidate, split, splitCustom, reset,
                    repairHalvedStands, restoreOriginalLayout, resetToBlankLayout };

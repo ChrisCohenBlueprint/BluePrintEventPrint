@@ -472,6 +472,34 @@
           </form>
         </div>
 
+        <!-- Custom split — re-carve into your own numbers + sizes -->
+        <div class="tool-card">
+          <div class="tool-header">
+            <i data-lucide="scissors"></i>
+            <h3>Custom Split</h3>
+          </div>
+          <p>Re-carve a stand (or a merged block) into stands with your own numbers and sizes. The sizes must add up to the stand's total.</p>
+          <form id="csplit-form" class="tool-form">
+            <div class="tool-form-row">
+              <div class="tool-field">
+                <label>Stand</label>
+                <select id="csplit-stand" class="admin-select"><option value="">Select…</option></select>
+              </div>
+              <div class="tool-field">
+                <label>Direction</label>
+                <select id="csplit-axis" class="admin-select">
+                  <option value="vertical">Vertical (left / right)</option>
+                  <option value="horizontal">Horizontal (top / bottom)</option>
+                </select>
+              </div>
+            </div>
+            <div id="csplit-rows"></div>
+            <button type="button" id="csplit-add" class="admin-btn full csplit-add"><i data-lucide="plus"></i> Add part</button>
+            <div id="csplit-tally" class="csplit-tally"></div>
+            <button type="submit" class="admin-btn success full"><i data-lucide="scissors"></i> Split Stand</button>
+          </form>
+        </div>
+
         <!-- Reset tool — undo a merge or split -->
         <div class="tool-card">
           <div class="tool-header">
