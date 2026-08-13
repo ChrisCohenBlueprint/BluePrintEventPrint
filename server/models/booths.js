@@ -322,10 +322,19 @@ function contiguousMerge(g1, g2) {
  * bounding box of the two, so the merged stand still maps onto the plan.
  */
 async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
-  const a = await get(primaryNum);
-  const b = await get(secondaryNum);
+  let a = await get(primaryNum);
+  let b = await get(secondaryNum);
   if (!a || !b) return { ok: false, reason: 'missing_booth' };
   if (primaryNum === secondaryNum) return { ok: false, reason: 'same_booth' };
+
+  // Always keep the TOP-LEFT stand as the survivor (its number stays) — the
+  // natural "keep the top / first" expectation — regardless of which stand was
+  // picked as Primary. Compare top edge first, then left edge.
+  if (a.geometry && b.geometry &&
+      (((b.geometry.y - a.geometry.y) || (b.geometry.x - a.geometry.x)) < 0)) {
+    [primaryNum, secondaryNum] = [secondaryNum, primaryNum];
+    [a, b] = [b, a];
+  }
 
   // Only merge available stands. Consolidating a sold or held stand would delete
   // its booking along with the record and orphan any hold document — refuse it.
