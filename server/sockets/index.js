@@ -385,6 +385,28 @@ function register(io) {
       log(io, `🔗 Stand ${escapeHtml(s)} merged into ${escapeHtml(p)}`, 'admin');
     }));
 
+    // Merge a whole shift-selected block of adjacent stands into one.
+    socket.on('booth:consolidate-many', requireAdmin(socket, 'booth:consolidate-many', async ({ boothNumbers }) => {
+      const nums = (boothNumbers || []).map(stand);
+      const r = await booths.consolidateMany(nums, { actor: socket.data.user });
+      if (!r.ok) {
+        const why = r.reason === 'not_contiguous' ? 'the stands must sit next to each other with no gaps'
+                  : r.reason === 'not_available' ? 'every stand must be available'
+                  : r.reason === 'reset_first'   ? 'one of the stands is already merged or split — reset it first'
+                  : r.reason === 'need_two'      ? 'select at least two stands'
+                  : r.reason === 'missing_booth' ? 'one of the stands no longer exists — refresh and try again'
+                  : r.reason === 'no_geometry'   ? 'one of the stands has no shape to merge'
+                  : r.reason;
+        return { ok: false, error: `Could not merge — ${why}.` };
+      }
+      track({ type: 'booth.consolidate', boothNumber: r.primary.boothNumber, socket, meta: { many: r.absorbed } });
+      await refresh();
+      io.to(ADMIN_ROOM).emit('booth:consolidated', { primary: r.primary.boothNumber, secondary: r.absorbed });
+      broadcastState(io);
+      log(io, `🔗 ${r.absorbed.length + 1} stands merged into ${escapeHtml(r.primary.boothNumber)}`, 'admin');
+      return { ok: true, primary: r.primary.boothNumber, absorbed: r.absorbed };
+    }));
+
     // Divide one stand into equal parts — the inverse of consolidate, and the
     // manual fix for stands the artwork drew as a single block.
     socket.on('booth:split', requireAdmin(socket, 'booth:split', async ({ boothNumber, parts, axis }) => {

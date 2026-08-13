@@ -419,6 +419,77 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
 }
 
 /**
+ * Consolidate a whole selection of adjacent stands into one, in a single step.
+ * (A 2×2 block can't be merged pair-by-pair — the L-shaped middle step fails the
+ * contiguity test — so this validates and merges the whole set at once.) The
+ * survivor is the top-left stand; the rest are absorbed. Refuses unless the parts
+ * tile a rectangle (no scattered/gappy selection) and all are free.
+ */
+async function consolidateMany(boothNumbers, { actor = null } = {}) {
+  const nums = [...new Set(boothNumbers || [])];
+  if (nums.length < 2) return { ok: false, reason: 'need_two' };
+  const docs = [];
+  for (const n of nums) { const d = await get(n); if (!d) return { ok: false, reason: 'missing_booth' }; docs.push(d); }
+  for (const d of docs) {
+    if (d.status !== 'available' || (d.assignment && d.assignment.company)) return { ok: false, reason: 'not_available' };
+    if (d.splitSnapshot || d.splitFrom || d.mergeSnapshot) return { ok: false, reason: 'reset_first' };
+    if (!d.geometry) return { ok: false, reason: 'no_geometry' };
+  }
+  const geoms = docs.map(d => d.geometry);
+  const box = { x: Math.min(...geoms.map(g => g.x)), y: Math.min(...geoms.map(g => g.y)) };
+  box.w = Math.max(...geoms.map(g => g.x + g.w)) - box.x;
+  box.h = Math.max(...geoms.map(g => g.y + g.h)) - box.y;
+  // Two checks together. (1) Connectivity: a pair is an edge if it would merge on
+  // its own (aligned shared edge AND compact box). BFS from node 0 — every stand
+  // must be reachable, so a selection split by an aisle (two separate blocks,
+  // whose within-block overlaps can mask the aisle in the overall area test) is
+  // refused. (2) The parts must fill the bounding box, so an L-shape / gap inside
+  // the box is refused.
+  const edge = (i, j) => adjacent(geoms[i], geoms[j]) && contiguousMerge(geoms[i], geoms[j]);
+  const seen = new Set([0]), queue = [0];
+  while (queue.length) {
+    const i = queue.pop();
+    for (let j = 0; j < geoms.length; j++) if (!seen.has(j) && edge(i, j)) { seen.add(j); queue.push(j); }
+  }
+  if (seen.size !== geoms.length) return { ok: false, reason: 'not_contiguous' };
+  const sumArea = geoms.reduce((s, g) => s + g.w * g.h, 0);
+  if (box.w * box.h > sumArea * 1.15) return { ok: false, reason: 'not_contiguous' };
+
+  let si = 0;
+  docs.forEach((d, i) => { if (((d.geometry.y - docs[si].geometry.y) || (d.geometry.x - docs[si].geometry.x)) < 0) si = i; });
+  const survivorNum = nums[si], survivor = docs[si];
+  const others = docs.filter((_, i) => i !== si);
+  const totalSqm   = docs.reduce((s, d) => s + (d.sqm || 0), 0);
+  const totalPrice = docs.reduce((s, d) => s + (d.listPrice || 0), 0);
+  const mergeSnapshot = { self: { geometry: survivor.geometry, sqm: survivor.sqm, listPrice: survivor.listPrice }, parts: others };
+
+  const upd = await col().updateOne(
+    { showId: config.showId, boothNumber: survivorNum, status: 'available' },
+    { $set: { geometry: box, sqm: totalSqm, listPrice: totalPrice,
+              mergedFrom: others.map(o => o.boothNumber), mergeSnapshot, updatedAt: new Date(), updatedBy: actor } }
+  );
+  if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
+
+  const removed = [];
+  for (const o of others) {
+    const del = await col().deleteOne({ showId: config.showId, boothNumber: o.boothNumber, status: 'available' });
+    if (!del.deletedCount) {
+      // One got booked mid-merge: roll the survivor back to its pre-merge shape
+      // and re-insert whatever we already removed, so nothing is lost.
+      const restore = { $set: { geometry: survivor.geometry, sqm: survivor.sqm, listPrice: survivor.listPrice, updatedAt: new Date() }, $unset: {} };
+      if (survivor.mergedFrom)    restore.$set.mergedFrom = survivor.mergedFrom;       else restore.$unset.mergedFrom = '';
+      if (survivor.mergeSnapshot) restore.$set.mergeSnapshot = survivor.mergeSnapshot; else restore.$unset.mergeSnapshot = '';
+      if (!Object.keys(restore.$unset).length) delete restore.$unset;
+      await col().updateOne({ showId: config.showId, boothNumber: survivorNum }, restore);
+      for (const dd of removed) await col().insertOne(dd);
+      return { ok: false, reason: 'not_available' };
+    }
+    removed.push(o);
+  }
+  return { ok: true, primary: await get(survivorNum), absorbed: others.map(o => o.boothNumber) };
+}
+
+/**
  * Split one stand into `parts` equal columns (or rows). The original keeps the
  * first cell and its commercial state; the rest become new available stands
  * numbered `<n>-2`, `<n>-3`, … The area and list price divide evenly.
@@ -877,5 +948,5 @@ async function resetToBlankLayout() {
 }
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   setDisplayNumber, setSponsored, recomputeListPrices, incrementClicks, stats, consolidate, split, splitCustom, reset,
+                   setDisplayNumber, setSponsored, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
                    repairHalvedStands, restoreOriginalLayout, resetToBlankLayout };

@@ -129,6 +129,35 @@ function initAdminPanZoom() {
     });
     fpSearch.addEventListener('change', runAdminBoothSearch);   // datalist pick
   }
+
+  wireMultiBar();
+}
+
+// Wire the floating multi-select action bar once (initAdminPanZoom re-runs on
+// every floorplan (re)load, so guard against stacking duplicate listeners).
+let multiWired = false;
+function wireMultiBar() {
+  if (multiWired) return;
+  multiWired = true;
+  document.getElementById('multi-clear')?.addEventListener('click', clearMultiSelect);
+  document.getElementById('multi-consolidate')?.addEventListener('click', consolidateMultiSelect);
+}
+
+function consolidateMultiSelect() {
+  const ids = [...multiSel];
+  if (ids.length < 2) return;
+  const btn = document.getElementById('multi-consolidate');
+  if (btn) btn.disabled = true;
+  socket.emit('booth:consolidate-many', { boothNumbers: ids }, (res) => {
+    if (btn) btn.disabled = false;
+    if (res && res.ok) {
+      adminToast(`${ids.length} stands merged into ${res.primary}.`, 'ok');
+      clearMultiSelect();
+      if (res.primary) selectAdminBooth(res.primary);
+    } else {
+      adminToast((res && res.error) || 'Could not consolidate those stands.', 'error');
+    }
+  });
 }
 
 // Fill the search autocomplete with every booth (number + company), so a couple
@@ -226,7 +255,7 @@ function addAdminTap(el, callback) {
   el.addEventListener('pointerup', e => {
     if (Math.abs(e.clientX - startX) < 10 && Math.abs(e.clientY - startY) < 10) {
       e.stopPropagation();
-      callback();
+      callback(e);
     }
   });
 }
@@ -246,7 +275,7 @@ function tagAdminBooths() {
       el.addEventListener('mouseenter', e => showAdminTooltip(e, id));
       el.addEventListener('mousemove', e => moveAdminTooltip(e));
       el.addEventListener('mouseleave', () => hideAdminTooltip());
-      addAdminTap(el, () => selectAdminBooth(id));
+      addAdminTap(el, (e) => { if (e && e.shiftKey) toggleMultiSelect(id); else selectAdminBooth(id); });
     },
   });
 }
@@ -310,6 +339,7 @@ function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 
 // ─── Admin Select Booth ───────────────────────────────────────────────────────
 function selectAdminBooth(id) {
+  clearMultiSelect();                              // a plain click abandons any shift-selection
   if (selectedAdminId) {
     svgDoc.querySelector(`[data-booth="${CSS.escape(selectedAdminId)}"]`)?.classList.remove('booth-selected');
   }
@@ -319,6 +349,39 @@ function selectAdminBooth(id) {
   selectedAdminId = id;
   svgDoc.querySelector(`[data-booth="${CSS.escape(id)}"]`)?.classList.add('booth-selected');
   renderAdminBoothAction(id);
+}
+
+/* ---- Shift-click multi-select + N-way consolidate --------------------- */
+const multiSel = new Set();
+
+function multiEl(id) { return svgDoc.querySelector(`[data-booth="${CSS.escape(id)}"]`); }
+
+function toggleMultiSelect(id) {
+  if (!id || !booths[id]) return;
+  // Seed the set with the current single selection so shift-clicking a second
+  // stand grows the pair the admin already had focused.
+  if (!multiSel.size && selectedAdminId && selectedAdminId !== id) multiSel.add(selectedAdminId);
+  if (multiSel.has(id)) multiSel.delete(id);
+  else multiSel.add(id);
+  // Clear the single-selection chrome — we're in multi mode now.
+  if (selectedAdminId) { multiEl(selectedAdminId)?.classList.remove('booth-selected'); selectedAdminId = null; }
+  renderMultiSelect();
+}
+
+function renderMultiSelect() {
+  svgDoc.querySelectorAll('.booth-multi').forEach((e) => e.classList.remove('booth-multi'));
+  multiSel.forEach((id) => multiEl(id)?.classList.add('booth-multi'));
+  const bar = document.getElementById('multi-bar');
+  const count = document.getElementById('multi-count');
+  if (count) count.textContent = String(multiSel.size);
+  if (bar) bar.hidden = multiSel.size < 2;
+}
+
+function clearMultiSelect() {
+  if (!multiSel.size) { const b = document.getElementById('multi-bar'); if (b) b.hidden = true; return; }
+  multiSel.forEach((id) => multiEl(id)?.classList.remove('booth-multi'));
+  multiSel.clear();
+  renderMultiSelect();
 }
 
 // Commercial fields now live under `assignment` on the booth document.
