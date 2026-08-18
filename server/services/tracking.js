@@ -21,7 +21,11 @@ function flushSoon() {
 const MAX_BUFFER = 10_000;
 
 async function flush() {
-  if (inFlight) return inFlight;      // coalesce concurrent flushes onto one write
+  // Wait for a write already in progress, THEN send whatever accumulated while
+  // it ran. Returning the in-flight promise instead (the previous behaviour)
+  // silently skipped the current buffer, so a caller awaiting flush() could be
+  // told everything was on disk while recent events were still in memory.
+  if (inFlight) await inFlight;
   if (!buffer.length) return;
   const batch = buffer;
   buffer = [];
@@ -128,13 +132,13 @@ function track({ type, boothNumber = null, meta = {}, socket = null, sessionId =
  */
 async function attributeSession(sessionId, contactId) {
   if (!sessionId || !contactId) return 0;
-  // Make sure this session's pending events are on disk first. Await BOTH a
-  // flush of anything still buffered AND any flush already in flight — otherwise
-  // a timer-driven flush that had already swapped the buffer (buffer now empty,
-  // insert not yet committed) would make this flush() a no-op and the updateMany
-  // would run before those events existed, leaving the lead's history partial.
-  await flush();
-  if (inFlight) await inFlight;
+  // Drain before linking: every event this visitor generated has to be ON DISK,
+  // or the updateMany below cannot match it and the lead opens with a partial
+  // history. flush() now waits for any in-flight write before sending the
+  // current buffer, so one pass is normally enough; the loop covers events
+  // recorded while that final write was committing. Bounded so a busy stream of
+  // unrelated events can't hold the enquiry response open.
+  for (let pass = 0; pass < 5 && (buffer.length || inFlight); pass++) await flush();
   const res = await getDb().collection('activity').updateMany(
     { sessionId, 'actor.contactId': { $exists: false } },
     { $set: { 'actor.contactId': contactId } }

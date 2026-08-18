@@ -435,16 +435,23 @@
   }
 
   /**
-   * A cheap fingerprint of the STRUCTURAL state — each booth's number and
-   * rounded geometry. If it differs between two broadcasts, a split/merge/reset
-   * reshaped the plan and the map must be re-tagged; if it matches, only
-   * statuses changed and a lightweight repaint suffices.
+   * A cheap fingerprint of everything attach() BAKES INTO THE SVG — each booth's
+   * number, rounded geometry, shown number and size. If it differs between two
+   * broadcasts the map must be re-tagged; if it matches, only statuses changed
+   * and a lightweight repaint suffices.
+   *
+   * displayNumber and sqm are part of it because a split cell's number and size
+   * are painted here, once, by attach(). Fingerprinting geometry alone meant an
+   * admin renaming a split cell (Tools → Shown Number changes displayNumber and
+   * nothing else) produced an identical signature, so no re-tag ran and the plan
+   * kept showing the old number until someone reloaded the page.
    */
   function signature(booths) {
     return booths.filter(function (b) { return b && b.geometry; })
       .map(function (b) {
         var g = b.geometry;
-        return b.boothNumber + ':' + Math.round(g.x) + ',' + Math.round(g.y) + ',' + Math.round(g.w) + ',' + Math.round(g.h);
+        return b.boothNumber + ':' + Math.round(g.x) + ',' + Math.round(g.y) + ',' + Math.round(g.w) + ',' + Math.round(g.h) +
+               ':' + (b.displayNumber || '') + ':' + (b.sqm || 0);
       })
       .sort().join('|');
   }

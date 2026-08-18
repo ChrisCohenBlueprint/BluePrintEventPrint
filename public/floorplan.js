@@ -208,6 +208,15 @@ function tagBooths() {
   }
 
   Object.keys(booths).forEach(applyVisual);
+
+  // attach() built brand-new elements, so the selection ring has to be put back
+  // — applyVisual restores the status/shortlist/sponsor classes but not this
+  // one. Without it, any re-tag (a split, a merge, or now a renumber) silently
+  // dropped the highlight from the stand the visitor still has open.
+  if (selectedId) {
+    svgDoc.querySelector(`[data-booth="${CSS.escape(selectedId)}"]`)?.classList.add('booth-selected');
+  }
+
   updateStatsStrip();
   openDeepLink();
 }
@@ -596,7 +605,7 @@ function renderPanel(n) {
 
   panel.innerHTML = `
     <div class="stand-header">
-      <div class="stand-id">Stand ${esc(n)}</div>
+      <div class="stand-id">Stand ${esc(shownN(n))}</div>
       <div class="stand-badge badge-available">Available</div>
     </div>
     <div class="stand-stats">
@@ -894,6 +903,13 @@ function applyVisual(n) {
   const company = booths[n]?.company;
 
   if (status !== 'available' && company) {
+    // VISUAL box (post-transform): most LEX27 stands are rotated, so the local
+    // getBBox would place the name off the stand and fit it to swapped
+    // dimensions. Null means the stand isn't laid out yet — skip this frame.
+    // Measured BEFORE the node is created: bailing out afterwards left an empty
+    // <text> behind on every broadcast while the plan was off-screen.
+    const vbox = BoothMap.visualBox(el);
+    if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) return;
     if (!textNode) {
       textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       textNode.setAttribute('id', `text-booth-${n}`);
@@ -901,11 +917,6 @@ function applyVisual(n) {
       textNode.style.pointerEvents = 'none';
       el.parentNode.appendChild(textNode);
     }
-    // VISUAL box (post-transform): most LEX27 stands are rotated, so the local
-    // getBBox would place the name off the stand and fit it to swapped
-    // dimensions. Null means the stand isn't laid out yet — skip this frame.
-    const vbox = BoothMap.visualBox(el);
-    if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) return;
     // Wrap / hyphenate / shrink to fit — never truncate.
     BoothMap.fitLabel(textNode, company, vbox,
       { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });

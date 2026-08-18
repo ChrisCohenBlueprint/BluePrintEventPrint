@@ -87,9 +87,13 @@ async function reconcile() {
     .toArray();
   if (!held.length) return [];
 
+  // expiresAt MUST be projected: the filter below decides liveness from it, and
+  // projecting it away left every value undefined — so an expired-but-unreaped
+  // hold read as live and the booth stayed held until Mongo's TTL reaper
+  // happened to delete the document.
   const live = await col()
     .find({ showId: config.showId, boothNumber: { $in: held.map(b => b.boothNumber) } })
-    .project({ boothNumber: 1 })
+    .project({ boothNumber: 1, expiresAt: 1 })
     .toArray();
 
   // A hold document that is past its expiry counts as gone even if Mongo's TTL

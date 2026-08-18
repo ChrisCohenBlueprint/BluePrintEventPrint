@@ -63,7 +63,10 @@ async function recommend(sqm) {
     // target rather than being treated as unpriced and sunk.
     const priced = s.price != null;
     const score = priced ? 1 / (1 + Math.abs(s.price - target) / target) : 0.3;
-    return { s, score, price: priced ? s.price : Infinity };
+    // Number.MAX_VALUE rather than Infinity: two unpriced options then tie at 0
+    // in the price tie-break below instead of producing Infinity - Infinity = NaN,
+    // which makes the comparator inconsistent and the resulting order arbitrary.
+    return { s, score, price: priced ? s.price : Number.MAX_VALUE };
   });
 
   // Sold-out options always sink to the bottom: they are there to tempt, not
@@ -73,7 +76,8 @@ async function recommend(sqm) {
     (a.s.soldOut === true) - (b.s.soldOut === true) ||
     b.score - a.score ||
     (TIER_ORDER[a.s.tier] ?? 9) - (TIER_ORDER[b.s.tier] ?? 9) ||
-    a.price - b.price);
+    a.price - b.price ||
+    String(a.s.name || '').localeCompare(String(b.s.name || '')));
 
   return scored.map(x => toPublic(x.s));
 }

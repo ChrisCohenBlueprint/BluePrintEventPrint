@@ -225,12 +225,21 @@ function register(io) {
           // here, drop into the catch, and tell the visitor it failed (prompting
           // a duplicate submit) even though the lead was saved and the admin ping
           // below was skipped.
-          const booths = Array.isArray(payload.boothNumbers) ? payload.boothNumbers : [];
+          // The stand numbers as STORED (validated + length-capped by create),
+          // rather than the raw form payload.
+          const booths = res.boothsOfInterest || [];
           // The form now sends first/last separately; build a display name from
           // whatever it provided (falling back to a legacy single `name`).
           const who = [payload.firstName, payload.lastName].map(s => (s || '').trim()).filter(Boolean).join(' ')
                     || (payload.name || '').trim() || 'someone';
-          log(io, `📩 Enquiry from <strong>${escapeHtml(who)}</strong> — stands ${booths.join(', ')}`, 'inquiry');
+          // Escaped per element, exactly like every other value that reaches the
+          // admin log. These originate in the PUBLIC enquiry form and are never
+          // checked against real stands, so an unescaped join put attacker-chosen
+          // HTML into addLog()'s innerHTML — script execution in the
+          // authenticated admin session, triggered by an anonymous visitor.
+          log(io, `📩 Enquiry from <strong>${escapeHtml(who)}</strong> — stands ${booths.map(escapeHtml).join(', ') || 'none'}`, 'inquiry');
+          // The socket payload is rendered with textContent by the client, so it
+          // carries the raw values.
           io.to(ADMIN_ROOM).emit('inquiry:new', { id: res.id, name: who, booths });
         }
         ack?.(res);
@@ -317,10 +326,12 @@ function register(io) {
 
     socket.on('admin:setStatus', requireAdmin(socket, 'admin:setStatus', async ({ boothNumber, status, company, key }) => {
       const allowed = ['available', 'held', 'sold'];
-      if (!allowed.includes(status)) return;
+      // Returning bare `undefined` here made requireAdmin ack {ok:true}, so the
+      // UI reported a successful change that never happened.
+      if (!allowed.includes(status)) return { ok: false, error: 'Status must be available, held or sold.' };
       const n = stand(boothNumber);
       const before = await booths.get(n);
-      if (!before) return;
+      if (!before) return { ok: false, error: `Stand ${n} not found.` };
 
       // Forcing a booked/held stand back to Available un-books it (destroys the
       // booking) — same failsafe as Release: require the recovery key when on.
@@ -450,6 +461,8 @@ function register(io) {
                   : r.reason === 'bad_parts' ? 'give 2–8 parts, each with a number and a size'
                   : r.reason === 'size_mismatch' ? `the sizes must add up to the stand's ${r.total} — you entered ${r.got}`
                   : r.reason === 'dup_number' ? 'each part needs a different number'
+                  : r.reason === 'duplicate' ? `the number ${r.number} is already used by Stand ${r.clashWith}`
+                  : r.reason === 'bad_value' ? `"${r.number}" isn't a valid number — use only letters, numbers, spaces, . / or -`
                   : r.reason === 'suffix_exists' ? 'a generated cell id already exists — reset the stand first'
                   : r.reason === 'no_geometry' ? 'the stand has no geometry to divide'
                   : r.reason;

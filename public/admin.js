@@ -278,6 +278,13 @@ function tagAdminBooths() {
       addAdminTap(el, (e) => { if (e && e.shiftKey) toggleMultiSelect(id); else selectAdminBooth(id); });
     },
   });
+
+  // attach() replaced the elements, so the selection and multi-select rings have
+  // to be re-applied — applyAdminVisual covers status/sponsor fills but not
+  // these. Otherwise a re-tag (split, merge, or now a renumber) cleared a
+  // shift-selection the admin was midway through building.
+  if (selectedAdminId) multiEl(selectedAdminId)?.classList.add('booth-selected');
+  if (multiSel.size) renderMultiSelect();
 }
 
 function applyAdminVisual(el, status) {

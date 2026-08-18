@@ -673,6 +673,23 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
   if (Math.abs(sumParts - totalSqm) > 1) return { ok: false, reason: 'size_mismatch', total: totalSqm, got: sumParts };
   if (new Set(clean.map(p => p.displayNumber.toLowerCase())).size !== clean.length) return { ok: false, reason: 'dup_number' };
 
+  // The same show-wide uniqueness rule setDisplayNumber enforces: a part may not
+  // take a number that another stand already IS, or already shows. Without this
+  // a custom split could mint a second "Stand 700" that the Shown Number tool
+  // would have refused outright. The stand being carved up is excluded — it is
+  // about to be replaced by these very parts — as are the suffixed keys the
+  // split is about to create.
+  const willCreate = new Set([boothNum, ...clean.map((_, i) => i === 0 ? boothNum : `${boothNum}-${i + 1}`)]);
+  for (const p of clean) {
+    if (!/^[A-Za-z0-9 /.\-]{1,20}$/.test(p.displayNumber)) return { ok: false, reason: 'bad_value', number: p.displayNumber };
+    const clash = await col().findOne({
+      showId: config.showId,
+      boothNumber: { $nin: [...willCreate] },
+      $or: [{ displayNumber: p.displayNumber }, { boothNumber: p.displayNumber }],
+    });
+    if (clash) return { ok: false, reason: 'duplicate', number: p.displayNumber, clashWith: clash.boothNumber };
+  }
+
   // Geometry divides proportionally to the sizes along the axis; the last cell
   // takes the remainder so the cells tile the block exactly.
   const vertical = axis === 'vertical';
@@ -696,7 +713,14 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
     nums.push(num);
   }
 
-  const splitSnapshot = { self: { geometry: g, sqm: totalSqm, listPrice: totalPrice }, created: nums };
+  // `custom` marks a snapshot whose parent had its LABEL rewritten as well as its
+  // footprint — this is the only split that overwrites the parent's
+  // displayNumber and splitAxis, so it is the only one whose reset must put them
+  // back. The prior values are recorded for exactly that.
+  const splitSnapshot = { custom: true,
+                          self: { geometry: g, sqm: totalSqm, listPrice: totalPrice,
+                                  displayNumber: b.displayNumber ?? null, splitAxis: b.splitAxis ?? null },
+                          created: nums };
   const p0 = cells[0];
   const primRes = await col().updateOne(
     { showId: config.showId, boothNumber: boothNum, status: 'available' },
@@ -765,10 +789,32 @@ async function reset(boothNumber) {
     // Restore the parent first (conditional), then remove the cells — each
     // delete conditional on the cell still being available so a booking landing
     // mid-reset is preserved rather than deleted.
+    // Restore the LABEL state too, not just the footprint. splitCustom writes
+    // displayNumber + splitAxis onto the parent, so undoing only the geometry
+    // left the stand permanently reading the carved-up part's number ("500a")
+    // with a stale split axis.
+    const $set = { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() };
+    const $unset = { splitSnapshot: '' };
+    // Only a CUSTOM split rewrote the parent's label, so only its reset restores
+    // one. An equal split leaves displayNumber/splitAxis untouched — clearing
+    // them here would wipe a Shown Number the admin set after splitting, which
+    // has nothing to do with the split being undone.
+    //
+    // `snap.custom` is absent on snapshots written before it was recorded; those
+    // are identified by the marker splitCustom leaves behind, since it is the
+    // only operation that puts splitAxis on a PARENT (an equal split sets it on
+    // the child cells alone).
+    const wasCustom = snap.custom === true || (snap.custom === undefined && !!booth.splitAxis);
+    if (wasCustom) {
+      for (const field of ['displayNumber', 'splitAxis']) {
+        const prior = (snap.self || {})[field];
+        if (prior == null) $unset[field] = ''; else $set[field] = prior;
+      }
+    }
+
     const upd = await col().updateOne(
       { showId: config.showId, boothNumber, status: 'available' },
-      { $set: { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() },
-        $unset: { splitSnapshot: '' } }
+      { $set, $unset }
     );
     if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
     const removed = [];

@@ -75,7 +75,9 @@ async function create({ name, firstName, lastName, email, phone, company, jobTit
   // themselves, so the lead arrives with its full browsing history (plan §04).
   const linked = await attributeSession(sessionId, insertedId);
 
-  return { ok: true, id: insertedId, eventsLinked: linked };
+  // boothsOfInterest is returned so callers notify on the STORED, validated
+  // list rather than re-reading the raw request payload.
+  return { ok: true, id: insertedId, boothsOfInterest: doc.boothsOfInterest, eventsLinked: linked };
 }
 
 /**
