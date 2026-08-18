@@ -34,6 +34,10 @@ module.exports = {
   mongoUri:  process.env.MONGO_URI || 'mongodb://127.0.0.1:27017',
   dbName:    process.env.MONGO_DB  || 'blueprint',
 
+  // The floorplan artwork every surface draws. Named here so the public plan,
+  // the admin plan and the printed proposal cannot drift onto different files.
+  floorplanSvg: process.env.FLOORPLAN_SVG || '/LEX27_Floorplan_Consolidated.svg',
+
   // The active show. Every collection is keyed by this so a second event
   // can be added without a schema change.
   showId:    process.env.SHOW_ID   || 'LEX26',

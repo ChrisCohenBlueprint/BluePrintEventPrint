@@ -103,6 +103,127 @@
     $('block-custom').hidden = false;
   }
 
+  /**
+   * Draw the floorplan with the proposed stands marked.
+   *
+   * The artwork is the same file the public floorplan serves, and stands are
+   * mapped onto it with the same BoothMap.attach() — identity comes from
+   * geometry, so a stand highlighted here is provably the stand the client will
+   * find on the website. Nothing about the plan is hand-maintained for print.
+   *
+   * A failure here must never cost the rep their proposal: the figure is hidden
+   * and the rest of the document prints as before.
+   */
+  async function renderPlan(plan) {
+    // Nothing to point at — every stand in the proposal has gone since drafting,
+    // or none was resolvable. A plan with no marks would just puzzle the client;
+    // the stands table already says which are no longer available. Checked before
+    // the artwork is fetched, so a pointless figure costs no download either.
+    if (!plan || !plan.booths || !plan.booths.length) return;
+    if (!(plan.highlight || []).length) return;
+
+    const mount = $('plan-mount');
+    let svgDoc;
+    try {
+      const res = await fetch(plan.svg, { headers: { Accept: 'image/svg+xml' } });
+      if (!res.ok) throw new Error(`artwork ${res.status}`);
+      mount.innerHTML = await res.text();
+      svgDoc = mount.querySelector('svg');
+      if (!svgDoc) throw new Error('no <svg> in the artwork');
+    } catch (e) {
+      console.warn('Floorplan figure skipped:', e.message);
+      return;
+    }
+
+    // Scale to the column; the viewBox keeps the aspect ratio.
+    svgDoc.removeAttribute('width');
+    svgDoc.removeAttribute('height');
+    svgDoc.classList.add('plan-svg');
+
+    // Reveal the section BEFORE anything measures the artwork. `hidden` resolves
+    // to display:none, and inside that subtree getBBox() reports a zero-size box
+    // — every badge below would be skipped by its own size guard, and the figure
+    // would print highlighted but unlabelled.
+    $('block-plan').hidden = false;
+
+    const mine = new Set(plan.highlight || []);
+
+    BoothMap.attach(svgDoc, plan.booths, {
+      onTag(el, n, b) {
+        // Three states only — this is a client document, so it says what is
+        // being offered, what is free and what has gone. Nothing else.
+        if (mine.has(n)) el.classList.add('plan-mine');
+        else if (b.status !== 'available') el.classList.add('plan-taken');
+        else el.classList.add('plan-free');
+      },
+    });
+
+    // Number each proposed stand with a callout badge.
+    //
+    // The artwork prints its own stand numbers, but the whole hall scaled to a
+    // page column puts those at roughly 3pt — present in the file, unreadable on
+    // paper. So each highlighted stand gets a badge sized in SVG units to land
+    // near 8pt once printed, drawn over the top. It is deliberately allowed to
+    // be wider than a small stand: it reads as a map pin, which is exactly the
+    // job.
+    //
+    // Web fonts must be settled first or the measurement below is taken against
+    // the fallback face and the badge is cut to the wrong width.
+    if (document.fonts && document.fonts.ready) {
+      try { await document.fonts.ready; } catch { /* measure with whatever is loaded */ }
+    }
+
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const byNumber = new Map(plan.booths.map(b => [b.boothNumber, b]));
+    let marked = 0;
+
+    mine.forEach(n => {
+      const el = svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`);
+      const b = byNumber.get(n);
+      if (!el || !b) return;
+      // The stand's post-transform box — many stands in the artwork are rotated,
+      // and the untransformed box would place the badge off the stand.
+      const box = BoothMap.visualBox(el);
+      if (!box || !(box.w > 0) || !(box.h > 0)) return;
+
+      const g = document.createElementNS(SVG_NS, 'g');
+      g.setAttribute('class', 'plan-badge');
+
+      const text = document.createElementNS(SVG_NS, 'text');
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('dominant-baseline', 'central');
+      text.textContent = b.displayNumber || b.boothNumber;
+      g.appendChild(text);
+      svgDoc.appendChild(g);          // appended last: badges sit above all artwork
+
+      // Measure the rendered text, then fit the pill to it.
+      let tw = 0;
+      try { tw = text.getComputedTextLength(); } catch { tw = 0; }
+      if (!tw) tw = String(text.textContent).length * 15;   // fallback if layout is unavailable
+      const padX = 9, h = 30, w = tw + padX * 2;
+      const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+
+      const pill = document.createElementNS(SVG_NS, 'rect');
+      pill.setAttribute('x', cx - w / 2);
+      pill.setAttribute('y', cy - h / 2);
+      pill.setAttribute('width', w);
+      pill.setAttribute('height', h);
+      pill.setAttribute('rx', h / 2);
+      g.insertBefore(pill, text);     // behind the text
+
+      text.setAttribute('x', cx);
+      text.setAttribute('y', cy);
+      marked++;
+    });
+
+    // The caption counts what was actually DRAWN, not what was requested, so it
+    // can never promise a mark the client cannot find.
+    if (!marked) { $('block-plan').hidden = true; return; }
+    $('plan-lede').textContent = marked === 1
+      ? 'The stand set out in this proposal is marked below.'
+      : `The ${marked} stands set out in this proposal are marked below.`;
+  }
+
   async function load() {
     if (!id) return fail('No proposal specified.');
 
@@ -169,6 +290,15 @@
 
     $('load-state').hidden = true;
     $('sheet').hidden = false;
+
+    // Drawn LAST and only once the sheet is visible: fitLabel measures text with
+    // getComputedTextLength(), which returns 0 inside a hidden subtree — the
+    // numbers would size themselves against a zero-width box. Awaited so the
+    // figure is complete before a rep can reach the print dialog.
+    if (d.plan) {
+      try { await renderPlan(d.plan); }
+      catch (e) { console.warn('Floorplan figure failed:', e); }
+    }
   }
 
   $('tb-print').addEventListener('click', () => window.print());

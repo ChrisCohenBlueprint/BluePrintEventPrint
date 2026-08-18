@@ -239,6 +239,7 @@
     counts.append(el('span', 'pill', plural((m.boothNumbers || []).length, 'stand', 'stands')));
     if ((m.custom || []).length) counts.append(el('span', 'pill', `${m.custom.length} bespoke`));
     if (m.showPrices) counts.append(el('span', 'pill priced', 'prices shown'));
+    if (m.showPlan !== false && (m.boothNumbers || []).length) counts.append(el('span', 'pill', 'floorplan'));
     row.append(counts);
 
     const when = el('div', 'prop-when',
@@ -294,11 +295,12 @@
   ['f-title', 'f-client', 'f-company', 'f-email', 'f-intro'].forEach(id =>
     $(id).addEventListener('input', markDirty));
   $('f-prices').addEventListener('change', markDirty);
+  $('f-plan').addEventListener('change', markDirty);
 
   function openEditor(menu) {
     state.editing = menu || { _id: null, ref: 'New', title: '', clientName: '', clientCompany: '',
                               clientEmail: '', intro: '', sponsorKeys: [], boothNumbers: [],
-                              custom: [], showPrices: false };
+                              custom: [], showPrices: false, showPlan: true };
 
     // Editing an existing proposal loads ITS selection into the basket, so the
     // cards on the inventory tabs reflect what this proposal already contains.
@@ -316,6 +318,9 @@
     $('f-email').value   = state.editing.clientEmail || '';
     $('f-intro').value   = state.editing.intro || '';
     $('f-prices').checked = state.editing.showPrices === true;
+    // Opt-OUT, so a proposal drafted before this existed (no field at all) shows
+    // the box ticked, matching what its PDF will actually contain.
+    $('f-plan').checked = state.editing.showPlan !== false;
     $('drawer-delete').classList.toggle('hidden', !menu);
     $('drawer-print').classList.toggle('hidden', !menu);
 
@@ -438,6 +443,7 @@
       boothNumbers:  [...state.pickedBooths],
       custom:        readCustom(),
       showPrices:    $('f-prices').checked,
+      showPlan:      $('f-plan').checked,
     };
   }
 

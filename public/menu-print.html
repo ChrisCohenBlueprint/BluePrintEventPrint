@@ -56,6 +56,19 @@
       </table>
     </section>
 
+    <!-- The floorplan figure. Rendered from the live artwork with the proposed
+         stands marked, so the client can see where they would be. -->
+    <section class="block block-plan" id="block-plan" hidden>
+      <h2 id="plan-heading">Your stands on the floorplan</h2>
+      <p class="plan-lede" id="plan-lede"></p>
+      <div class="plan-frame"><div class="plan-mount" id="plan-mount"></div></div>
+      <div class="plan-key">
+        <span class="pk"><span class="pk-swatch pk-mine"></span>Your stands</span>
+        <span class="pk"><span class="pk-swatch pk-free"></span>Still available</span>
+        <span class="pk"><span class="pk-swatch pk-taken"></span>Taken</span>
+      </div>
+    </section>
+
     <section class="block" id="block-custom" hidden>
       <h2>Additional items</h2>
       <div id="custom-list"></div>
@@ -83,6 +96,10 @@
 
   <div class="load-state" id="load-state">Loading proposal…</div>
 
+  <!-- Shared with the public and admin floorplans: one implementation maps
+       stands onto the artwork, so the proposal cannot disagree with the plan
+       the client will see on the website. -->
+  <script src="/booth-map.js"></script>
   <script src="/menu-print.js"></script>
 </body>
 </html>

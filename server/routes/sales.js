@@ -205,6 +205,40 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
       };
     });
 
+    /**
+     * The floorplan figure: the artwork to draw, plus every stand's position so
+     * the page can mark the proposed ones on it.
+     *
+     * The WHOLE plan is sent, not just the selection — the client needs the hall
+     * around their stands for the highlight to mean anything, and the page maps
+     * stands onto the artwork by geometry exactly as the public floorplan does.
+     *
+     * Deliberately minimal per stand: number, footprint, size and status. No
+     * company, no price, no deal notes — this document goes to a client, and the
+     * plan must not become a back door to the commercial data the rest of the
+     * proposal is careful about. Status is included because it is already public
+     * on the floorplan and it is what makes "here is what is left" legible.
+     *
+     * Omitted entirely for a sponsorship-only proposal, or when the rep has
+     * turned the plan off — the page then simply has no figure to draw.
+     */
+    const highlight = boothItems.filter(b => !b.unavailable).map(b => b.boothNumber);
+    const plan = (menu.showPlan !== false && boothItems.length) ? {
+      svg: config.floorplanSvg,
+      highlight,
+      booths: allBooths
+        .filter(b => b.geometry)
+        .map(b => ({
+          boothNumber: b.boothNumber,
+          displayNumber: b.displayNumber || null,
+          geometry: b.geometry,
+          sqm: b.sqm,
+          status: b.status,
+          splitFrom: b.splitFrom || null,
+          splitAxis: b.splitAxis || null,
+        })),
+    } : null;
+
     const custom = (menu.custom || []).map(c => ({
       title: c.title, detail: c.detail,
       price: withPrices ? (c.price ?? null) : undefined,
@@ -229,6 +263,7 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
       showPrices: withPrices,
       sponsors: sponsorItems,
       booths: boothItems,
+      plan,
       custom,
       total,
       createdAt: menu.createdAt,

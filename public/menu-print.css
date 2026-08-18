@@ -127,6 +127,59 @@ body {
 .stand-table tr.unavailable { opacity: .62; }
 .stand-table tr.unavailable .stand-cell { text-decoration: line-through; text-decoration-thickness: 1px; }
 
+/* ─── Floorplan figure ────────────────────────────────────────────────────── */
+.plan-lede { font-size: 12.5px; color: var(--ink-mid); margin-top: 12px; }
+
+.plan-frame {
+  margin-top: 12px; padding: 10px;
+  border: 1px solid var(--rule); border-radius: 6px; background: #fbfcfd;
+}
+.plan-mount { line-height: 0; }                 /* no descender gap under the SVG */
+.plan-svg {
+  display: block; width: 100%; height: auto;
+  /* The artwork is portrait and taller than one page. Capping the height keeps
+     the whole hall on a single sheet — a plan split across a page break is
+     worse than a slightly smaller one. */
+  max-height: 208mm; margin: 0 auto;
+}
+
+/* Stand fills. `!important` because the artwork carries its own <style> block
+   (.cls-10 / .cls-7 …) that would otherwise win on any tie, and the hit-area
+   overlays BoothMap inserts set fill as a presentation attribute.
+
+   The hall floor in the artwork is itself a pale blue, so a pale highlight
+   disappears into it. The proposed stands are therefore filled SOLID and dark —
+   they have to be findable at a glance on a page-sized plan. The artwork's own
+   printed stand number is buried by that fill, which costs nothing: at this
+   scale it renders near 3pt and is unreadable anyway, which is exactly why the
+   badge below exists. */
+.plan-svg [data-booth].plan-free  { fill: #ffffff !important; }
+.plan-svg [data-booth].plan-taken { fill: #d5dee7 !important; }
+.plan-svg [data-booth].plan-mine {
+  fill: #14708e !important;
+  stroke: #06323f !important; stroke-width: 4 !important;
+}
+/* Callout badge naming each proposed stand. Sized in SVG user units — the plan
+   is ~1865 units wide rendered at ~170mm, so a 30-unit pill lands near 8pt on
+   paper, which is the smallest that stays comfortably readable in print. */
+/* White pill, dark text: it has to stay readable both on the dark fill of a
+   large stand and spilling onto the pale floor beside a small one. */
+.plan-svg .plan-badge rect { fill: #ffffff; stroke: #06323f; stroke-width: 2.5; }
+.plan-svg .plan-badge text {
+  fill: #06323f; font-family: 'Raleway', sans-serif; font-weight: 800; font-size: 17px;
+}
+.plan-svg .plan-badge { pointer-events: none; }
+
+.plan-key {
+  display: flex; flex-wrap: wrap; gap: 18px;
+  margin-top: 12px; font-size: 10.5px; font-weight: 600; color: var(--ink-mid);
+}
+.pk { display: inline-flex; align-items: center; gap: 6px; }
+.pk-swatch { width: 13px; height: 11px; border: 1px solid #94a3b8; border-radius: 2px; }
+.pk-mine  { background: #14708e; border-color: #06323f; border-width: 2px; }
+.pk-free  { background: #ffffff; }
+.pk-taken { background: #d5dee7; }
+
 .totals {
   display: flex; justify-content: space-between; align-items: baseline;
   margin-top: 24px; padding-top: 14px; border-top: 2px solid var(--ink);
@@ -164,6 +217,11 @@ body {
   /* Backgrounds carry meaning here (the sold-out badge, the warning note), so
      keep them rather than let the browser drop them to save ink. */
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* The plan is a full-page portrait figure, so it takes its own sheet rather
+     than being wedged under whatever precedes it. */
+  .block-plan { break-before: page; page-break-before: always; break-inside: avoid; page-break-inside: avoid; }
+  .plan-frame { border-color: #cbd5e1; background: #fff; }
 
   /* Never split a package across a page break mid-description. */
   .p-item, .block h2, .totals, .doc-foot { break-inside: avoid; page-break-inside: avoid; }

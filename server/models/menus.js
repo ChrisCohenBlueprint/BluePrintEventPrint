@@ -82,6 +82,12 @@ function cleanFields(f = {}) {
   // Off by default: the client-facing document is price-free like the public
   // floorplan, and a rep has to opt in per proposal to put numbers in writing.
   if ('showPrices'    in f) $set.showPrices    = f.showPrices === true || f.showPrices === 'true';
+  // ON by default — the opposite of showPrices. A plan showing the client where
+  // their stands sit is the point of the document, so it is opt-OUT (for a
+  // sponsorship-only proposal, or when the rep wants a one-page quote).
+  // Proposals drafted before this existed have no field at all, which reads as
+  // on, so they gain the plan without needing a migration.
+  if ('showPlan'      in f) $set.showPlan      = !(f.showPlan === false || f.showPlan === 'false');
   return $set;
 }
 
@@ -92,7 +98,7 @@ async function create(owner, fields = {}) {
     ref: await nextRef(),
     owner: String(owner || '').toLowerCase().trim(),
     title: '', clientName: '', clientCompany: '', clientEmail: '', intro: '',
-    sponsorKeys: [], boothNumbers: [], custom: [], showPrices: false,
+    sponsorKeys: [], boothNumbers: [], custom: [], showPrices: false, showPlan: true,
     ...cleanFields(fields),
     createdAt: new Date(),
     updatedAt: new Date(),
