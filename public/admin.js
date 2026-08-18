@@ -449,6 +449,8 @@ function renderAdminBoothAction(n) {
   document.getElementById('aba-release').onclick = () => adminAction('release', n);
   document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
 
+  renderBoothTags(n);
+
   document.getElementById('aba-actual-price').value = d.actualPrice ?? '';
   document.getElementById('aba-notes').value        = d.notes ?? '';
   document.getElementById('aba-save-deal').onclick  = () => {
@@ -1052,6 +1054,8 @@ socket.on('state:full', (serverBooths) => {
   renderBookingsTable();
   populateToolDropdowns();
   populateAdminSearchList();
+  renderTagCatalogue();                       // the "used on N stands" counts move with the booths
+  if (selectedAdminId) renderBoothTags(selectedAdminId);
 
   // Tag on the first state if the floorplan tab is already open; otherwise
   // loadAdminSVG() tags when the tab is first shown.
@@ -2252,3 +2256,219 @@ socket.on('inquiry:new', () => {
   adminToast('New enquiry received.', 'ok');
 });
 
+
+// ─── Exhibitor tags ───────────────────────────────────────────────────────────
+// The catalogue lives on the server and is pushed to every client, so a tag
+// added here appears on the public floorplan (and in any other admin's browser)
+// without a reload. Booths store tag KEYS; the catalogue resolves them to a
+// label and colour at render time, which is what makes a rename propagate.
+
+const MAX_BOOTH_TAGS = 3;
+let tagCatalogue = [];
+
+const tagByKey = (key) => tagCatalogue.find(t => t.key === key) || null;
+const boothTags = (b) => (dealOf(b).tags || []).filter(k => tagByKey(k));
+
+socket.on('tags:catalogue', (list) => {
+  tagCatalogue = Array.isArray(list) ? list : [];
+  renderTagCatalogue();
+  if (selectedAdminId) renderBoothTags(selectedAdminId);
+});
+
+/** A chip painted in the tag's own colour, with readable text over it. */
+function tagChip(tag, { onRemove = null } = {}) {
+  const chip = document.createElement('span');
+  chip.className = 'tag-chip';
+  chip.style.background = tag.color;
+  chip.style.color = contrastText(tag.color);
+  chip.appendChild(document.createTextNode(tag.label));
+  if (onRemove) {
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.title = `Remove ${tag.label}`;
+    x.setAttribute('aria-label', `Remove ${tag.label}`);
+    x.onclick = onRemove;
+    chip.appendChild(x);
+  }
+  return chip;
+}
+
+// ── Tools → Exhibitor Tags ───────────────────────────────────────────────────
+function tagUsage(key) {
+  return Object.values(booths).filter(b => (dealOf(b).tags || []).includes(key)).length;
+}
+
+function renderTagCatalogue() {
+  const box = document.getElementById('tag-list');
+  if (!box) return;
+  box.replaceChildren();
+
+  if (!tagCatalogue.length) {
+    const p = document.createElement('div');
+    p.className = 'tag-empty';
+    p.textContent = 'No tags yet. Add one above, then attach it to a booked stand from the Floorplan tab.';
+    box.appendChild(p);
+    return;
+  }
+
+  tagCatalogue.forEach(t => {
+    const row = document.createElement('div');
+    row.className = 'tag-row';
+
+    // Recolour in place — the swatch IS the colour picker.
+    const swatch = document.createElement('input');
+    swatch.type = 'color';
+    swatch.className = 'tag-swatch';
+    swatch.value = t.color;
+    swatch.title = `Colour for ${t.label}`;
+    swatch.onchange = () => saveTag(t.key, { color: swatch.value });
+    row.appendChild(swatch);
+
+    // Rename in place. Committed on blur/Enter, and reverted if the server
+    // rejects it (a duplicate name), so the field never shows a name that
+    // was not actually saved.
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'admin-input tag-name';
+    name.maxLength = 40;
+    name.value = t.label;
+    name.onchange = () => {
+      const label = name.value.trim();
+      if (!label || label === t.label) { name.value = t.label; return; }
+      saveTag(t.key, { label }, () => { name.value = t.label; });
+    };
+    name.onkeydown = (e) => { if (e.key === 'Enter') name.blur(); };
+    row.appendChild(name);
+
+    const uses = tagUsage(t.key);
+    const used = document.createElement('span');
+    used.className = 'tag-uses';
+    used.textContent = uses ? `${uses} stand${uses === 1 ? '' : 's'}` : 'unused';
+    row.appendChild(used);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'admin-btn danger';
+    del.textContent = 'Delete';
+    del.onclick = () => deleteTag(t, uses);
+    row.appendChild(del);
+
+    box.appendChild(row);
+  });
+}
+
+document.getElementById('tag-form')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = document.getElementById('tag-label');
+  const label = input.value.trim();
+  if (!label) return adminToast('Give the tag a name first.', 'error');
+
+  socket.emit('tags:create', { label, color: document.getElementById('tag-color').value }, (res) => {
+    if (res && res.ok) {
+      input.value = '';
+      adminToast(`Tag "${res.tag.label}" added.`, 'ok');
+    } else {
+      adminToast((res && res.error) || 'Could not add that tag.', 'error');
+    }
+  });
+});
+
+function saveTag(key, fields, onFail) {
+  socket.emit('tags:update', { key, ...fields }, (res) => {
+    if (!res || !res.ok) {
+      adminToast((res && res.error) || 'Could not update that tag.', 'error');
+      if (onFail) onFail();
+    }
+  });
+}
+
+function deleteTag(tag, uses) {
+  const warn = uses
+    ? `Delete "${tag.label}"? It will be removed from ${uses} stand${uses === 1 ? '' : 's'}.`
+    : `Delete "${tag.label}"?`;
+  if (!confirm(warn)) return;
+  socket.emit('tags:delete', { key: tag.key }, (res) => {
+    if (res && res.ok) adminToast(`Tag "${tag.label}" deleted.`, 'ok');
+    else adminToast((res && res.error) || 'Could not delete that tag.', 'error');
+  });
+}
+
+// ── Booth panel: the tags on this stand, plus one-click add ──────────────────
+function renderBoothTags(n) {
+  const section = document.getElementById('aba-tags-section');
+  if (!section) return;
+
+  const b = booths[n];
+  // Tags describe an exhibitor, so the block only appears where there is one.
+  // The server enforces the same rule on the write.
+  const booked = b && (b.status === 'sold' || b.status === 'held');
+  section.classList.toggle('hidden', !booked);
+  if (!booked) return;
+
+  const current = boothTags(b);
+  document.getElementById('aba-tag-count').textContent = `${current.length}/${MAX_BOOTH_TAGS}`;
+
+  const currentBox = document.getElementById('aba-tag-current');
+  currentBox.replaceChildren();
+  if (!current.length) {
+    const none = document.createElement('span');
+    none.className = 'aba-tag-none';
+    none.textContent = 'No tags yet.';
+    currentBox.appendChild(none);
+  } else {
+    current.forEach(key => currentBox.appendChild(
+      tagChip(tagByKey(key), { onRemove: () => saveBoothTags(n, current.filter(k => k !== key)) })
+    ));
+  }
+
+  const pick = document.getElementById('aba-tag-pick');
+  pick.replaceChildren();
+
+  if (!tagCatalogue.length) {
+    const hint = document.createElement('p');
+    hint.className = 'aba-tag-hint';
+    hint.textContent = 'No tags exist yet — create them under Tools → Exhibitor Tags.';
+    pick.appendChild(hint);
+    return;
+  }
+
+  const full = current.length >= MAX_BOOTH_TAGS;
+  tagCatalogue.filter(t => !current.includes(t.key)).forEach(t => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tag-add';
+    btn.textContent = `+ ${t.label}`;
+    btn.style.borderColor = t.color;
+    btn.disabled = full;
+    btn.title = full ? `A stand can carry at most ${MAX_BOOTH_TAGS} tags` : `Add ${t.label} to this stand`;
+    btn.onclick = () => saveBoothTags(n, [...current, t.key]);
+    pick.appendChild(btn);
+  });
+
+  if (full) {
+    const hint = document.createElement('p');
+    hint.className = 'aba-tag-hint';
+    hint.textContent = `That is the maximum of ${MAX_BOOTH_TAGS}. Remove one to add another.`;
+    pick.appendChild(hint);
+  }
+}
+
+/**
+ * Replace this stand's whole tag set. The panel is redrawn from the server's
+ * answer rather than optimistically, so a rejected change (the stand was
+ * released underneath the edit) never leaves a chip showing that isn't saved.
+ */
+function saveBoothTags(boothNumber, keys) {
+  socket.emit('booth:set-tags', { boothNumber, tags: keys }, (res) => {
+    if (res && res.ok) {
+      const b = booths[boothNumber];
+      if (b) { b.assignment = b.assignment || {}; b.assignment.tags = res.tags; }
+      renderBoothTags(boothNumber);
+      renderTagCatalogue();
+    } else {
+      adminToast((res && res.error) || 'Could not save tags.', 'error');
+      renderBoothTags(boothNumber);
+    }
+  });
+}

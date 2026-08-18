@@ -60,6 +60,12 @@ let UNIT = 'm²';
 // whenever an admin changes it.
 let sponsorColor = '', sponsorName = '';
 
+// The exhibitor tag catalogue, pushed from the server. Booths carry tag KEYS;
+// this resolves each to its label and colour, so an admin renaming or
+// recolouring a tag repaints every open floorplan without a reload.
+let tagCatalogue = [];
+const tagByKey = (key) => tagCatalogue.find(t => t.key === key) || null;
+
 // Readable text colour for a given background — dark ink on light brands, white
 // on dark ones (WCAG relative-luminance threshold).
 function contrastText(hex) {
@@ -525,6 +531,32 @@ function toggleSponsor(key) {
   renderSponsors(currentSponsorList);   // refresh the Added/Add button states
 }
 
+/**
+ * Who has this stand, and what they do — the block shown when a visitor clicks
+ * a taken stand.
+ *
+ * Only for a SOLD stand. A hold is a provisional deal, and the server withholds
+ * the tags on a held stand for the same reason; naming the company on one would
+ * announce a booking that has not been agreed.
+ */
+function exhibitorHTML(b, status) {
+  if (status !== 'sold' || !b.company) return '';
+
+  const chips = (b.tags || [])
+    .map(tagByKey)
+    .filter(Boolean)
+    .slice(0, 3)
+    .map(t => `<span class="tag-chip" style="background:${esc(t.color)};color:${esc(contrastText(t.color))}">${esc(t.label)}</span>`)
+    .join('');
+
+  return `
+    <div class="stand-exhibitor">
+      <div class="stand-exhibitor-lbl">Exhibitor</div>
+      <div class="stand-exhibitor-name">${esc(b.company)}</div>
+      ${chips ? `<div class="stand-tags">${chips}</div>` : ''}
+    </div>`;
+}
+
 // ─── Detail panel ─────────────────────────────────────────────────────────────
 function renderPanel(n) {
   if (!n) return;
@@ -552,6 +584,7 @@ function renderPanel(n) {
         <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' ' + UNIT : '—'}</span></div>
         <div class="stand-stat"><span class="stand-stat-lbl">Status</span><span class="stand-stat-val">${esc(STATUS_LABEL[status] || cap(status))}</span></div>
       </div>
+      ${exhibitorHTML(b, status)}
       <div class="stand-taken-notice">
         <i data-lucide="lock" style="width:14px;height:14px"></i>
         ${status === 'held' ? 'This stand is currently on hold.' : 'This stand has been taken.'}
@@ -691,6 +724,11 @@ socket.on('settings', (s) => {
   document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
   if (selectedId) renderPanel(selectedId);
   updateStatsStrip();
+});
+
+socket.on('tags:catalogue', (list) => {
+  tagCatalogue = Array.isArray(list) ? list : [];
+  if (selectedId) renderPanel(selectedId);      // repaint an open stand's chips
 });
 
 socket.on('floorplan-sponsor', (s) => {

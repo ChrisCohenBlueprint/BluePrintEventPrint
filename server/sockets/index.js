@@ -4,6 +4,7 @@ const config    = require('../config');
 const booths    = require('../models/booths');
 const sponsors  = require('../models/sponsors');
 const settings  = require('../models/settings');
+const tags      = require('../models/tags');
 const users     = require('../models/users');
 const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
@@ -30,6 +31,15 @@ async function refresh() {
   const rows = await booths.all();
   if (seq === refreshSeq) cache = rows;
 }
+
+// ─── Tag catalogue ────────────────────────────────────────────────────────────
+// Every client needs it to turn a booth's tag KEYS into labelled chips, and it
+// changes only when an admin edits the catalogue — so it is cached here and
+// pushed on connect and on every edit, rather than repeated on each of the 272
+// booths in every state broadcast.
+let tagCache = [];
+async function refreshTags() { tagCache = await tags.catalogue(); }
+function broadcastTags(io) { io.emit('tags:catalogue', tagCache); }
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 // Token bucket per socket. The public events are unauthenticated by design, so
@@ -106,6 +116,10 @@ const stand = (n) => String(n);
 
 function register(io) {
   io.use(socketAuth);
+
+  // Prime the tag catalogue once at boot. A failure here is not fatal — stands
+  // simply render without chips until the next catalogue edit refreshes it.
+  refreshTags().catch(e => console.error('Tag catalogue not loaded:', e.message));
 
   io.on('connection', (socket) => {
     connections++;
@@ -488,6 +502,77 @@ function register(io) {
       return { ok: true, ...r };
     }));
 
+    // ── Tags ──────────────────────────────────────────────────────────────
+    // The catalogue an admin curates in Tools, and the (max 3) tags each booked
+    // stand carries. Handled over the socket rather than REST so every open
+    // floorplan repaints the moment a tag is added, renamed or removed.
+
+    socket.on('tags:create', requireAdmin(socket, 'tags:create', async ({ label, color }) => {
+      const r = await tags.create({ label, color });
+      if (!r.ok) {
+        const why = r.reason === 'no_label'  ? 'give the tag a name'
+                  : r.reason === 'duplicate' ? 'a tag with that name already exists'
+                  : 'that tag could not be created';
+        return { ok: false, error: `Could not add tag — ${why}.` };
+      }
+      await refreshTags(); broadcastTags(io);
+      log(io, `🏷️ Tag added — ${escapeHtml(r.tag.label)}`, 'admin');
+      return { ok: true, tag: r.tag, catalogue: tagCache };
+    }));
+
+    // Rename / recolour. The stored key never changes, so every stand already
+    // carrying this tag simply starts rendering the new label.
+    socket.on('tags:update', requireAdmin(socket, 'tags:update', async ({ key, label, color }) => {
+      const r = await tags.update(String(key || ''), { label, color });
+      if (!r.ok) {
+        const why = r.reason === 'missing_tag' ? 'that tag no longer exists'
+                  : r.reason === 'duplicate'   ? 'a tag with that name already exists'
+                  : r.reason === 'no_label'    ? 'give the tag a name'
+                  : 'it could not be saved';
+        return { ok: false, error: `Could not update tag — ${why}.` };
+      }
+      await refreshTags(); broadcastTags(io);
+      log(io, `🏷️ Tag updated — ${escapeHtml(r.tag.label)}`, 'admin');
+      return { ok: true, tag: r.tag, catalogue: tagCache };
+    }));
+
+    // Delete. The tag is pulled off every stand FIRST, so no stand is ever left
+    // holding a key with nothing to resolve it against.
+    socket.on('tags:delete', requireAdmin(socket, 'tags:delete', async ({ key }) => {
+      const k = String(key || '');
+      const cleared = await booths.removeTag(k);
+      const ok = await tags.remove(k);
+      if (!ok) return { ok: false, error: 'That tag no longer exists.' };
+      await refreshTags(); broadcastTags(io);
+      await refresh(); broadcastState(io);
+      log(io, `🏷️ Tag deleted — removed from ${cleared} stand${cleared === 1 ? '' : 's'}`, 'admin');
+      return { ok: true, cleared, catalogue: tagCache };
+    }));
+
+    // Set the tags on one booked stand. Replaces the whole set, so the UI can
+    // send exactly what the chips show.
+    socket.on('booth:set-tags', requireAdmin(socket, 'booth:set-tags', async ({ boothNumber, tags: keys }) => {
+      const n = stand(boothNumber);
+      const r = await booths.setTags(n, keys, {
+        valid: await tags.validKeys(), max: tags.MAX_PER_BOOTH, actor: socket.data.user,
+      });
+      if (!r.ok) {
+        const why = r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'too_many'      ? `a stand can carry at most ${r.max} tags`
+                  : r.reason === 'unknown_tag'   ? 'one of those tags no longer exists'
+                  : 'they could not be saved';
+        return { ok: false, error: `Could not save tags — ${why}.` };
+      }
+      if (!r.changed) return { ok: false, error: `Stand ${n} is not booked — tags apply to a booked stand.` };
+      track({ type: 'booth.set_tags', boothNumber: n, socket, meta: { tags: r.tags } });
+      await refresh(); broadcastState(io);
+      const names = r.tags.map(k => tagCache.find(t => t.key === k)?.label || k);
+      log(io, names.length
+        ? `🏷️ Stand ${escapeHtml(n)} tagged — ${escapeHtml(names.join(', '))}`
+        : `🏷️ Stand ${escapeHtml(n)} tags cleared`, 'admin');
+      return { ok: true, tags: r.tags };
+    }));
+
     // Set the floorplan (title) sponsor: name + brand colour. Broadcast to every
     // client so the legend swatch and any sponsored-booth fills update live.
     socket.on('sponsor:set-floorplan', requireAdmin(socket, 'sponsor:set-floorplan', async ({ name, color }) => {
@@ -563,6 +648,7 @@ function register(io) {
               totalSqm: s.totalSqm, availSqm: s.availSqm });
 
         socket.emit('floorplan-sponsor', await sponsors.getFloorplanSponsor());
+        socket.emit('tags:catalogue', tagCache);
 
         // Unit is a harmless display label (public). The €/unit rate is
         // admin-only: public sqm × rate would reveal list prices.

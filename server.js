@@ -15,6 +15,7 @@ const publicRoutes = require('./server/routes/public');
 const salesRoutes  = require('./server/routes/sales');
 const users        = require('./server/models/users');
 const partners     = require('./server/models/partners');
+const tags         = require('./server/models/tags');
 const menus        = require('./server/models/menus');
 const booths       = require('./server/models/booths');
 const tracking   = require('./server/services/tracking');
@@ -36,6 +37,7 @@ async function start() {
   await users.ensureIndexes();
   await partners.ensureIndexes();
   await menus.ensureIndexes();
+  await tags.ensureIndexes();
   await users.bootstrap({ username: config.adminUser, password: config.adminPass });
   // Promote the configured bootstrap account to owner (team-management tier).
   // Idempotent, and safe on an already-seeded database.
