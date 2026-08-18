@@ -4,6 +4,12 @@ const totp = require('../services/totp');
 
 const col = () => getDb().collection('users');
 
+// The three account tiers. 'sales' is the sub-admin used by the reps: same
+// password + 2FA sign-in, but it only unlocks /sales.
+const ROLES = ['owner', 'admin', 'sales'];
+const cleanRole = (r) => (ROLES.includes(String(r || '').toLowerCase().trim())
+  ? String(r).toLowerCase().trim() : 'admin');
+
 // ─── Password hashing (scrypt, from node crypto — no dependency) ──────────────
 function hashPassword(password) {
   const salt = crypto.randomBytes(16);
@@ -60,21 +66,27 @@ const findAuth = (username) =>
  * Create or overwrite an account. Used by the bootstrap and by the create-admin
  * script. The account starts un-enrolled; 2FA is set up on first login.
  */
-async function upsert({ username, password, role = 'admin' }) {
+async function upsert({ username, password, role = 'admin', displayName, email }) {
   const uname = String(username).toLowerCase().trim();
+  const $set = {
+    username: uname,
+    passwordHash: hashPassword(password),
+    updatedAt: new Date(),
+  };
+  // Profile fields are optional and only written when supplied, so re-running
+  // upsert to reset a password never blanks a rep's name or email.
+  if (displayName != null) $set.displayName = String(displayName).trim().slice(0, 60);
+  if (email != null)       $set.email = String(email).trim().slice(0, 120);
+
   await col().updateOne(
     { username: uname },
-    { $set: {
-        username: uname,
-        passwordHash: hashPassword(password),
-        updatedAt: new Date(),
-      },
+    { $set,
       // Role is set only on INSERT, never overwritten. Otherwise the
       // break-glass "reset password" path (admin-account.js create annie …)
       // would re-run upsert with the default role:'admin' and silently DEMOTE
       // the owner, locking everyone out of team management.
       $setOnInsert: {
-        role,
+        role: cleanRole(role),
         totpSecret: null,
         totpEnrolled: false,
         recoveryHashes: [],
@@ -203,8 +215,34 @@ async function useRecoveryCode(username, code) {
 // ─── Team management ──────────────────────────────────────────────────────────
 /** All accounts, without any secret material. */
 const list = () =>
-  col().find({}).project({ username: 1, role: 1, totpEnrolled: 1, createdAt: 1 })
+  col().find({}).project({ username: 1, role: 1, totpEnrolled: 1, createdAt: 1,
+                           displayName: 1, email: 1 })
        .sort({ createdAt: 1 }).toArray();
+
+/** Update a rep's display name / email without touching credentials. */
+async function setProfile(username, { displayName, email } = {}) {
+  const $set = { updatedAt: new Date() };
+  if (displayName != null) $set.displayName = String(displayName).trim().slice(0, 60);
+  if (email != null)       $set.email = String(email).trim().slice(0, 120);
+  const res = await col().updateOne(
+    { username: String(username || '').toLowerCase().trim() }, { $set });
+  return res.matchedCount === 1;
+}
+
+/**
+ * Move an existing account between tiers (admin ↔ sales). Bumps tokenVersion so
+ * a demoted admin's live session is revoked immediately rather than keeping
+ * admin authority until the 12h token expires. The owner is never re-roled here
+ * — that tier is the recovery anchor and is managed through the bootstrap env.
+ */
+async function setRole(username, role) {
+  const uname = String(username || '').toLowerCase().trim();
+  const current = await findByUsername(uname);
+  if (!current || current.role === 'owner') return false;
+  const res = await col().updateOne({ username: uname },
+    { $set: { role: cleanRole(role), updatedAt: new Date() }, $inc: { tokenVersion: 1 } });
+  return res.matchedCount === 1;
+}
 
 const count = () => col().countDocuments();
 
@@ -240,5 +278,5 @@ module.exports = {
   verifyPassword, absorbPassword, verifyTotp, verifyTotpAndConsume,
   startEnrolment, confirmEnrolment, useRecoveryCode,
   issueClaimCode, needsClaim, checkClaim,
-  list, count, resetTotp, setPassword, remove,
+  list, count, resetTotp, setPassword, setProfile, setRole, remove, ROLES,
 };

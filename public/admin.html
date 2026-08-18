@@ -611,12 +611,47 @@
     <section class="admin-section" id="section-team">
       <div class="team-layout">
         <div class="team-add-card">
-          <h3>Add an administrator</h3>
+          <h3>Add a team member</h3>
           <p>Create an account, then share the username and temporary password. They set up their own two-factor login the first time they sign in, and can change the password after.</p>
           <form id="team-add-form" class="team-form">
             <div class="team-field">
+              <label>Access level</label>
+              <div class="role-picker">
+                <label class="role-opt">
+                  <input type="radio" name="team-role" value="admin" checked>
+                  <span>
+                    <strong>Administrator</strong>
+                    <small>Full console — floorplan, bookings, leads, sponsors.</small>
+                  </span>
+                </label>
+                <label class="role-opt">
+                  <input type="radio" name="team-role" value="sales">
+                  <span>
+                    <strong>Sales</strong>
+                    <small>Only <code>/sales</code> — remaining sponsorship and stands, and client proposals. Cannot book or edit the floorplan.</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Shown for the sales tier only: pick a name off the existing
+                 roster to prefill, so a rep's proposals are signed correctly. -->
+            <div class="team-field hidden" id="team-roster-field">
+              <label for="team-roster">Sales team member</label>
+              <select id="team-roster" class="admin-input"></select>
+            </div>
+
+            <div class="team-field">
               <label for="team-username">Username</label>
               <input type="text" id="team-username" class="admin-input" autocomplete="off" autocapitalize="none" placeholder="e.g. james">
+            </div>
+            <div class="team-field hidden" id="team-name-field">
+              <label for="team-displayname">Display name <span class="hint-inline">signs their proposals</span></label>
+              <input type="text" id="team-displayname" class="admin-input" autocomplete="off" placeholder="e.g. Tom Harding">
+            </div>
+            <div class="team-field hidden" id="team-email-field">
+              <label for="team-email">Email <span class="hint-inline">shown on their proposals</span></label>
+              <input type="email" id="team-email" class="admin-input" autocomplete="off" placeholder="tom@blueprinteventcompany.com">
             </div>
             <div class="team-field">
               <label for="team-password">Temporary password</label>
@@ -625,15 +660,15 @@
                 <button type="button" class="admin-btn" id="team-gen-pw" title="Generate a password">Generate</button>
               </div>
             </div>
-            <button type="submit" class="admin-btn success full"><i data-lucide="user-plus"></i> Add administrator</button>
+            <button type="submit" class="admin-btn success full"><i data-lucide="user-plus"></i> <span id="team-add-label">Add administrator</span></button>
           </form>
         </div>
 
         <div class="team-list-card">
-          <h3>Administrators</h3>
+          <h3>Team</h3>
           <div class="team-table-wrap">
             <table class="team-table">
-              <thead><tr><th>Username</th><th>2FA</th><th>Added</th><th></th></tr></thead>
+              <thead><tr><th>Username</th><th>Access</th><th>2FA</th><th>Added</th><th></th></tr></thead>
               <tbody id="team-tbody"></tbody>
             </table>
           </div>

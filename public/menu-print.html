@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proposal | BluePrint EventPrint</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Root-relative: this page is served from /sales/menu/:id/print, so a
+       bare "menu-print.css" would resolve under that path and 404. -->
+  <link rel="stylesheet" href="/menu-print.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%2360abbf%27/%3E%3Crect x=%277%27 y=%277%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3Crect x=%2717%27 y=%277%27 width=%278%27 height=%2718%27 fill=%27%230b2027%27/%3E%3Crect x=%277%27 y=%2717%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3C/svg%3E">
+</head>
+<body>
+  <!-- Screen-only control bar. Hidden by the print stylesheet so it never
+       appears in the PDF the client receives. -->
+  <div class="toolbar no-print">
+    <a href="/sales" class="tb-btn">← Back to dashboard</a>
+    <div class="tb-note" id="tb-note">Use “Save as PDF” as the destination in the print dialog.</div>
+    <button class="tb-btn primary" id="tb-print">Save as PDF</button>
+  </div>
+
+  <main class="sheet" id="sheet" hidden>
+    <header class="doc-head">
+      <div class="brand">
+        <div class="brand-mark" id="brand-mark"></div>
+        <div>
+          <div class="brand-name">BLUEPRINT</div>
+          <div class="brand-sub" id="brand-show">—</div>
+        </div>
+      </div>
+      <div class="doc-meta">
+        <div class="doc-ref" id="doc-ref">—</div>
+        <div class="doc-date" id="doc-date">—</div>
+      </div>
+    </header>
+
+    <h1 class="doc-title" id="doc-title">Proposal</h1>
+    <div class="doc-for" id="doc-for"></div>
+
+    <p class="doc-intro" id="doc-intro" hidden></p>
+
+    <section class="block" id="block-sponsors" hidden>
+      <h2>Sponsorship opportunities</h2>
+      <div id="sponsor-list"></div>
+    </section>
+
+    <section class="block" id="block-booths" hidden>
+      <h2>Exhibition stands</h2>
+      <table class="stand-table">
+        <thead>
+          <tr><th>Stand</th><th>Size</th><th class="col-price" hidden>Investment</th></tr>
+        </thead>
+        <tbody id="booth-list"></tbody>
+      </table>
+    </section>
+
+    <section class="block" id="block-custom" hidden>
+      <h2>Additional items</h2>
+      <div id="custom-list"></div>
+    </section>
+
+    <section class="totals" id="totals" hidden>
+      <span>Total</span>
+      <strong id="total-value">—</strong>
+    </section>
+
+    <p class="withdrawn-note" id="withdrawn-note" hidden></p>
+
+    <footer class="doc-foot">
+      <div class="foot-prepared">
+        <div class="foot-label">Prepared by</div>
+        <div class="foot-name" id="foot-name">—</div>
+        <div class="foot-email" id="foot-email"></div>
+      </div>
+      <div class="foot-terms" id="foot-terms">
+        Availability is correct at the date of issue and is not held or reserved
+        until confirmed in writing.
+      </div>
+    </footer>
+  </main>
+
+  <div class="load-state" id="load-state">Loading proposal…</div>
+
+  <script src="/menu-print.js"></script>
+</body>
+</html>

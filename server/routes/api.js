@@ -51,15 +51,56 @@ router.post('/admins', requireOwner, async (req, res, next) => {
   try {
     const username = String(req.body?.username || '').toLowerCase().trim();
     const password = String(req.body?.password || '');
+    // Only these two tiers can be created here. 'owner' is deliberately not
+    // offered — it is the recovery anchor and is set from the bootstrap env, so
+    // the API must never be able to mint a second one.
+    const role = req.body?.role === 'sales' ? 'sales' : 'admin';
+    const displayName = String(req.body?.displayName || '').trim();
+    const email = String(req.body?.email || '').trim();
+
     if (!USERNAME_RE.test(username)) return res.status(400).json({ error: 'Username must be 2–32 chars: letters, numbers, . _ -' });
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     if (await users.findByUsername(username)) return res.status(409).json({ error: 'That username already exists.' });
-    await users.upsert({ username, password, role: 'admin' });
+
+    await users.upsert({ username, password, role, displayName, email });
     // One-time invite code — must be shared out of band and entered on first
     // login, so the temp password alone can't claim the account.
     const claim = await users.issueClaimCode(username);
-    auditTeam(req, 'create', username);
-    res.json({ ok: true, username, claim });
+    auditTeam(req, 'create', username, { role });
+    res.json({ ok: true, username, role, claim });
+  } catch (e) { next(e); }
+});
+
+/**
+ * Move an account between the admin and sales tiers.
+ *
+ * Owner-only, like every other team mutation, and it revokes the target's live
+ * session (users.setRole bumps tokenVersion) — otherwise an admin demoted to
+ * sales would keep full admin authority until their 12h token expired.
+ */
+router.patch('/admins/:username/role', requireOwner, async (req, res, next) => {
+  try {
+    const role = req.body?.role;
+    if (!['admin', 'sales'].includes(role)) return res.status(400).json({ error: 'Role must be admin or sales.' });
+    const target = String(req.params.username || '').toLowerCase().trim();
+    // Changing your own role could drop you out of the console mid-session.
+    if (req.admin?.user === target) return res.status(400).json({ error: 'You cannot change your own role.' });
+    const ok = await users.setRole(target, role);
+    if (!ok) return res.status(400).json({ error: 'No such account, or it is the owner.' });
+    auditTeam(req, 'set-role', target, { role });
+    res.json({ ok: true, role });
+  } catch (e) { next(e); }
+});
+
+/** Set a member's display name / email — what a rep's proposals are signed with. */
+router.patch('/admins/:username/profile', requireOwner, async (req, res, next) => {
+  try {
+    const ok = await users.setProfile(req.params.username, {
+      displayName: req.body?.displayName, email: req.body?.email,
+    });
+    if (!ok) return res.status(404).json({ error: 'No such account.' });
+    auditTeam(req, 'set-profile', req.params.username);
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

@@ -1,0 +1,174 @@
+/* ─── BluePrint EventPrint — printable client proposal ─────────────────────────
+   Deliberately NOT built on the dark admin theme: this document is printed and
+   emailed to a client, so it is light, high-contrast and ink-sensible. The
+   @media print block at the end is what the PDF actually looks like. */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* The page toggles sections with the `hidden` ATTRIBUTE. A class that sets a
+   display value (.totals is display:flex) outranks the UA's [hidden] rule, so
+   without this a price-free proposal still printed its total row. */
+[hidden] { display: none !important; }
+
+:root {
+  --ink:     #101827;
+  --ink-mid: #475569;
+  --ink-soft:#7c8797;
+  --rule:    #e3e8ef;
+  --brand:   #60abbf;
+  --paper:   #ffffff;
+}
+
+body {
+  font-family: 'Raleway', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #eef1f5;
+  color: var(--ink);
+  padding: 0 0 60px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Screen toolbar (never printed) ──────────────────────────────────────── */
+.toolbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 24px; margin-bottom: 28px;
+  background: #0f172a; color: #e2e8f0;
+  box-shadow: 0 2px 12px rgba(0,0,0,.18);
+}
+.tb-note { flex: 1; font-size: 12.5px; color: #94a3b8; }
+.tb-note.warn { color: #fbbf24; font-weight: 600; }
+.tb-btn {
+  padding: 8px 16px; border-radius: 8px; cursor: pointer;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14);
+  color: #e2e8f0; font-family: inherit; font-size: 13px; font-weight: 600;
+  text-decoration: none; transition: background .15s;
+}
+.tb-btn:hover { background: rgba(255,255,255,.16); }
+.tb-btn.primary { background: var(--brand); border-color: var(--brand); color: #06232c; }
+.tb-btn.primary:hover { filter: brightness(1.08); }
+
+.load-state { text-align: center; padding: 80px 20px; color: var(--ink-soft); font-size: 14px; }
+.load-state.error { color: #b91c1c; font-weight: 600; }
+
+/* ─── The sheet ───────────────────────────────────────────────────────────── */
+.sheet {
+  width: 210mm; max-width: calc(100% - 32px); min-height: 297mm;
+  margin: 0 auto; padding: 22mm 20mm;
+  background: var(--paper);
+  box-shadow: 0 10px 40px rgba(15,23,42,.14);
+}
+
+.doc-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
+  padding-bottom: 16px; border-bottom: 2px solid var(--ink);
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark { width: 34px; height: 34px; border-radius: 7px; background: var(--brand); flex-shrink: 0; }
+.brand-name { font-size: 15px; font-weight: 800; letter-spacing: 2px; }
+.brand-sub  { font-size: 10px; font-weight: 600; letter-spacing: 2px; color: var(--ink-soft); margin-top: 2px; }
+.doc-meta { text-align: right; }
+.doc-ref  { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; color: var(--brand); }
+.doc-date { font-size: 11px; color: var(--ink-soft); margin-top: 3px; }
+
+.doc-title { font-size: 26px; font-weight: 800; line-height: 1.2; margin-top: 26px; letter-spacing: -0.4px; }
+.doc-for   { font-size: 13px; color: var(--ink-mid); margin-top: 7px; font-weight: 600; }
+.doc-intro {
+  font-size: 13px; line-height: 1.65; color: var(--ink-mid);
+  margin-top: 18px; padding-left: 14px; border-left: 3px solid var(--rule);
+  white-space: pre-wrap;   /* the rep's line breaks are meaningful */
+}
+
+/* ─── Blocks ──────────────────────────────────────────────────────────────── */
+.block { margin-top: 32px; }
+.block h2 {
+  font-size: 11px; font-weight: 800; letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--ink-soft); padding-bottom: 8px; border-bottom: 1px solid var(--rule);
+  margin-bottom: 4px;
+}
+
+.p-item { padding: 16px 0; border-bottom: 1px solid var(--rule); }
+.p-item:last-child { border-bottom: none; }
+.p-item-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.p-item-head h3 { font-size: 15px; font-weight: 700; }
+
+.p-tier {
+  font-size: 8.5px; font-weight: 800; letter-spacing: 1px;
+  padding: 3px 7px; border-radius: 3px; background: #eef2f7; color: var(--ink-mid);
+}
+.p-tier.t-platinum { background: #eceff3; color: #334155; }
+.p-tier.t-gold     { background: #fdf3d3; color: #8a6d15; }
+.p-tier.t-silver   { background: #eef2f7; color: #475569; }
+
+.p-gone {
+  font-size: 9.5px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 3px; background: #fee2e2; color: #b91c1c;
+}
+.p-avail { font-size: 11.5px; color: var(--ink-soft); margin-top: 5px; font-weight: 600; }
+.p-blurb { font-size: 12.5px; line-height: 1.6; color: var(--ink-mid); margin-top: 8px; }
+.p-perks { list-style: none; margin-top: 10px; display: grid; gap: 5px; }
+.p-perks li { font-size: 12px; color: var(--ink-mid); padding-left: 16px; position: relative; line-height: 1.45; }
+.p-perks li::before { content: '▪'; position: absolute; left: 2px; color: var(--brand); }
+.p-price { font-size: 14px; font-weight: 700; margin-top: 10px; }
+
+/* An unavailable item stays legible — it is shown on purpose — but is visibly
+   not part of the offer. */
+.p-item.unavailable { opacity: .62; }
+.p-item.unavailable h3 { text-decoration: line-through; text-decoration-thickness: 1px; }
+
+.stand-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.stand-table th {
+  text-align: left; font-size: 10px; font-weight: 800; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--ink-soft);
+  padding: 9px 8px; border-bottom: 1px solid var(--rule);
+}
+.stand-table td { font-size: 12.5px; padding: 10px 8px; border-bottom: 1px solid var(--rule); }
+.stand-table .stand-cell { font-weight: 700; }
+.stand-table .col-price { text-align: right; }
+.stand-table tr.unavailable { opacity: .62; }
+.stand-table tr.unavailable .stand-cell { text-decoration: line-through; text-decoration-thickness: 1px; }
+
+.totals {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-top: 24px; padding-top: 14px; border-top: 2px solid var(--ink);
+  font-size: 13px; font-weight: 700; letter-spacing: .5px;
+}
+.totals strong { font-size: 20px; }
+
+.withdrawn-note {
+  margin-top: 18px; padding: 11px 14px; border-radius: 6px;
+  background: #fef3c7; color: #854d0e; font-size: 11.5px; font-weight: 600; line-height: 1.5;
+}
+
+.doc-foot {
+  display: flex; justify-content: space-between; gap: 30px; align-items: flex-end;
+  margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--rule);
+}
+.foot-label { font-size: 9.5px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; color: var(--ink-soft); }
+.foot-name  { font-size: 13.5px; font-weight: 700; margin-top: 5px; }
+.foot-email { font-size: 11.5px; color: var(--ink-mid); margin-top: 2px; }
+.foot-terms { font-size: 9.5px; color: var(--ink-soft); line-height: 1.55; max-width: 62%; text-align: right; }
+
+/* ─── Print ───────────────────────────────────────────────────────────────── */
+@page { size: A4; margin: 14mm; }
+
+@media print {
+  /* The toolbar is a screen control, not part of the client's document. */
+  .no-print, .load-state { display: none !important; }
+
+  body { background: #fff; padding: 0; }
+  .sheet {
+    width: auto; max-width: none; min-height: 0;
+    margin: 0; padding: 0; box-shadow: none;
+  }
+
+  /* Backgrounds carry meaning here (the sold-out badge, the warning note), so
+     keep them rather than let the browser drop them to save ink. */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* Never split a package across a page break mid-description. */
+  .p-item, .block h2, .totals, .doc-foot { break-inside: avoid; page-break-inside: avoid; }
+  .block h2 { break-after: avoid; page-break-after: avoid; }
+  .stand-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .stand-table thead { display: table-header-group; }   /* repeat header on each page */
+  .doc-foot { break-before: avoid; }
+}

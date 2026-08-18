@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sales Dashboard | BluePrint EventPrint</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Self-hosted, as on the admin console: a hijacked CDN release must not be
+       able to run arbitrary JS inside an authenticated dashboard. -->
+  <script src="/vendor/lucide.min.js"></script>
+  <!-- Root-relative throughout: /sales and /sales/ must both resolve these,
+       and a trailing slash would otherwise send them to /sales/sales.css. -->
+  <link rel="stylesheet" href="/admin.css">
+  <link rel="stylesheet" href="/sales.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%2360abbf%27/%3E%3Crect x=%277%27 y=%277%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3Crect x=%2717%27 y=%277%27 width=%278%27 height=%2718%27 fill=%27%230b2027%27/%3E%3Crect x=%277%27 y=%2717%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3C/svg%3E">
+</head>
+<body>
+  <div class="bg-glow g1"></div>
+  <div class="bg-glow g2"></div>
+
+  <!-- Sidebar -->
+  <nav class="admin-nav">
+    <div class="nav-brand">
+      <div class="nav-brand-text">
+        <span class="nav-brand-main">BLUEPRINT</span>
+        <span class="nav-brand-sub">SALES</span>
+      </div>
+    </div>
+    <ul class="nav-links">
+      <li class="nav-link active" data-section="inventory"><i data-lucide="sparkles"></i> Sponsorship</li>
+      <li class="nav-link" data-section="stands"><i data-lucide="layout-grid"></i> Stands</li>
+      <li class="nav-link" data-section="proposals"><i data-lucide="file-text"></i> My Proposals <span class="nav-badge hidden" id="prop-badge">0</span></li>
+    </ul>
+
+    <!-- Only rendered for an admin/owner previewing this dashboard. -->
+    <a href="/admin" class="nav-view-public hidden" id="nav-back-admin">
+      <i data-lucide="arrow-left"></i> Back to admin
+    </a>
+    <a href="/floorplan" target="_blank" class="nav-view-public">
+      <i data-lucide="external-link"></i> View floorplan
+    </a>
+    <a href="/logout" id="nav-signout" class="nav-view-public nav-signout">
+      <i data-lucide="log-out"></i> Sign out
+    </a>
+    <div class="nav-user"><i data-lucide="user"></i> <span id="nav-username">…</span></div>
+  </nav>
+
+  <div class="admin-body">
+    <!-- Topbar -->
+    <header class="admin-topbar">
+      <div class="topbar-title" id="section-title">Remaining sponsorship</div>
+      <div class="topbar-right">
+        <div class="sales-basket" id="sales-basket">
+          <i data-lucide="clipboard-list"></i>
+          <span><strong id="basket-count">0</strong> selected</span>
+          <button class="admin-btn success" id="basket-build">Build proposal</button>
+          <button class="admin-btn" id="basket-clear">Clear</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ═══ SECTION: SPONSORSHIP ══════════════════════════════════════════════ -->
+    <section class="admin-section active" id="section-inventory">
+      <div class="sales-toolbar">
+        <div class="sales-search">
+          <i data-lucide="search"></i>
+          <input type="text" id="sponsor-search" class="admin-input" placeholder="Search packages…" autocomplete="off">
+        </div>
+        <div class="sales-filters" id="tier-filters">
+          <button class="chip active" data-tier="all">All tiers</button>
+          <button class="chip" data-tier="platinum">Platinum</button>
+          <button class="chip" data-tier="gold">Gold</button>
+          <button class="chip" data-tier="silver">Silver</button>
+        </div>
+        <div class="sales-count" id="sponsor-count">—</div>
+      </div>
+      <div class="sponsor-grid" id="sponsor-grid"></div>
+      <div class="empty-note hidden" id="sponsor-empty">
+        <i data-lucide="check-circle-2"></i>
+        <p>Nothing left in the catalogue — every package is sold or withdrawn.</p>
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: STANDS ═══════════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-stands">
+      <div class="sales-toolbar">
+        <div class="sales-search">
+          <i data-lucide="search"></i>
+          <input type="text" id="stand-search" class="admin-input" placeholder="Search stand number…" autocomplete="off">
+        </div>
+        <div class="sales-filters" id="size-filters">
+          <button class="chip active" data-size="all">Any size</button>
+          <button class="chip" data-size="s">Under 12 m²</button>
+          <button class="chip" data-size="m">12–30 m²</button>
+          <button class="chip" data-size="l">Over 30 m²</button>
+        </div>
+        <div class="sales-count" id="stand-count">—</div>
+      </div>
+      <div class="stand-grid" id="stand-grid"></div>
+      <div class="empty-note hidden" id="stand-empty">
+        <i data-lucide="check-circle-2"></i>
+        <p>No stands are available at the moment.</p>
+      </div>
+    </section>
+
+    <!-- ═══ SECTION: PROPOSALS ════════════════════════════════════════════════ -->
+    <section class="admin-section" id="section-proposals">
+      <div class="sales-toolbar">
+        <button class="admin-btn success" id="prop-new"><i data-lucide="plus"></i> New proposal</button>
+        <div class="sales-count" id="prop-count">—</div>
+      </div>
+      <div class="prop-list" id="prop-list"></div>
+      <div class="empty-note hidden" id="prop-empty">
+        <i data-lucide="file-plus-2"></i>
+        <p>No proposals yet. Pick some sponsorship or stands, then hit <strong>Build proposal</strong>.</p>
+      </div>
+    </section>
+  </div><!-- /admin-body -->
+
+  <!-- ═══ PROPOSAL EDITOR (drawer) ════════════════════════════════════════════ -->
+  <div class="drawer-scrim hidden" id="drawer-scrim"></div>
+  <aside class="drawer hidden" id="drawer" aria-label="Proposal editor">
+    <header class="drawer-head">
+      <div>
+        <div class="drawer-ref" id="drawer-ref">—</div>
+        <h3 id="drawer-heading">Proposal</h3>
+      </div>
+      <button class="icon-btn" id="drawer-close" title="Close"><i data-lucide="x"></i></button>
+    </header>
+
+    <div class="drawer-body">
+      <div class="drawer-field">
+        <label for="f-title">Proposal title</label>
+        <input type="text" id="f-title" class="admin-input" placeholder="e.g. LEX27 Headline Package">
+      </div>
+      <div class="drawer-row">
+        <div class="drawer-field">
+          <label for="f-client">Client contact</label>
+          <input type="text" id="f-client" class="admin-input" placeholder="e.g. Sarah Bell">
+        </div>
+        <div class="drawer-field">
+          <label for="f-company">Company</label>
+          <input type="text" id="f-company" class="admin-input" placeholder="e.g. Acme Ltd">
+        </div>
+      </div>
+      <div class="drawer-field">
+        <label for="f-email">Client email</label>
+        <input type="email" id="f-email" class="admin-input" placeholder="sarah@acme.com">
+      </div>
+      <div class="drawer-field">
+        <label for="f-intro">Opening note <span class="hint">appears at the top of the printed proposal</span></label>
+        <textarea id="f-intro" class="admin-input" rows="4" placeholder="Thanks for your time today — here are the packages we discussed…"></textarea>
+      </div>
+
+      <div class="drawer-section">
+        <h4>Included <span class="drawer-tally" id="drawer-tally">0 items</span></h4>
+        <div class="drawer-items" id="drawer-items"></div>
+      </div>
+
+      <div class="drawer-section">
+        <h4>Bespoke line items</h4>
+        <p class="hint">Anything not in the catalogue — a bundled rate, a bespoke activation, a discount note.</p>
+        <div id="custom-items"></div>
+        <button class="admin-btn" id="custom-add"><i data-lucide="plus"></i> Add line item</button>
+      </div>
+
+      <div class="drawer-section">
+        <label class="switch-row">
+          <input type="checkbox" id="f-prices">
+          <span>
+            <strong>Show prices on the printed proposal</strong>
+            <small>Off by default. The client document stays price-free — like the public floorplan — so you can talk cost through yourself.</small>
+          </span>
+        </label>
+      </div>
+    </div>
+
+    <footer class="drawer-foot">
+      <span class="save-state" id="save-state"></span>
+      <button class="admin-btn" id="drawer-delete"><i data-lucide="trash-2"></i> Delete</button>
+      <button class="admin-btn" id="drawer-save">Save</button>
+      <button class="admin-btn success" id="drawer-print"><i data-lucide="printer"></i> Save as PDF</button>
+    </footer>
+  </aside>
+
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="/sales.js"></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>

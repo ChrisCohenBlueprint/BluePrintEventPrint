@@ -759,3 +759,46 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
   color: var(--accent); background: rgba(99,102,241,.14); border: 1px solid rgba(99,102,241,.3);
   padding: 2px 7px; border-radius: 6px; margin-right: 4px; }
 .mv-rate { color: var(--green); font-size: 11.5px; }
+
+/* ─── Team: access-level picker ──────────────────────────────────────────────
+   Scoped rather than a global `.hidden` utility: a blanket
+   `.hidden { display:none !important }` would also flatten the tooltip's
+   opacity fade (.fp-tooltip.hidden), which is hidden by transition, not by
+   display. */
+.team-field.hidden { display: none; }
+
+.role-picker { display: flex; flex-direction: column; gap: 8px; }
+
+/* .team-field label is uppercased for the small field captions. The role options
+   are <label>s too, so without this reset the option titles and their
+   explanatory sentences were rendered in shouty all-caps. */
+.role-opt, .role-opt strong, .role-opt small, .hint-inline {
+  text-transform: none; letter-spacing: normal;
+}
+.role-opt {
+  display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
+  padding: 11px 13px; border-radius: 9px;
+  background: var(--bg); border: 1px solid var(--border);
+  transition: border-color .15s, background .15s;
+}
+.role-opt:hover { border-color: rgba(255,255,255,0.16); }
+.role-opt input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--accent); flex-shrink: 0; }
+.role-opt:has(input:checked) { border-color: rgba(99,102,241,0.45); background: rgba(99,102,241,0.08); }
+.role-opt strong { display: block; font-size: 13px; font-weight: 600; }
+.role-opt small  { display: block; font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+.role-opt code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+  background: rgba(255,255,255,0.07); padding: 1px 4px; border-radius: 3px;
+}
+
+.hint-inline { font-size: 10.5px; font-weight: 400; color: var(--muted); }
+
+.team-role {
+  display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .6px;
+  text-transform: uppercase; padding: 3px 8px; border-radius: 4px;
+  background: rgba(255,255,255,0.07); color: var(--muted);
+}
+.team-role.owner { background: rgba(252,223,109,0.15); color: var(--yellow); }
+.team-role.admin { background: rgba(99,102,241,0.15);  color: #a5b4fc; }
+.team-role.sales { background: rgba(16,185,129,0.15);  color: var(--green); }
+.team-dn { font-size: 11px; color: var(--muted); margin-top: 4px; }

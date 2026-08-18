@@ -3,7 +3,10 @@
 (function () {
   'use strict';
 
-  const nextUrl = new URLSearchParams(location.search).get('next') || '/admin';
+  // Left empty when there's no ?next, so the SERVER decides where to land —
+  // an administrator goes to /admin, a sales rep to /sales. Hard-coding /admin
+  // here would send a rep to a page their role cannot open.
+  const nextUrl = new URLSearchParams(location.search).get('next') || '';
   let pending = null;              // short-lived token tying the two steps together
   let recoveryMode = false;
 

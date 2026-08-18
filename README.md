@@ -8,6 +8,7 @@ This project is a high-fidelity interactive floorplan application designed for e
 *   **Booking Stream:** Instant color updates (Amber to Blue) when a booth is purchased, along with ticker announcements.
 *   **Consolidation Engine:** Admin tool to merge booths, recalculating geometric boundaries and combining prices in real-time.
 *   **Unified Service:** Serves both frontend and backend WebSockets from a single Node.js process, making it free and easy to deploy on Render.
+*   **Sales Dashboard (`/sales`):** A sub-admin tier for the sales team — reps sign in with their own password + 2FA, see the remaining sponsorship and available stands, and build bespoke per-client proposals they print to PDF. See [docs/sales-dashboard.md](docs/sales-dashboard.md).
 
 ---
 

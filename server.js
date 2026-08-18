@@ -1,28 +1,9 @@
 const express = require('express');
 const http    = require('http');
 const path    = require('path');
-const fs      = require('fs');
 const { Server } = require('socket.io');
 
-// Build id: changes every process start (i.e. every deploy). Injected as ?v= on
-// the HTML's script/style tags so a reload — the HTML always revalidates — pulls
-// the JS/CSS that matches this build instead of a copy a browser or proxy held
-// onto. Without it a stale floorplan.js can keep running even though the deploy
-// shipped new code, which looked like "the front end isn't updating".
-const BUILD_ID = Date.now().toString(36);
-
-// Read an HTML page once per boot and stamp the build id onto its local .js/.css
-// references (not external URLs, not ones already carrying a query).
-const pageCache = {};
-function sendPage(res, file) {
-  if (!pageCache[file]) {
-    const html = fs.readFileSync(path.join(__dirname, 'public', file), 'utf8');
-    pageCache[file] = html.replace(/(src|href)="([^"?:]+\.(?:js|css))"/g,
-      `$1="$2?v=${BUILD_ID}"`);
-  }
-  res.set('Cache-Control', 'no-cache');
-  res.type('html').send(pageCache[file]);
-}
+const { sendPage } = require('./server/lib/send-page');
 
 const config  = require('./server/config');
 const db      = require('./server/db');
@@ -31,8 +12,10 @@ const sockets = require('./server/sockets');
 const apiRoutes    = require('./server/routes/api');
 const authRoutes   = require('./server/routes/auth-routes');
 const publicRoutes = require('./server/routes/public');
+const salesRoutes  = require('./server/routes/sales');
 const users        = require('./server/models/users');
 const partners     = require('./server/models/partners');
+const menus        = require('./server/models/menus');
 const booths       = require('./server/models/booths');
 const tracking   = require('./server/services/tracking');
 
@@ -52,6 +35,7 @@ async function start() {
   // — 2FA is then set up on that account's first login.
   await users.ensureIndexes();
   await partners.ensureIndexes();
+  await menus.ensureIndexes();
   await users.bootstrap({ username: config.adminUser, password: config.adminPass });
   // Promote the configured bootstrap account to owner (team-management tier).
   // Idempotent, and safe on an already-seeded database.
@@ -90,6 +74,11 @@ async function start() {
 
   // Public endpoints (price-free sponsor recommendations) — also before adminAuth.
   app.use(publicRoutes);
+
+  // Sales sub-admin surface. MUST be mounted before adminAuth: it serves
+  // /api/sales/*, which the admin guard's blanket /api/* rule would otherwise
+  // reject for a rep. It applies its own (sales-tier) guard internally.
+  app.use(salesRoutes);
 
   // Guards /admin* and /api/* — redirects page requests to /login, 401s the rest.
   app.use(adminAuth);

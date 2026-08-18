@@ -1,0 +1,245 @@
+/* ─── BluePrint EventPrint — Sales dashboard ───────────────────────────────────
+   Layered on top of admin.css: the sidebar, topbar, buttons, inputs and colour
+   tokens are shared, so the rep dashboard reads as the same product as the
+   admin console. Only what is new to this surface is defined here. */
+
+/* admin.css has no global utility for this — it hides specific components by
+   name. The sales page toggles visibility on several unrelated elements, so it
+   needs the general form. */
+.hidden { display: none !important; }
+
+.icon-btn {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 18px; line-height: 1; padding: 4px 8px; border-radius: 6px;
+  font-family: inherit; transition: all .15s;
+}
+.icon-btn:hover { color: var(--text); background: rgba(255,255,255,0.07); }
+.icon-btn svg { width: 18px; height: 18px; }
+
+/* ─── Selection basket (topbar) ───────────────────────────────────────────── */
+.sales-basket {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px 6px 14px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--border);
+  font-size: 13px; color: var(--muted);
+  transition: all .2s;
+}
+.sales-basket svg { width: 16px; height: 16px; }
+.sales-basket strong { color: var(--text); font-size: 14px; }
+.sales-basket.has-items {
+  border-color: rgba(99,102,241,0.4);
+  background: rgba(99,102,241,0.1);
+  color: var(--text);
+}
+
+/* ─── Toolbars ────────────────────────────────────────────────────────────── */
+.sales-toolbar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.sales-search { position: relative; flex: 1; min-width: 200px; max-width: 340px; }
+.sales-search svg {
+  position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+  width: 15px; height: 15px; color: var(--muted); pointer-events: none;
+}
+.sales-search .admin-input { width: 100%; padding: 9px 12px 9px 34px; font-size: 13px; }
+
+.sales-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  padding: 7px 13px; border-radius: 999px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--border);
+  color: var(--muted); font-family: inherit; font-size: 12px; font-weight: 500;
+  transition: all .15s;
+}
+.chip:hover { color: var(--text); border-color: rgba(255,255,255,0.16); }
+.chip.active { background: rgba(99,102,241,0.15); border-color: rgba(99,102,241,0.4); color: #a5b4fc; }
+
+.sales-count { margin-left: auto; font-size: 12px; color: var(--muted); }
+
+/* ─── Pickable cards ──────────────────────────────────────────────────────── */
+.sponsor-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.stand-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
+.pick-card {
+  position: relative; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  transition: transform .15s, border-color .15s, background .15s;
+}
+.pick-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.16); }
+.pick-card.picked {
+  border-color: var(--accent);
+  background: rgba(99,102,241,0.1);
+  box-shadow: 0 0 0 1px rgba(99,102,241,0.35);
+}
+
+/* The tier stripe reads at a glance in a long grid, without relying on colour
+   alone — the badge text carries the same information. */
+.pick-card::before {
+  content: ''; position: absolute; left: 0; top: 12px; bottom: 12px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--muted);
+}
+.pick-card.tier-platinum::before { background: #cbd5e1; }
+.pick-card.tier-gold::before     { background: var(--yellow); }
+.pick-card.tier-silver::before   { background: #94a3b8; }
+
+.pick-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tier-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 1px;
+  padding: 3px 7px; border-radius: 4px;
+  background: rgba(255,255,255,0.07); color: var(--muted);
+}
+.tier-badge.tier-platinum { background: rgba(203,213,225,0.15); color: #e2e8f0; }
+.tier-badge.tier-gold     { background: rgba(252,223,109,0.15); color: var(--yellow); }
+.tier-badge.tier-silver   { background: rgba(148,163,184,0.15); color: #cbd5e1; }
+.pick-avail { font-size: 11px; color: var(--muted); }
+
+.pick-title { font-size: 15px; font-weight: 700; line-height: 1.3; }
+.pick-blurb {
+  font-size: 12.5px; color: var(--muted); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.pick-perks { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.pick-perks li {
+  font-size: 12px; color: #cbd5e1; padding-left: 15px; position: relative; line-height: 1.4;
+}
+.pick-perks li::before { content: '·'; position: absolute; left: 4px; color: var(--accent); font-weight: 700; }
+.pick-perks li.more { color: var(--muted); font-style: italic; }
+.pick-perks li.more::before { content: ''; }
+
+.pick-foot {
+  margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.pick-price { font-size: 13px; font-weight: 600; color: var(--green); }
+
+/* Empty circle → filled tick when picked. */
+.pick-tick {
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+  border: 1.5px solid var(--border); position: relative; transition: all .15s;
+}
+.pick-card.picked .pick-tick { background: var(--accent); border-color: var(--accent); }
+.pick-card.picked .pick-tick::after {
+  content: ''; position: absolute; left: 6px; top: 2px;
+  width: 5px; height: 10px; border: solid #fff; border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.stand-card { text-align: center; gap: 6px; padding: 14px 12px; }
+.stand-card::before { display: none; }
+.stand-num { font-size: 18px; font-weight: 700; letter-spacing: .5px; }
+.stand-sqm { font-size: 12px; color: var(--muted); }
+
+/* ─── Proposals ───────────────────────────────────────────────────────────── */
+.prop-list { display: flex; flex-direction: column; gap: 10px; }
+.prop-row {
+  display: grid; align-items: center; gap: 16px;
+  grid-template-columns: minmax(180px, 2fr) minmax(160px, 1.2fr) auto auto;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 18px;
+}
+.prop-ref { font-size: 10px; letter-spacing: 1.2px; color: var(--accent); font-weight: 700; }
+.prop-title { font-size: 14.5px; font-weight: 600; margin-top: 3px; }
+.prop-client { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.prop-counts { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill {
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: rgba(255,255,255,0.06); color: var(--muted); white-space: nowrap;
+}
+.pill.priced { background: rgba(252,223,109,0.14); color: var(--yellow); }
+.prop-when { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.prop-actions { display: flex; gap: 6px; }
+.prop-actions .admin-btn { padding: 7px 12px; font-size: 12px; }
+
+.empty-note {
+  text-align: center; padding: 60px 20px; color: var(--muted);
+}
+.empty-note svg { width: 34px; height: 34px; margin-bottom: 12px; opacity: .5; }
+.empty-note p { font-size: 13.5px; }
+
+/* ─── Editor drawer ───────────────────────────────────────────────────────── */
+.drawer-scrim {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(2px); z-index: 200;
+}
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw);
+  background: var(--surface); border-left: 1px solid var(--border);
+  backdrop-filter: blur(20px);
+  display: flex; flex-direction: column; z-index: 201;
+  box-shadow: -20px 0 60px rgba(0,0,0,0.5);
+}
+.drawer-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 20px 22px; border-bottom: 1px solid var(--border);
+}
+.drawer-ref { font-size: 10px; letter-spacing: 1.2px; color: var(--accent); font-weight: 700; }
+.drawer-head h3 { font-size: 17px; font-weight: 700; margin-top: 4px; }
+
+.drawer-body { flex: 1; overflow-y: auto; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px; }
+.drawer-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.drawer-field { display: flex; flex-direction: column; gap: 6px; }
+.drawer-field label { font-size: 12px; font-weight: 600; color: #cbd5e1; }
+.drawer-field .admin-input { width: 100%; padding: 9px 12px; font-size: 13px; background: var(--bg); }
+.drawer-field textarea.admin-input { resize: vertical; font-family: inherit; line-height: 1.5; }
+.hint { font-size: 11.5px; color: var(--muted); font-weight: 400; line-height: 1.5; }
+
+.drawer-section { border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.drawer-section h4 { font-size: 13px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+.drawer-tally { font-size: 11px; color: var(--muted); font-weight: 500; }
+
+.drawer-items { display: flex; flex-direction: column; gap: 6px; }
+.item-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 8px 8px 12px;
+}
+.item-kind {
+  font-size: 9px; letter-spacing: .8px; font-weight: 700; text-transform: uppercase;
+  color: var(--accent); flex-shrink: 0;
+}
+.item-name { font-size: 12.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.custom-row { display: grid; grid-template-columns: 1.2fr 1.4fr 80px auto; gap: 6px; margin-bottom: 6px; }
+.custom-row .admin-input { padding: 8px 10px; font-size: 12.5px; background: var(--bg); min-width: 0; }
+
+.switch-row { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.switch-row input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.switch-row strong { display: block; font-size: 13px; }
+.switch-row small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+
+.drawer-foot {
+  display: flex; align-items: center; gap: 8px;
+  padding: 16px 22px; border-top: 1px solid var(--border); background: var(--panel);
+}
+.save-state { flex: 1; font-size: 11.5px; color: var(--muted); }
+.save-state.dirty { color: var(--orange); }
+.save-state.ok    { color: var(--green); }
+
+/* ─── Toast ───────────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 20px; font-size: 13px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5); z-index: 300;
+  backdrop-filter: blur(20px); max-width: 90vw; text-align: center;
+}
+.toast.ok   { border-color: rgba(16,185,129,0.4); color: var(--green); }
+.toast.warn { border-color: rgba(249,115,22,0.4); color: var(--orange); }
+.toast.err  { border-color: rgba(239,68,68,0.4);  color: var(--red); }
+
+/* ─── Narrow screens ──────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .prop-row { grid-template-columns: 1fr; gap: 10px; }
+  .drawer-row { grid-template-columns: 1fr; }
+  .custom-row { grid-template-columns: 1fr 70px auto; }
+  .custom-row .c-detail { grid-column: 1 / -1; }
+  .sales-count { margin-left: 0; }
+}

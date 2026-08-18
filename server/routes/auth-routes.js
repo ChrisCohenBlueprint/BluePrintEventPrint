@@ -41,13 +41,24 @@ function clearFailures(username) { acctFailures.delete(String(username || '').to
 
 // A safe same-site redirect target: a single leading slash, and no backslash
 // (browsers treat "/\evil.com" as protocol-relative → off-site). Anything else
-// falls back to /admin.
-const safeNext = (v) =>
-  (typeof v === 'string' && /^\/[^/\\]/.test(v)) ? v : '/admin';
+// falls back to the account's own home.
+//
+// The role matters here: a rep has no admin console, so defaulting them to
+// /admin would land them on a page their role can't open. A rep who arrives via
+// a saved /admin link is likewise sent to /sales rather than into a bounce.
+const safeNext = (v, role) => {
+  const home = auth.homeFor(role);
+  if (typeof v !== 'string' || !/^\/[^/\\]/.test(v)) return home;
+  if (role === 'sales' && /^\/admin(\/|\.|$)/i.test(v)) return home;
+  return v;
+};
 
 // ─── Pages ────────────────────────────────────────────────────────────────────
 router.get('/login', async (req, res) => {
-  if (await auth.sessionUser(req)) return res.redirect(safeNext(req.query.next));
+  // Checked across ALL tiers, not just admin — otherwise a signed-in rep who
+  // hits /login is shown the form again instead of their dashboard.
+  const live = await auth.sessionUser(req, auth.ALL_ROLES);
+  if (live) return res.redirect(safeNext(req.query.next, live.role));
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'login.html'));
 });
 
@@ -118,7 +129,7 @@ router.post('/login/enrol', async (req, res) => {
   auth.consumePending(req.body?.pending);   // one successful use per pending token
   const user = await users.findByUsername(username);
   auth.setSessionCookie(res, user);
-  res.json({ ok: true, next: safeNext(req.body?.next) });
+  res.json({ ok: true, next: safeNext(req.body?.next, user.role) });
 });
 
 // ─── Step 2b: verify code (or recovery code) ──────────────────────────────────
@@ -146,14 +157,14 @@ router.post('/login/verify', async (req, res) => {
 
   auth.consumePending(req.body?.pending);   // one successful use per pending token
   auth.setSessionCookie(res, user);
-  res.json({ ok: true, next: safeNext(req.body?.next) });
+  res.json({ ok: true, next: safeNext(req.body?.next, user.role) });
 });
 
 // Who am I — lets the admin page show the signed-in user and a logout control.
 router.get('/api/me', async (req, res) => {
-  const s = await auth.sessionUser(req);
+  const s = await auth.sessionUser(req, auth.ALL_ROLES);
   if (!s) return res.status(401).json({ error: 'Not signed in' });
-  res.json({ user: s.user, role: s.role });
+  res.json({ user: s.user, role: s.role, home: auth.homeFor(s.role) });
 });
 
 module.exports = router;

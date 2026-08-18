@@ -90,7 +90,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
     if (sec === 'leads') loadLeads();
     if (sec === 'analytics') loadAnalytics();
     if (sec === 'sponsors') loadSponsorsAdmin();
-    if (sec === 'team') loadTeam();
+    if (sec === 'team') { loadTeam(); fillRoster(); syncRoleFields(); }
   });
 });
 
@@ -2039,6 +2039,21 @@ async function loadTeam() {
     if (a.username === currentUser) { const you = document.createElement('span'); you.className = 'team-you'; you.textContent = ' you'; name.appendChild(you); }
     tr.appendChild(name);
 
+    // Access tier. Shown for everyone; the owner additionally gets a control to
+    // move an account between admin and sales.
+    const roleCell = document.createElement('td');
+    const rolePill = document.createElement('span');
+    rolePill.className = 'team-role ' + (a.role || 'admin');
+    rolePill.textContent = { owner: 'Owner', admin: 'Administrator', sales: 'Sales' }[a.role] || a.role || 'Administrator';
+    roleCell.appendChild(rolePill);
+    if (a.displayName) {
+      const dn = document.createElement('div');
+      dn.className = 'team-dn';
+      dn.textContent = a.displayName;
+      roleCell.appendChild(dn);
+    }
+    tr.appendChild(roleCell);
+
     const tfa = document.createElement('td');
     const pill = document.createElement('span');
     pill.className = 'team-2fa ' + (a.totpEnrolled ? 'on' : 'off');
@@ -2056,6 +2071,13 @@ async function loadTeam() {
     if (isOwner) {
       actions.appendChild(teamBtn('Reset 2FA', () => resetMemberTotp(a.username)));
       actions.appendChild(teamBtn('New password', () => resetMemberPassword(a.username)));
+      // The owner tier is never re-roled, and changing your own would drop you
+      // out of the console mid-session — the server rejects both too.
+      if (a.role !== 'owner' && a.username !== currentUser) {
+        const to = a.role === 'sales' ? 'admin' : 'sales';
+        actions.appendChild(teamBtn(a.role === 'sales' ? 'Make admin' : 'Make sales',
+          () => changeMemberRole(a.username, to)));
+      }
       if (a.role !== 'owner' && a.username !== currentUser && admins.length > 1) {
         actions.appendChild(teamBtn('Remove', () => removeMember(a.username), 'danger'));
       }
@@ -2087,38 +2109,106 @@ document.getElementById('team-gen-pw')?.addEventListener('click', () => {
   document.getElementById('team-password').value = genPassword();
 });
 
+// ─── Role picker ──────────────────────────────────────────────────────────────
+// The sales tier needs a display name and email (they sign the rep's client
+// proposals), so those fields — and the roster shortcut — only appear for it.
+function selectedNewRole() {
+  return document.querySelector('input[name="team-role"]:checked')?.value || 'admin';
+}
+
+function syncRoleFields() {
+  const isSales = selectedNewRole() === 'sales';
+  ['team-roster-field', 'team-name-field', 'team-email-field'].forEach(id =>
+    document.getElementById(id)?.classList.toggle('hidden', !isSales));
+  const label = document.getElementById('team-add-label');
+  if (label) label.textContent = isSales ? 'Add sales member' : 'Add administrator';
+}
+
+document.querySelectorAll('input[name="team-role"]').forEach(r =>
+  r.addEventListener('change', syncRoleFields));
+
+/**
+ * Fill the roster dropdown from the existing sales team list, so the owner
+ * picks "Tom" rather than retyping his details. Choosing a name prefills the
+ * username, display name and email; every field stays editable.
+ */
+function fillRoster() {
+  const sel = document.getElementById('team-roster');
+  if (!sel) return;
+  const opts = [Object.assign(document.createElement('option'), { value: '', textContent: 'Choose a name…' })];
+  (salesTeamCache.team || []).forEach(m => {
+    const o = document.createElement('option');
+    o.value = m.name; o.textContent = m.name;
+    o.dataset.email = m.email || '';
+    opts.push(o);
+  });
+  sel.replaceChildren(...opts);
+}
+
+document.getElementById('team-roster')?.addEventListener('change', (e) => {
+  const opt = e.target.selectedOptions[0];
+  if (!opt || !opt.value) return;
+  // Usernames are constrained to lowercase letters, numbers and . _ - server-side.
+  document.getElementById('team-username').value = opt.value.toLowerCase().replace(/[^a-z0-9._-]/g, '');
+  document.getElementById('team-displayname').value = opt.value;
+  document.getElementById('team-email').value = opt.dataset.email || '';
+});
+
 document.getElementById('team-add-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const role = selectedNewRole();
   const username = document.getElementById('team-username').value.trim();
   const password = document.getElementById('team-password').value;
+  const displayName = document.getElementById('team-displayname')?.value.trim() || '';
+  const email = document.getElementById('team-email')?.value.trim() || '';
+  const noun = role === 'sales' ? 'Sales member' : 'Administrator';
   try {
     const res = await fetch('/api/admins', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, role, displayName, email }),
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
-      adminToast(`Administrator "${username}" added.`, 'ok');
-      showInviteCode(username, data.claim);
-      document.getElementById('team-username').value = '';
-      document.getElementById('team-password').value = '';
+      adminToast(`${noun} "${username}" added.`, 'ok');
+      showInviteCode(username, data.claim, role);
+      ['team-username', 'team-password', 'team-displayname', 'team-email'].forEach(id => {
+        const f = document.getElementById(id); if (f) f.value = '';
+      });
+      const roster = document.getElementById('team-roster'); if (roster) roster.value = '';
       loadTeam();
     } else {
-      adminToast(data.error || 'Could not add administrator.', 'error');
+      adminToast(data.error || `Could not add ${noun.toLowerCase()}.`, 'error');
     }
-  } catch { adminToast('Could not add administrator.', 'error'); }
+  } catch { adminToast(`Could not add ${noun.toLowerCase()}.`, 'error'); }
 });
+
+async function changeMemberRole(username, role) {
+  const noun = role === 'sales' ? 'Sales (dashboard only)' : 'Administrator (full console)';
+  if (!confirm(`Change "${username}" to ${noun}?\n\nThey will be signed out and must log in again.`)) return;
+  try {
+    const res = await fetch(`/api/admins/${encodeURIComponent(username)}/role`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { adminToast(`"${username}" is now ${role}.`, 'ok'); loadTeam(); }
+    else adminToast(data.error || 'Could not change access level.', 'error');
+  } catch { adminToast('Could not change access level.', 'error'); }
+}
 
 // Show the one-time invite code the owner must share (with the temp password)
 // so the new admin can enrol 2FA on first login. Blocking + clipboard copy so
 // it can't be missed.
-function showInviteCode(username, code) {
+function showInviteCode(username, code, role) {
   if (!code) return;
   try { navigator.clipboard?.writeText(code); } catch {}
+  const where = role === 'sales'
+    ? `They sign in at ${location.origin}/login and land on their sales dashboard.`
+    : `They sign in at ${location.origin}/login.`;
   alert(
     `Invite code for "${username}":\n\n    ${code}\n\n` +
     `Give this to them WITH the temporary password (out of band — e.g. in person or a separate channel). ` +
     `They enter it on their FIRST sign-in only, before setting up their authenticator. ` +
-    `It's been copied to your clipboard.`
+    `It's been copied to your clipboard.\n\n${where}`
   );
 }
 
