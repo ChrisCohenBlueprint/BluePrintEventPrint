@@ -11,6 +11,7 @@ const salesTeam = require('../data/sales-team');
 const holds     = require('../services/holds');
 const { getDb } = require('../db');
 const { track } = require('../services/tracking');
+const csv       = require('../lib/csv');
 
 const router = express.Router();
 
@@ -149,6 +150,96 @@ router.delete('/admins/:username', requireOwner, async (req, res, next) => {
 // ─── Sponsors (admin — includes price) ────────────────────────────────────────
 router.get('/sponsors', async (_req, res, next) => {
   try { res.json(await sponsors.all()); } catch (e) { next(e); }
+});
+
+/**
+ * Export the live catalogue as CSV — the other half of the import.
+ *
+ * The intended workflow is round-trip: download this, edit it in a spreadsheet,
+ * upload it back. The `key` column is what matches a row to an existing package,
+ * so it is exported first and should be left alone.
+ */
+router.get('/sponsors/export.csv', async (_req, res, next) => {
+  try {
+    const rows = await sponsors.toCsvRows();
+    const body = csv.toCsv(sponsors.CSV_HEADERS, rows);
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${config.showId}-sponsorship-${stamp}.csv"`);
+    res.send(body);
+  } catch (e) { next(e); }
+});
+
+/** A blank template with the headers and one worked example row. */
+router.get('/sponsors/template.csv', (_req, res) => {
+  const body = csv.toCsv(sponsors.CSV_HEADERS, [[
+    '', 'Networking Lounge', 'platinum', '34950', '2 Available',
+    'A branded lounge for visitors to relax and meet.',
+    'Your branding throughout the lounge | Furniture in your colours | 20 VIP passes',
+    '', '', 'true', 'false',
+  ]]);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="sponsorship-template.csv"');
+  res.send(body);
+});
+
+/**
+ * Bulk import. Rows are matched to existing packages on `key`, or on an exact
+ * name when the key column is blank, so a spreadsheet edited without the key
+ * still updates rather than duplicating.
+ *
+ * `dryRun` returns the same report without writing anything — the admin runs it
+ * first and shows the summary for confirmation, so nobody discovers what an
+ * upload did after the fact. `removeMissing` deletes packages the file does not
+ * mention, making the spreadsheet the whole truth.
+ */
+router.post('/sponsors/import', async (req, res, next) => {
+  try {
+    const text = String(req.body?.csv ?? '');
+    if (!text.trim()) return res.status(400).json({ error: 'That file is empty.' });
+    if (text.length > 2_000_000) return res.status(400).json({ error: 'That file is too large (limit ~2 MB).' });
+
+    const { headers, rows } = csv.parseCsvObjects(text);
+    if (!headers.includes('name')) {
+      return res.status(400).json({ error: 'The file needs a header row with at least a "name" column. Download the template to see the format.' });
+    }
+    if (!rows.length) return res.status(400).json({ error: 'That file has a header row but no packages under it.' });
+    if (rows.length > 500) return res.status(400).json({ error: 'That file has more than 500 rows.' });
+
+    const dryRun = req.body?.dryRun === true;
+    const report = await sponsors.importRows(rows, { removeMissing: req.body?.removeMissing === true, dryRun });
+    if (!dryRun) {
+      track({ type: 'sponsor.import', boothNumber: null, actor: req.admin?.user || 'unknown',
+              meta: { created: report.created.length, updated: report.updated.length,
+                      removed: report.removed.length, errors: report.errors.length } });
+    }
+    res.json(report);
+  } catch (e) { next(e); }
+});
+
+/** Add a single package by hand. */
+router.post('/sponsors', async (req, res, next) => {
+  try {
+    const r = await sponsors.create(req.body || {});
+    if (!r.ok) return res.status(400).json(r);
+    track({ type: 'sponsor.create', boothNumber: null, actor: req.admin?.user || 'unknown',
+            meta: { key: r.sponsor.key, name: r.sponsor.name } });
+    res.json(r);
+  } catch (e) { next(e); }
+});
+
+/**
+ * Delete a package. Proposals and enquiries that reference it are left alone —
+ * both resolve keys at read time and already show an unresolvable one as
+ * withdrawn, so a document already sent to a client stays honest.
+ */
+router.delete('/sponsors/:key', async (req, res, next) => {
+  try {
+    const ok = await sponsors.remove(req.params.key);
+    if (ok) track({ type: 'sponsor.delete', boothNumber: null, actor: req.admin?.user || 'unknown',
+                    meta: { key: req.params.key } });
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: 'No such package.' });
+  } catch (e) { next(e); }
 });
 
 router.patch('/sponsors/:key', async (req, res, next) => {

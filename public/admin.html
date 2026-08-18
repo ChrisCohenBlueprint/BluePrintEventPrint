@@ -410,12 +410,70 @@
         </div>
       </div>
 
+      <!-- Bulk manage the catalogue from a spreadsheet -->
+      <div class="partners-card">
+        <h3>Import from a spreadsheet</h3>
+        <p>Manage the whole catalogue in Excel or Google Sheets. Download what's live now, edit it, and upload it back — rows are matched on the <code>key</code> column, so edits update rather than duplicate. Leave <code>key</code> blank on a new row and one is generated. Changes appear immediately on the floorplan and in the sales dashboard.</p>
+
+        <div class="csv-actions">
+          <a class="admin-btn" href="/api/sponsors/export.csv" download><i data-lucide="download"></i> Download current catalogue</a>
+          <a class="admin-btn" href="/api/sponsors/template.csv" download><i data-lucide="file-text"></i> Blank template</a>
+        </div>
+
+        <div class="dropzone csv-drop" id="csv-drop" tabindex="0" role="button"
+             aria-label="Drop a CSV here, or click to choose a file">
+          <div class="dropzone-prompt">
+            <i data-lucide="file-up"></i>
+            <strong>Drag &amp; drop a CSV</strong>
+            <span id="csv-drop-note">or click to choose · exported from Excel, Numbers or Google Sheets</span>
+          </div>
+          <input type="file" id="csv-file" accept=".csv,text/csv" class="visually-hidden">
+        </div>
+
+        <label class="switch-row csv-replace">
+          <input type="checkbox" id="csv-remove-missing">
+          <span>
+            <strong>Remove packages not in the file</strong>
+            <small>Makes the spreadsheet the whole truth. Off by default — normally an upload only adds and updates. You'll be shown exactly what would be removed before anything happens.</small>
+          </span>
+        </label>
+
+        <div class="csv-report" id="csv-report" hidden></div>
+
+        <details class="csv-help">
+          <summary>Column reference</summary>
+          <table class="csv-help-table">
+            <tr><td><code>key</code></td><td>Leave blank for a new package. Don't change it on an existing one — it's what matches the row.</td></tr>
+            <tr><td><code>name</code></td><td>Required. The package name buyers see.</td></tr>
+            <tr><td><code>tier</code></td><td><code>platinum</code>, <code>gold</code> or <code>silver</code>. Drives the card colour.</td></tr>
+            <tr><td><code>price</code></td><td>Numbers only, or blank for price on application. Admin-only — never shown to buyers.</td></tr>
+            <tr><td><code>availability</code></td><td>Free text, e.g. “Exclusive” or “2 Available”.</td></tr>
+            <tr><td><code>blurb</code></td><td>One-line description.</td></tr>
+            <tr><td><code>perks</code></td><td>The bullet points, separated by <code>|</code>.</td></tr>
+            <tr><td><code>image</code> / <code>video</code></td><td>A path like <code>/sponsors/x.jpg</code> or a full https:// URL.</td></tr>
+            <tr><td><code>active</code></td><td><code>true</code> to offer it, <code>false</code> to hide it from the floorplan.</td></tr>
+            <tr><td><code>soldOut</code></td><td><code>true</code> keeps it on the floorplan with a “Sold out” badge.</td></tr>
+          </table>
+        </details>
+      </div>
+
       <h3 class="sponsors-cat-title">Sponsorship catalogue</h3>
+      <form id="sponsor-add-form" class="sponsor-add">
+        <input type="text" id="sp-new-name" class="admin-input" placeholder="New package name" maxlength="120">
+        <select id="sp-new-tier" class="admin-select">
+          <option value="platinum">Platinum</option>
+          <option value="gold">Gold</option>
+          <option value="silver" selected>Silver</option>
+        </select>
+        <input type="number" id="sp-new-price" class="admin-input" placeholder="Price (€, optional)" min="0" step="1">
+        <button type="submit" class="admin-btn success"><i data-lucide="plus"></i> Add package</button>
+        <span class="sponsor-add-hint">Blurb and perks are set from the spreadsheet import above.</span>
+      </form>
       <div class="sponsors-admin-wrap">
         <table class="sponsors-admin-table" id="sponsors-admin-table">
           <thead><tr>
             <th>Option</th><th>Tier</th><th>Price (€)</th><th>Availability</th>
-            <th>Image URL</th><th>Video URL</th><th>Offered</th><th>Sold out</th>
+            <th>Image URL</th><th>Video URL</th><th>Offered</th><th>Sold out</th><th></th>
           </tr></thead>
           <tbody id="sponsors-admin-tbody"></tbody>
         </table>

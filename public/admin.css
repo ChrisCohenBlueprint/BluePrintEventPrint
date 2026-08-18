@@ -863,3 +863,49 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .tag-add:hover:not(:disabled) { border-style: solid; color: var(--text); }
 .tag-add:disabled { opacity: .3; cursor: not-allowed; }
 .aba-tag-hint { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.45; }
+
+/* ─── Sponsorship: spreadsheet import ────────────────────────────────────────── */
+.csv-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.csv-actions .admin-btn { text-decoration: none; }
+
+/* Same switch row the sales drawer uses. Defined here too because admin.css is
+   loaded on its own by the admin console, which does not pull in sales.css. */
+.switch-row { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.switch-row input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.switch-row strong { display: block; font-size: 13px; }
+.switch-row small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+
+.csv-drop { min-height: 96px; }
+.csv-drop .dropzone-prompt svg { width: 22px; height: 22px; }
+.csv-replace { margin-top: 14px; }
+
+.csv-report {
+  margin-top: 14px; padding: 12px 14px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 12.5px; line-height: 1.6; max-height: 260px; overflow-y: auto;
+}
+.csv-report[hidden] { display: none; }
+.csv-report.ok  { border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.06); }
+.csv-report.err { border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
+.csv-head { font-weight: 700; margin-bottom: 4px; }
+.csv-line { color: var(--muted); }
+.csv-err  { color: var(--red); }
+
+.csv-help { margin-top: 14px; font-size: 12.5px; }
+.csv-help summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+.csv-help summary:hover { color: var(--text); }
+.csv-help-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.csv-help-table td { padding: 6px 8px; border-top: 1px solid var(--border); color: var(--muted); vertical-align: top; }
+.csv-help-table td:first-child { width: 150px; color: var(--text); }
+.csv-help code, .partners-card code {
+  background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+}
+
+/* Quick add, above the catalogue table */
+.sponsor-add { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+.sponsor-add .admin-input { flex: 0 1 220px; }
+.sponsor-add .admin-input[type="number"] { flex: 0 1 150px; }
+.sponsor-add-hint { font-size: 11.5px; color: var(--muted); }
+
+.sponsors-admin-table .sp-del { padding: 5px 10px; font-size: 11.5px; }

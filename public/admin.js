@@ -2003,6 +2003,18 @@ async function loadSponsorsAdmin() {
     soldTd.appendChild(so);
     tr.appendChild(soldTd);
 
+    // Delete. Withdrawing (un-tick Offered) is the reversible option and is
+    // right most of the time, so the confirm says so — deleting is for a package
+    // that should never have existed, not one that has simply stopped selling.
+    const delTd = document.createElement('td');
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'admin-btn danger sp-del';
+    del.textContent = 'Delete';
+    del.title = `Remove ${s.name} from the catalogue`;
+    del.onclick = () => deleteSponsor(s);
+    delTd.appendChild(del);
+    tr.appendChild(delTd);
+
     tbody.appendChild(tr);
   });
 }
@@ -2479,3 +2491,140 @@ function saveBoothTags(boothNumber, keys) {
     }
   });
 }
+
+// ─── Sponsorship: add, delete, and spreadsheet import ────────────────────────
+// The catalogue used to be seedable only by running scripts/seed-sponsors.js on
+// the server, and nothing in the admin could add or remove a package. These are
+// the missing halves. Everything here writes to the same collection the public
+// floorplan's recommendations and the sales catalogue read from, so a change is
+// live on both the moment it saves.
+
+async function deleteSponsor(s) {
+  const inUse = s.soldOut || s.active !== false;
+  if (!confirm(
+    `Delete "${s.name}" from the sponsorship catalogue?\n\n` +
+    `This removes it for good. Proposals already sent that include it will show it as no longer available.\n\n` +
+    (inUse ? 'If it has simply stopped selling, un-tick "Offered" instead — that is reversible.' : '')
+  )) return;
+
+  try {
+    const res = await fetch(`/api/sponsors/${encodeURIComponent(s.key)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not delete that package.');
+    adminToast(`"${s.name}" deleted.`, 'ok');
+    loadSponsorsAdmin();
+  } catch (e) { adminToast(e.message, 'error'); }
+}
+
+document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = document.getElementById('sp-new-name').value.trim();
+  if (!name) return adminToast('Give the package a name first.', 'error');
+  const priceRaw = document.getElementById('sp-new-price').value;
+
+  try {
+    const res = await fetch('/api/sponsors', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name, tier: document.getElementById('sp-new-tier').value,
+        price: priceRaw === '' ? '' : Number(priceRaw),
+      }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Could not add that package.');
+    document.getElementById('sp-new-name').value = '';
+    document.getElementById('sp-new-price').value = '';
+    adminToast(`"${name}" added.`, 'ok');
+    loadSponsorsAdmin();
+  } catch (err) { adminToast(err.message, 'error'); }
+});
+
+// ── CSV import ───────────────────────────────────────────────────────────────
+// Two passes: a dry run that writes nothing and reports what WOULD happen, shown
+// for confirmation, then the real one. Nobody should find out what an upload did
+// only after it has done it.
+(function initSponsorCsv() {
+  const drop = document.getElementById('csv-drop');
+  const input = document.getElementById('csv-file');
+  const report = document.getElementById('csv-report');
+  if (!drop || !input) return;
+
+  const show = (html, kind) => {
+    report.className = `csv-report ${kind || ''}`;
+    report.replaceChildren(...html);
+    report.hidden = false;
+  };
+  const line = (text, cls) => { const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = text; return d; };
+  const list = (label, items) => {
+    const d = document.createElement('div');
+    d.className = 'csv-line';
+    d.textContent = `${label}: ${items.map(i => i.name || i.key).join(', ')}`;
+    return d;
+  };
+
+  async function send(text, { dryRun }) {
+    const res = await fetch('/api/sponsors/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csv: text, dryRun, removeMissing: document.getElementById('csv-remove-missing').checked }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'That file could not be read.');
+    return d;
+  }
+
+  async function handleFile(file) {
+    if (!file) return;
+    // A wrong file type here is a common slip (an .xlsx rather than a CSV), and
+    // the server's error would be cryptic — say it plainly up front.
+    if (!/\.csv$/i.test(file.name) && file.type && !/csv|text/i.test(file.type)) {
+      return show([line(`"${file.name}" isn't a CSV. In Excel or Sheets use File → Save as / Download → CSV.`, 'csv-err')], 'err');
+    }
+    let text;
+    try { text = await file.text(); }
+    catch { return show([line('That file could not be read.', 'csv-err')], 'err'); }
+
+    try {
+      const plan = await send(text, { dryRun: true });
+      const parts = [];
+      if (plan.created.length) parts.push(list(`Add ${plan.created.length}`, plan.created));
+      if (plan.updated.length) parts.push(list(`Update ${plan.updated.length}`, plan.updated));
+      if (plan.removed.length) parts.push(list(`REMOVE ${plan.removed.length}`, plan.removed));
+      plan.errors.forEach(er => parts.push(line(`Row ${er.line}: ${er.error}`, 'csv-err')));
+
+      if (!plan.created.length && !plan.updated.length && !plan.removed.length) {
+        return show([line('Nothing to apply from that file.', 'csv-err'), ...parts], 'err');
+      }
+
+      show([line('Ready to apply:', 'csv-head'), ...parts, line('Applying…', 'csv-head')], 'ok');
+
+      const summary = [
+        plan.created.length ? `add ${plan.created.length}` : '',
+        plan.updated.length ? `update ${plan.updated.length}` : '',
+        plan.removed.length ? `REMOVE ${plan.removed.length}` : '',
+      ].filter(Boolean).join(', ');
+      if (!confirm(`Apply this import?\n\n${summary}\n\n` +
+                   (plan.removed.length ? `Removing: ${plan.removed.map(r => r.name || r.key).join(', ')}\n\n` : '') +
+                   (plan.errors.length ? `${plan.errors.length} row(s) will be skipped — see the list on the page.\n\n` : ''))) {
+        return show([line('Import cancelled — nothing was changed.', 'csv-head'), ...parts], '');
+      }
+
+      const done = await send(text, { dryRun: false });
+      show([
+        line(`Imported: ${done.created.length} added, ${done.updated.length} updated${done.removed.length ? `, ${done.removed.length} removed` : ''}.`, 'csv-head'),
+        ...done.errors.map(er => line(`Row ${er.line}: ${er.error}`, 'csv-err')),
+      ], 'ok');
+      adminToast('Sponsorship catalogue updated.', 'ok');
+      loadSponsorsAdmin();
+    } catch (e) {
+      show([line(e.message, 'csv-err')], 'err');
+    } finally {
+      input.value = '';   // so re-picking the same file fires change again
+    }
+  }
+
+  drop.addEventListener('click', () => input.click());
+  drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+  input.addEventListener('change', () => handleFile(input.files[0]));
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('dragover'); }));
+  drop.addEventListener('drop', (e) => handleFile(e.dataTransfer?.files?.[0]));
+})();

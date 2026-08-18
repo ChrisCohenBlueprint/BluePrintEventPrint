@@ -82,6 +82,224 @@ async function recommend(sqm) {
   return scored.map(x => toPublic(x.s));
 }
 
+// ─── Shape + validation ───────────────────────────────────────────────────────
+// One definition of what a sponsorship option is, used by the single-row editor,
+// the create form and the CSV import alike — so a package added from a
+// spreadsheet is validated exactly as one typed into the admin.
+
+const str = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
+
+/** Mint a stable, URL-safe key from a name, unique within the show. */
+async function mintKey(name, taken = null) {
+  const base = str(name, 60).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'package';
+  const used = taken || new Set((await all()).map(s => s.key));
+  if (!used.has(base)) return base;
+  for (let i = 2; i < 500; i++) if (!used.has(`${base}-${i}`)) return `${base}-${i}`;
+  return null;
+}
+
+const KEY_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/**
+ * Coerce a loose record (a form body, or a CSV row) into a storable sponsor.
+ * Returns { ok, fields } or { ok:false, error } — never a half-valid object.
+ *
+ * `partial` mode writes only the keys actually supplied, which is what an edit
+ * needs; a create fills in the defaults.
+ */
+function cleanSponsor(raw = {}, { partial = false } = {}) {
+  // Read fields through the SAME normalisation the CSV header parser applies —
+  // lowercase, no spaces/underscores/hyphens. Without this a camelCase column
+  // like `soldOut` arrived as `soldout`, missed the lookup, and silently fell
+  // back to its default: a package marked sold out in the spreadsheet imported
+  // as still on sale.
+  const norm = (k) => String(k).toLowerCase().replace(/[\s_-]+/g, '');
+  const input = {};
+  for (const [k, v] of Object.entries(raw || {})) input[norm(k)] = v;
+
+  const f = {};
+  const has = (k) => input[norm(k)] !== undefined && input[norm(k)] !== null;
+  const get = (k) => input[norm(k)];
+
+  if (has('name') || !partial) {
+    const name = str(get('name'), 120);
+    if (!name) return { ok: false, error: 'Every package needs a name.' };
+    f.name = name;
+  }
+  if (has('tier') || !partial) {
+    const t = str(get('tier'), 20).toLowerCase();
+    if (t && !TIERS.includes(t)) return { ok: false, error: `Tier must be one of ${TIERS.join(', ')} (got "${t}").` };
+    f.tier = t || 'silver';
+  }
+  if (has('price') || !partial) {
+    const raw = str(get('price'), 20).replace(/[£$€,\s]/g, '');   // "€29,950" → 29950
+    if (raw === '') f.price = null;                              // price on application
+    else {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) return { ok: false, error: `Price must be a number or blank (got "${get('price')}").` };
+      f.price = n;
+    }
+  }
+  if (has('availability') || !partial) f.availability = str(get('availability'), 120);
+  if (has('blurb')        || !partial) f.blurb        = str(get('blurb'), 600);
+  if (has('perks') || !partial) {
+    // A list in one cell. Pipe is the documented separator because a comma would
+    // force the author to quote the field; semicolon and newline are accepted
+    // because people use them anyway.
+    const raw = get('perks');
+    f.perks = Array.isArray(raw)
+      ? raw.map(x => str(x, 200)).filter(Boolean).slice(0, 30)
+      : str(raw, 4000).split(/\s*[|;\n]\s*/).map(x => x.trim()).filter(Boolean).slice(0, 30);
+  }
+  if (has('image') || !partial) {
+    if (str(get('image'), 2_000_000).length > 2_000_000) return { ok: false, error: 'That image is too large to store.' };
+    f.image = safeImage(get('image'));
+  }
+  if (has('video') || !partial) f.video = safeLink(get('video'));
+
+  // Accepts what a spreadsheet produces: TRUE/FALSE, yes/no, 1/0, y/n.
+  const bool = (v, dflt) => {
+    const t = str(v, 10).toLowerCase();
+    if (t === '') return dflt;
+    if (['true', 'yes', 'y', '1'].includes(t)) return true;
+    if (['false', 'no', 'n', '0'].includes(t)) return false;
+    return dflt;
+  };
+  if (has('active')  || !partial) f.active  = bool(get('active'), true);
+  if (has('soldOut') || !partial) f.soldOut = bool(get('soldOut'), false);
+  // Same rule the editor enforces: sold out and on offer are mutually exclusive.
+  if (f.soldOut === true) f.active = false;
+
+  return { ok: true, fields: f };
+}
+
+/** Add a package. The key is minted from the name unless one is supplied. */
+async function create(input = {}) {
+  const clean = cleanSponsor(input, { partial: false });
+  if (!clean.ok) return clean;
+
+  let key = str(input.key, 64).toLowerCase();
+  if (key && !KEY_RE.test(key)) return { ok: false, error: `"${key}" is not a valid key — use letters, numbers, . _ or -` };
+  if (!key) key = await mintKey(clean.fields.name);
+  if (!key) return { ok: false, error: 'Could not generate a key for that name.' };
+
+  if (await col().findOne({ showId: config.showId, key })) {
+    return { ok: false, error: `A package with the key "${key}" already exists.` };
+  }
+  // Names must be unique too. A CSV without a key column matches rows to
+  // packages BY NAME, so two packages sharing one would make that lookup
+  // ambiguous and send an edit to the wrong package.
+  const nameClash = await col().findOne({ showId: config.showId,
+    name: { $regex: `^${clean.fields.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } });
+  if (nameClash) return { ok: false, error: `"${clean.fields.name}" already exists in the catalogue.` };
+  const doc = { showId: config.showId, key, ...clean.fields, createdAt: new Date(), updatedAt: new Date() };
+  await col().insertOne(doc);
+  return { ok: true, sponsor: doc };
+}
+
+/**
+ * Delete a package from the catalogue.
+ *
+ * Deliberately does NOT touch the saved proposals or enquiries that reference
+ * it: both resolve their keys against this collection at read time and already
+ * report an unresolvable one as withdrawn, so a deleted package shows honestly
+ * as "no longer available" on a proposal rather than vanishing from a document
+ * a client has already been sent.
+ */
+async function remove(key) {
+  const res = await col().deleteOne({ showId: config.showId, key: str(key, 64) });
+  return res.deletedCount === 1;
+}
+
+/**
+ * Bulk create/update from parsed CSV rows, matched on `key` — or, when a row has
+ * no key, on an exact (case-insensitive) name match against the existing
+ * catalogue, so a spreadsheet edited without the key column updates rather than
+ * duplicating.
+ *
+ * `removeMissing` additionally deletes anything the file does not mention, which
+ * makes the spreadsheet the whole truth. It is off unless asked for.
+ *
+ * `dryRun` reports exactly what would happen and writes nothing — the admin
+ * shows that summary for confirmation before anything is committed.
+ */
+async function importRows(rows, { removeMissing = false, dryRun = false } = {}) {
+  const existing = await all();
+  const byKey  = new Map(existing.map(s => [s.key, s]));
+  const byName = new Map(existing.map(s => [String(s.name || '').trim().toLowerCase(), s]));
+
+  const created = [], updated = [], errors = [];
+  const seen = new Set(), seenNames = new Map();
+  const mintedSoFar = new Set(existing.map(s => s.key));
+
+  for (const row of rows || []) {
+    const line = row.__line;
+    const clean = cleanSponsor(row, { partial: false });
+    if (!clean.ok) { errors.push({ line, error: clean.error }); continue; }
+
+    let key = str(row.key, 64).toLowerCase();
+    if (key && !KEY_RE.test(key)) { errors.push({ line, error: `"${key}" is not a valid key.` }); continue; }
+    if (!key) {
+      const match = byName.get(clean.fields.name.toLowerCase());
+      key = match ? match.key : await mintKey(clean.fields.name, mintedSoFar);
+      if (!key) { errors.push({ line, error: 'Could not generate a key.' }); continue; }
+    }
+    if (seen.has(key)) { errors.push({ line, error: `Duplicate of "${key}" earlier in the file.` }); continue; }
+
+    const isNew = !byKey.has(key);
+    // Keep names unique for the same reason create() does — otherwise the next
+    // import's name matching becomes ambiguous.
+    const lower = clean.fields.name.toLowerCase();
+    const nameOwner = byName.get(lower);
+    if (isNew && nameOwner && nameOwner.key !== key) {
+      errors.push({ line, error: `"${clean.fields.name}" already exists as "${nameOwner.key}" — reuse that key to update it.` });
+      continue;
+    }
+    if (seenNames.has(lower) && seenNames.get(lower) !== key) {
+      errors.push({ line, error: `Another row in this file already uses the name "${clean.fields.name}".` });
+      continue;
+    }
+    seen.add(key);
+    seenNames.set(lower, key);
+    mintedSoFar.add(key);
+    byName.set(lower, { key, name: clean.fields.name });
+    (isNew ? created : updated).push({ key, name: clean.fields.name });
+    if (dryRun) continue;
+
+    if (isNew) {
+      await col().insertOne({ showId: config.showId, key, ...clean.fields, createdAt: new Date(), updatedAt: new Date() });
+    } else {
+      await col().updateOne({ showId: config.showId, key }, { $set: { ...clean.fields, updatedAt: new Date() } });
+    }
+  }
+
+  const removed = removeMissing
+    ? existing.filter(s => !seen.has(s.key)).map(s => ({ key: s.key, name: s.name }))
+    : [];
+  if (!dryRun && removed.length) {
+    await col().deleteMany({ showId: config.showId, key: { $in: removed.map(r => r.key) } });
+  }
+
+  return { ok: true, dryRun, created, updated, removed, errors };
+}
+
+// ─── CSV shape ────────────────────────────────────────────────────────────────
+// The column order the export writes and the import documents. Exporting the
+// live catalogue, editing it and re-importing is the intended round trip, so
+// these must stay in step.
+const CSV_HEADERS = ['key', 'name', 'tier', 'price', 'availability', 'blurb', 'perks', 'image', 'video', 'active', 'soldOut'];
+
+async function toCsvRows() {
+  const rows = await all();
+  const TIER_RANK = { platinum: 0, gold: 1, silver: 2 };
+  rows.sort((a, b) => (TIER_RANK[a.tier] ?? 9) - (TIER_RANK[b.tier] ?? 9) || (b.price || 0) - (a.price || 0));
+  return rows.map(s => [
+    s.key, s.name, s.tier, s.price ?? '', s.availability ?? '', s.blurb ?? '',
+    (s.perks || []).join(' | '), s.image ?? '', s.video ?? '',
+    s.active === false ? 'false' : 'true', s.soldOut === true ? 'true' : 'false',
+  ]);
+}
+
 async function setFields(key, fields) {
   const $set = { updatedAt: new Date() };
 
@@ -145,4 +363,5 @@ async function setFloorplanSponsor({ name, color } = {}) {
 }
 
 module.exports = { col, all, allActive, toPublic, recommend, setFields,
+                   cleanSponsor, create, remove, importRows, toCsvRows, CSV_HEADERS, TIERS,
                    getFloorplanSponsor, setFloorplanSponsor };
