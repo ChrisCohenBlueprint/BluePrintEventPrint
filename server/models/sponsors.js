@@ -89,6 +89,42 @@ async function recommend(sqm) {
 
 const str = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
 
+// The largest inline image we will store, matching the partner model.
+const MAX_IMAGE = 2_000_000;
+
+/**
+ * Read a price the way a spreadsheet in any locale writes it.
+ *
+ * The show is in Germany, so "29.950" WILL be typed meaning twenty-nine
+ * thousand — and simply stripping the separators the UK way read it as 29.95,
+ * a thousandfold error that would have gone into a client quote unnoticed.
+ *
+ * Where both separators appear, whichever comes LAST is the decimal point and
+ * the other groups thousands, which resolves every real format unambiguously.
+ * Where only one appears it is treated as a thousands separator solely when the
+ * digits are grouped in exact threes ("29.950", "1.234.567"); anything else
+ * ("29.95") is a decimal. Returns NaN for something that isn't a number, so the
+ * caller rejects the row rather than storing a guess.
+ */
+function parseMoney(value) {
+  let v = String(value).trim().replace(/[£$€\s]/g, '');
+  if (!v) return NaN;
+
+  const dot = v.lastIndexOf('.'), comma = v.lastIndexOf(',');
+  if (dot > -1 && comma > -1) {
+    const decimal = dot > comma ? '.' : ',';
+    const thousands = decimal === '.' ? ',' : '.';
+    v = v.split(thousands).join('');
+    if (decimal === ',') v = v.replace(',', '.');
+  } else if (comma > -1) {
+    v = /^\d{1,3}(,\d{3})+$/.test(v) ? v.split(',').join('') : v.replace(',', '.');
+  } else if (dot > -1 && /^\d{1,3}(\.\d{3})+$/.test(v)) {
+    v = v.split('.').join('');
+  }
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 /** Mint a stable, URL-safe key from a name, unique within the show. */
 async function mintKey(name, taken = null) {
   const base = str(name, 60).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'package';
@@ -132,10 +168,10 @@ function cleanSponsor(raw = {}, { partial = false } = {}) {
     f.tier = t || 'silver';
   }
   if (has('price') || !partial) {
-    const raw = str(get('price'), 20).replace(/[£$€,\s]/g, '');   // "€29,950" → 29950
+    const raw = str(get('price'), 30);
     if (raw === '') f.price = null;                              // price on application
     else {
-      const n = Number(raw);
+      const n = parseMoney(raw);
       if (!Number.isFinite(n) || n < 0) return { ok: false, error: `Price must be a number or blank (got "${get('price')}").` };
       f.price = n;
     }
@@ -152,8 +188,15 @@ function cleanSponsor(raw = {}, { partial = false } = {}) {
       : str(raw, 4000).split(/\s*[|;\n]\s*/).map(x => x.trim()).filter(Boolean).slice(0, 30);
   }
   if (has('image') || !partial) {
-    if (str(get('image'), 2_000_000).length > 2_000_000) return { ok: false, error: 'That image is too large to store.' };
-    f.image = safeImage(get('image'));
+    // Measure the RAW value: str() slices to the limit first, so comparing the
+    // sliced length could never exceed it and the check was dead — an oversized
+    // data URI was silently truncated and stored as a corrupt image that renders
+    // broken everywhere. This is the same trap the partner model calls out.
+    const rawImage = get('image');
+    if (typeof rawImage === 'string' && rawImage.length > MAX_IMAGE) {
+      return { ok: false, error: 'That image is too large to store. Please use one under ~1.5 MB.' };
+    }
+    f.image = safeImage(rawImage);
   }
   if (has('video') || !partial) f.video = safeLink(get('video'));
 
@@ -228,10 +271,13 @@ async function importRows(rows, { removeMissing = false, dryRun = false } = {}) 
   const byKey  = new Map(existing.map(s => [s.key, s]));
   const byName = new Map(existing.map(s => [String(s.name || '').trim().toLowerCase(), s]));
 
-  const created = [], updated = [], errors = [];
-  const seen = new Set(), seenNames = new Map();
+  const errors = [];
   const mintedSoFar = new Set(existing.map(s => s.key));
 
+  // ── Pass 1: resolve every row to a key, independently of the others ───────
+  // Nothing is validated against another row here, only against what is already
+  // stored, so the outcome cannot depend on the order rows happen to appear in.
+  const plans = [];
   for (const row of rows || []) {
     const line = row.__line;
     const clean = cleanSponsor(row, { partial: false });
@@ -244,43 +290,78 @@ async function importRows(rows, { removeMissing = false, dryRun = false } = {}) 
       key = match ? match.key : await mintKey(clean.fields.name, mintedSoFar);
       if (!key) { errors.push({ line, error: 'Could not generate a key.' }); continue; }
     }
-    if (seen.has(key)) { errors.push({ line, error: `Duplicate of "${key}" earlier in the file.` }); continue; }
-
-    const isNew = !byKey.has(key);
-    // Keep names unique for the same reason create() does — otherwise the next
-    // import's name matching becomes ambiguous.
-    const lower = clean.fields.name.toLowerCase();
-    const nameOwner = byName.get(lower);
-    if (isNew && nameOwner && nameOwner.key !== key) {
-      errors.push({ line, error: `"${clean.fields.name}" already exists as "${nameOwner.key}" — reuse that key to update it.` });
-      continue;
-    }
-    if (seenNames.has(lower) && seenNames.get(lower) !== key) {
-      errors.push({ line, error: `Another row in this file already uses the name "${clean.fields.name}".` });
-      continue;
-    }
-    seen.add(key);
-    seenNames.set(lower, key);
     mintedSoFar.add(key);
-    byName.set(lower, { key, name: clean.fields.name });
-    (isNew ? created : updated).push({ key, name: clean.fields.name });
-    if (dryRun) continue;
-
-    if (isNew) {
-      await col().insertOne({ showId: config.showId, key, ...clean.fields, createdAt: new Date(), updatedAt: new Date() });
-    } else {
-      await col().updateOne({ showId: config.showId, key }, { $set: { ...clean.fields, updatedAt: new Date() } });
-    }
+    plans.push({ line, key, fields: clean.fields, isNew: !byKey.has(key) });
   }
 
-  const removed = removeMissing
-    ? existing.filter(s => !seen.has(s.key)).map(s => ({ key: s.key, name: s.name }))
+  // ── Pass 2: validate the state the file DESCRIBES, not the order it is in ──
+  // Checking each row against a half-updated index made the result
+  // order-dependent: swapping two packages' names across two rows was refused
+  // because the first row collided with the name the second was about to give
+  // up. Judging the finished set instead accepts that and still catches every
+  // real duplicate.
+  const keyCount = new Map();
+  plans.forEach(p => keyCount.set(p.key, (keyCount.get(p.key) || 0) + 1));
+
+  const fileKeys = new Set(plans.map(p => p.key));
+  const nameCount = new Map();
+  plans.forEach(p => {
+    const n = p.fields.name.toLowerCase();
+    nameCount.set(n, (nameCount.get(n) || 0) + 1);
+  });
+
+  const accepted = [];
+  for (const p of plans) {
+    if (keyCount.get(p.key) > 1) {
+      errors.push({ line: p.line, error: `"${p.key}" appears more than once in this file.` });
+      continue;
+    }
+    const lower = p.fields.name.toLowerCase();
+    if (nameCount.get(lower) > 1) {
+      errors.push({ line: p.line, error: `The name "${p.fields.name}" is used by more than one row.` });
+      continue;
+    }
+    // A collision only matters against a package this file is NOT rewriting —
+    // one it leaves untouched keeps its name, so the two would end up equal.
+    const owner = byName.get(lower);
+    if (owner && owner.key !== p.key && !fileKeys.has(owner.key)) {
+      errors.push({ line: p.line, error: `"${p.fields.name}" is already used by "${owner.key}".` });
+      continue;
+    }
+    accepted.push(p);
+  }
+
+  const created = accepted.filter(p => p.isNew).map(p => ({ key: p.key, name: p.fields.name }));
+  const updated = accepted.filter(p => !p.isNew).map(p => ({ key: p.key, name: p.fields.name }));
+
+  // Removal treats the file as the complete truth, which it demonstrably is not
+  // if any row failed to parse: a single mistyped cell would otherwise delete the
+  // package that row was trying to update. Skip removals entirely and say so, so
+  // the fix is "correct the rows and upload again" rather than a silent deletion
+  // the admin only notices later.
+  const removalsBlocked = removeMissing && errors.length > 0;
+  const touched = new Set(accepted.map(p => p.key));
+  const removed = (removeMissing && !removalsBlocked)
+    ? existing.filter(s => !touched.has(s.key)).map(s => ({ key: s.key, name: s.name }))
     : [];
-  if (!dryRun && removed.length) {
+
+  if (dryRun) return { ok: true, dryRun, created, updated, removed, errors, removalsBlocked };
+
+  // ── Apply ────────────────────────────────────────────────────────────────
+  // Removals go FIRST: a file that renames A to B's old name while dropping B is
+  // a legitimate reshuffle, and writing before deleting would collide.
+  if (removed.length) {
     await col().deleteMany({ showId: config.showId, key: { $in: removed.map(r => r.key) } });
   }
+  for (const p of accepted) {
+    if (p.isNew) {
+      await col().insertOne({ showId: config.showId, key: p.key, ...p.fields, createdAt: new Date(), updatedAt: new Date() });
+    } else {
+      await col().updateOne({ showId: config.showId, key: p.key }, { $set: { ...p.fields, updatedAt: new Date() } });
+    }
+  }
 
-  return { ok: true, dryRun, created, updated, removed, errors };
+  return { ok: true, dryRun, created, updated, removed, errors, removalsBlocked };
 }
 
 // ─── CSV shape ────────────────────────────────────────────────────────────────

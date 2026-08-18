@@ -2589,6 +2589,12 @@ document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e
       if (plan.updated.length) parts.push(list(`Update ${plan.updated.length}`, plan.updated));
       if (plan.removed.length) parts.push(list(`REMOVE ${plan.removed.length}`, plan.removed));
       plan.errors.forEach(er => parts.push(line(`Row ${er.line}: ${er.error}`, 'csv-err')));
+      // The server refuses removals when any row failed, because the file cannot
+      // be the whole truth if part of it could not be read. Say so, or ticking
+      // the box appears to do nothing.
+      if (plan.removalsBlocked) {
+        parts.push(line('Nothing will be removed: some rows could not be read, so the file can\'t be treated as the full catalogue. Fix the rows above and upload again.', 'csv-err'));
+      }
 
       if (!plan.created.length && !plan.updated.length && !plan.removed.length) {
         return show([line('Nothing to apply from that file.', 'csv-err'), ...parts], 'err');
@@ -2600,6 +2606,7 @@ document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e
         plan.created.length ? `add ${plan.created.length}` : '',
         plan.updated.length ? `update ${plan.updated.length}` : '',
         plan.removed.length ? `REMOVE ${plan.removed.length}` : '',
+        plan.removalsBlocked ? 'remove nothing (some rows could not be read)' : '',
       ].filter(Boolean).join(', ');
       if (!confirm(`Apply this import?\n\n${summary}\n\n` +
                    (plan.removed.length ? `Removing: ${plan.removed.map(r => r.name || r.key).join(', ')}\n\n` : '') +

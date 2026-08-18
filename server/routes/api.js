@@ -394,7 +394,11 @@ router.post('/inquiries/:id/send', async (req, res, next) => {
       sponsorNames = sponsorKeys.map(k => (rows.find(r => r.key === k) || {}).name || k);
     }
 
-    const subject = `New ${config.showId} enquiry — ${c.name || 'Unknown'}${c.company ? ` (${c.company})` : ''}`;
+    // A mail SUBJECT is a single header line. The name and company come from the
+    // public enquiry form, so any newline in them is flattened here rather than
+    // relied on being neutralised by whichever mail client the mailto: opens.
+    const oneLine = (v) => String(v ?? '').replace(/[\r\n\t]+/g, ' ').trim();
+    const subject = `New ${config.showId} enquiry — ${oneLine(c.name) || 'Unknown'}${c.company ? ` (${oneLine(c.company)})` : ''}`;
     const body = [
       `A new enquiry came in from the ${config.showId} floorplan.`,
       '',

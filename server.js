@@ -104,6 +104,16 @@ async function start() {
   }));
 
   app.use((err, _req, res, _next) => {
+    // A body express itself refused is the CLIENT's problem, not a server fault.
+    // Reporting these as 500 "Internal error" told an admin whose CSV or logo was
+    // too big that the server had broken, so the natural response was to retry
+    // the same upload rather than shrink it.
+    if (err?.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'That upload is too large. Please use a file under about 3 MB.' });
+    }
+    if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+      return res.status(400).json({ error: 'That request could not be read.' });
+    }
     console.error('Unhandled:', err);
     res.status(500).json({ error: 'Internal error' });
   });
