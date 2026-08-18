@@ -1,0 +1,36 @@
+/* ─── Stand status colours — ONE definition, shared by every surface ───────────
+ *
+ * The public floorplan, the admin plan and the printed client proposal all show
+ * the same hall, so a stand must be the same colour on all three. A client who
+ * is emailed a proposal and then opens the website has to see the same plan.
+ *
+ * These were previously written out separately in floorplan.css and admin.css,
+ * which is exactly how two surfaces drift apart. Change a colour HERE and it
+ * changes everywhere; there is nowhere else to change it.
+ *
+ * Loaded BEFORE the page's own stylesheet, so a page can still add behaviour on
+ * top (the floorplan's hover glow, the admin's hold pulse) without restating a
+ * colour.
+ */
+:root {
+  --booth-available: #ffffff;
+  --booth-sold:      #fcdf6d;   /* "Taken" */
+  --booth-held:      #f97316;   /* "On Hold" */
+
+  /* The "this is the stand you want" cue: the rose ring the admin search puts
+     round a found stand, and the same ring the printed proposal puts round the
+     stands being offered. Not a status — it sits ON TOP of whichever status
+     colour the stand already has. */
+  --booth-marked: #f43f5e;
+
+  /* Aliases kept because the legend dots, tooltips and chips across the pages
+     already refer to the palette by these names. */
+  --yellow: var(--booth-sold);
+  --orange: var(--booth-held);
+}
+
+/* `!important` beats the artwork's own <style> block (.cls-10 / .cls-7 …) and
+   the fill presentation attribute on the hit-area overlays BoothMap inserts. */
+.booth-available { fill: var(--booth-available) !important; }
+.booth-sold      { fill: var(--booth-sold)      !important; }
+.booth-held      { fill: var(--booth-held)      !important; }

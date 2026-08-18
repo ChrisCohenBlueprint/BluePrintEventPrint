@@ -150,69 +150,59 @@
 
     BoothMap.attach(svgDoc, plan.booths, {
       onTag(el, n, b) {
-        // Three states only — this is a client document, so it says what is
-        // being offered, what is free and what has gone. Nothing else.
-        if (mine.has(n)) el.classList.add('plan-mine');
-        else if (b.status !== 'available') el.classList.add('plan-taken');
-        else el.classList.add('plan-free');
+        // The SAME class names the public floorplan uses, resolved by the same
+        // shared stylesheet — so a stand is the identical colour whether the
+        // client is looking at this PDF or at the website. Availability must
+        // never appear to differ between the two.
+        el.classList.add(b.status === 'sold' ? 'booth-sold'
+                       : b.status === 'held' ? 'booth-held'
+                       : 'booth-available');
       },
     });
 
-    // Number each proposed stand with a callout badge.
+    // Mark each proposed stand.
     //
-    // The artwork prints its own stand numbers, but the whole hall scaled to a
-    // page column puts those at roughly 3pt — present in the file, unreadable on
-    // paper. So each highlighted stand gets a badge sized in SVG units to land
-    // near 8pt once printed, drawn over the top. It is deliberately allowed to
-    // be wider than a small stand: it reads as a map pin, which is exactly the
-    // job.
-    //
-    // Web fonts must be settled first or the measurement below is taken against
-    // the fallback face and the badge is cut to the wrong width.
+    // MARKER decides how. Both keep the mark INSIDE the stand's own footprint —
+    // the earlier pill was sized to its text, so on a small stand it spilled over
+    // the neighbours and made a tidy plan look cluttered.
+    //   'outline' — a rose ring around the stand, the same cue the admin search
+    //               uses to pick a stand out of the hall.
+    //   'dot'     — a rose disc centred in the stand.
+    //   'both'    — the ring shows the exact footprint, the disc catches the eye
+    //               from across a full page.
+    const MARKER = 'both';
+
+    // Web fonts must be settled before anything is measured, or a label is sized
+    // against the fallback face.
     if (document.fonts && document.fonts.ready) {
       try { await document.fonts.ready; } catch { /* measure with whatever is loaded */ }
     }
 
     const SVG_NS = 'http://www.w3.org/2000/svg';
-    const byNumber = new Map(plan.booths.map(b => [b.boothNumber, b]));
     let marked = 0;
 
     mine.forEach(n => {
       const el = svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`);
-      const b = byNumber.get(n);
-      if (!el || !b) return;
+      if (!el) return;
       // The stand's post-transform box — many stands in the artwork are rotated,
-      // and the untransformed box would place the badge off the stand.
+      // and the untransformed box would put the mark off the stand.
       const box = BoothMap.visualBox(el);
       if (!box || !(box.w > 0) || !(box.h > 0)) return;
 
-      const g = document.createElementNS(SVG_NS, 'g');
-      g.setAttribute('class', 'plan-badge');
+      if (MARKER !== 'dot') el.classList.add('plan-marked');
 
-      const text = document.createElementNS(SVG_NS, 'text');
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('dominant-baseline', 'central');
-      text.textContent = b.displayNumber || b.boothNumber;
-      g.appendChild(text);
-      svgDoc.appendChild(g);          // appended last: badges sit above all artwork
+      if (MARKER !== 'outline') {
+        const dot = document.createElementNS(SVG_NS, 'circle');
+        dot.setAttribute('class', 'plan-dot');
+        dot.setAttribute('cx', box.x + box.w / 2);
+        dot.setAttribute('cy', box.y + box.h / 2);
+        // Sized to the stand so it never bleeds past its edges, with a floor and
+        // a ceiling so it stays visible on a 9 m² stand and doesn't become a
+        // blob on a 200 m² one.
+        dot.setAttribute('r', Math.max(6, Math.min(14, Math.min(box.w, box.h) * 0.28)));
+        svgDoc.appendChild(dot);
+      }
 
-      // Measure the rendered text, then fit the pill to it.
-      let tw = 0;
-      try { tw = text.getComputedTextLength(); } catch { tw = 0; }
-      if (!tw) tw = String(text.textContent).length * 15;   // fallback if layout is unavailable
-      const padX = 9, h = 30, w = tw + padX * 2;
-      const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
-
-      const pill = document.createElementNS(SVG_NS, 'rect');
-      pill.setAttribute('x', cx - w / 2);
-      pill.setAttribute('y', cy - h / 2);
-      pill.setAttribute('width', w);
-      pill.setAttribute('height', h);
-      pill.setAttribute('rx', h / 2);
-      g.insertBefore(pill, text);     // behind the text
-
-      text.setAttribute('x', cx);
-      text.setAttribute('y', cy);
       marked++;
     });
 

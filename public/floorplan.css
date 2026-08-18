@@ -16,8 +16,8 @@
   --muted:        #64748b;
   --accent:       #4f46e5;
   --accent-glow:  rgba(79,70,229,0.30);
-  --yellow:       #fcdf6d;
-  --orange:       #f97316;
+  /* --yellow / --orange come from booth-colours.css so the stand colours cannot
+     drift between the website and the printed proposal. */
   --white-booth:  #ffffff;
   --radius:       12px;
 }
@@ -332,11 +332,10 @@ body {
 .booth-interactive { cursor: pointer; transition: fill 0.2s, filter 0.2s; }
 .booth-taken-orig  { cursor: default; opacity: 0.85; }
 
-.booth-available { fill: #ffffff !important; }
+/* The three status FILLS live in booth-colours.css, which every surface loads —
+   see that file. Only this page's own behaviour on top of them is set here. */
 .booth-available:hover { fill: #dbeafe !important; filter: drop-shadow(0 0 8px rgba(79,70,229,0.6)) !important; }
-
-.booth-sold  { fill: var(--yellow) !important; }
-.booth-held  { fill: var(--orange) !important; animation: holdPulse 1.8s ease-in-out infinite; }
+.booth-held { animation: holdPulse 1.8s ease-in-out infinite; }
 
 .booth-selected {
   stroke: #4f46e5 !important; stroke-width: 8px !important;

@@ -11,8 +11,11 @@
   --text:     #f1f5f9;
   --muted:    #64748b;
   --accent:   #6366f1;
-  --yellow:   #fcdf6d;
-  --orange:   #f97316;
+  /* Stand colours come from booth-colours.css (loaded first). Aliased rather
+     than restated so the admin can never show a different yellow from the
+     public plan or the client's proposal. */
+  --yellow:   var(--booth-sold);
+  --orange:   var(--booth-held);
   --green:    #10b981;
   --red:      #ef4444;
   --nav-w:    220px;
@@ -359,17 +362,18 @@ body {
 /* SVG booth styles (same as floorplan) */
 .booth-interactive { cursor: pointer; transition: fill 0.2s, filter 0.2s; }
 .booth-taken-orig  { cursor: default; opacity: 0.85; }
-.booth-available { fill: #ffffff !important; }
+/* Status FILLS come from booth-colours.css — the same file the public plan and
+   the printed proposal load, so an admin is never looking at different colours
+   from the client. Only the admin's own behaviour is added here. */
 .booth-available:hover { fill: #dbeafe !important; filter: drop-shadow(0 0 8px rgba(99,102,241,0.7)) !important; }
-.booth-sold  { fill: var(--yellow) !important; }
-.booth-held  { fill: var(--orange) !important; animation: holdPulse 1.8s ease-in-out infinite; }
+.booth-held { animation: holdPulse 1.8s ease-in-out infinite; }
 .booth-selected { stroke: #fff !important; stroke-width: 8px !important; filter: drop-shadow(0 0 12px rgba(255,255,255,0.8)) !important; }
 
 /* Search hit: a bold, pulsing rose outline so the found stand is unmistakable on
    any fill (white / yellow / orange). Defined after .booth-selected so it wins
    the stroke. It pulses a few times to catch the eye, then holds a solid ring. */
 .booth-search-hit {
-  stroke: #f43f5e !important; stroke-width: 4px !important;
+  stroke: var(--booth-marked) !important; stroke-width: 4px !important;
   filter: drop-shadow(0 0 10px rgba(244,63,94,0.95)) !important;
   animation: searchPulse 0.85s ease-in-out 4;
 }
