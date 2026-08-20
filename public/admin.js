@@ -451,9 +451,7 @@ function renderAdminBoothAction(n) {
     })
     .catch(() => { clickList.textContent = 'Could not load activity.'; });
 
-  document.getElementById('aba-book').onclick    = () => adminAction('book', n);
-  document.getElementById('aba-hold').onclick    = () => adminAction('hold', n);
-  document.getElementById('aba-release').onclick = () => adminAction('release', n);
+  renderStandActions(n);
   document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
 
   renderBoothTags(n);
@@ -610,15 +608,65 @@ document.getElementById('bookings-tbody').addEventListener('keydown', (e) => {
   input.blur();
 });
 
+/**
+ * The actions this stand can actually take, given where it is.
+ *
+ * A stand moves available → on hold → sold, and only some steps exist at each
+ * stage. All three buttons used to show on every stand, which offered "Release"
+ * on an available stand (nothing to release) and "Put on Hold" on one already
+ * held (the server rejects it — a hold needs an available stand). Worse, a held
+ * stand's "Mark Sold" read like a fresh booking and re-asked for a company it
+ * was already holding for.
+ *
+ *   available → Mark Sold · Put on Hold
+ *   on hold   → Move to Sold · Release
+ *   sold      → Release
+ */
+function renderStandActions(n) {
+  const b = booths[n];
+  if (!b) return;
+
+  const book    = document.getElementById('aba-book');
+  const hold    = document.getElementById('aba-hold');
+  const release = document.getElementById('aba-release');
+  if (!book || !hold || !release) return;
+
+  const held = b.status === 'held';
+  const sold = b.status === 'sold';
+
+  // "Move to Sold" names the step it is: converting a hold that already has an
+  // exhibitor, not booking an empty stand.
+  book.textContent = held ? '✅ Move to Sold' : '✅ Mark Sold';
+  book.title = held
+    ? `Convert the hold on stand ${n} into a confirmed sale`
+    : `Book stand ${n}`;
+
+  book.hidden    = sold;                 // already there
+  hold.hidden    = held || sold;         // a hold needs an available stand
+  release.hidden = !held && !sold;       // nothing to release
+
+  book.onclick    = () => adminAction('book', n);
+  hold.onclick    = () => adminAction('hold', n);
+  release.onclick = () => adminAction('release', n);
+}
+
 function adminAction(action, boothNumber) {
   const done = (verb) => (res) => {
     if (res && res.ok) adminToast(`Stand ${boothNumber} ${verb}.`, 'ok');
     else adminToast((res && res.error) || `Could not ${action} stand ${boothNumber}.`, 'error');
   };
   if (action === 'book') {
-    const company = prompt('Company name:');
+    // A held stand is already holding for someone, so the name is offered
+    // rather than asked for — Enter confirms it. Still editable, because a hold
+    // taken without a name is stored as the placeholder "Pending", and that
+    // must not become the exhibitor on a confirmed sale.
+    const existing = dealOf(booths[boothNumber]).company || '';
+    const company = existing
+      ? prompt(`Move stand ${boothNumber} to sold. Confirm the company:`, existing)
+      : prompt('Company name:');
     if (company === null) return;
-    socket.emit('booth:book', { boothNumber, company: company.trim() || 'Admin' }, done('booked'));
+    socket.emit('booth:book', { boothNumber, company: company.trim() || 'Admin' },
+                done(existing ? 'moved to sold' : 'booked'));
   }
   if (action === 'hold') {
     const company = prompt('Company name:');
@@ -1062,7 +1110,7 @@ socket.on('state:full', (serverBooths) => {
   populateToolDropdowns();
   populateAdminSearchList();
   renderTagCatalogue();                       // the "used on N stands" counts move with the booths
-  if (selectedAdminId) renderBoothTags(selectedAdminId);
+  if (selectedAdminId) { renderBoothTags(selectedAdminId); renderStandActions(selectedAdminId); }
 
   // Tag on the first state if the floorplan tab is already open; otherwise
   // loadAdminSVG() tags when the tab is first shown.

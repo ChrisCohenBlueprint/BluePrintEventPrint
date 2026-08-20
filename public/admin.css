@@ -278,6 +278,10 @@ body {
 .aba-val { font-size: 14px; font-weight: 700; }
 .aba-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .aba-actions .admin-btn { flex: 1; justify-content: center; font-size: 12px; padding: 7px 8px; }
+/* The `display:inline-flex` on .admin-btn would otherwise beat the [hidden]
+   attribute's display:none, leaving an action visible on a stand whose stage
+   cannot take it. */
+.admin-btn[hidden] { display: none; }
 
 /* ─── Bookings Table ─────────────────────────────────────────────────────────── */
 .bookings-toolbar { display: flex; gap: 12px; margin-bottom: 16px; }
