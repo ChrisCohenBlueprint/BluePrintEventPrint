@@ -586,6 +586,27 @@ function register(io) {
       return { ok: true, tags: r.tags };
     }));
 
+    // Set the exhibitor's country on one booked stand. Unlike the tags this is
+    // a single value from a built-in list, so there is nothing to curate — the
+    // handler only has to reject a code the list does not contain.
+    socket.on('booth:set-country', requireAdmin(socket, 'booth:set-country', async ({ boothNumber, country }) => {
+      const n = stand(boothNumber);
+      const r = await booths.setCountry(n, country, { actor: socket.data.user });
+      if (!r.ok) {
+        const why = r.reason === 'missing_booth'   ? 'that stand does not exist'
+                  : r.reason === 'unknown_country' ? 'that is not a country we recognise'
+                  : 'it could not be saved';
+        return { ok: false, error: `Could not save the country — ${why}.` };
+      }
+      if (!r.changed) return { ok: false, error: `Stand ${n} is not booked — a country applies to a booked stand.` };
+      track({ type: 'booth.set_country', boothNumber: n, socket, meta: { country: r.country } });
+      await refresh(); broadcastState(io);
+      log(io, r.country
+        ? `🌍 Stand ${escapeHtml(n)} country set — ${escapeHtml(r.name)}`
+        : `🌍 Stand ${escapeHtml(n)} country cleared`, 'admin');
+      return { ok: true, country: r.country, name: r.name };
+    }));
+
     // Set the floorplan (title) sponsor: name + brand colour. Broadcast to every
     // client so the legend swatch and any sponsored-booth fills update live.
     socket.on('sponsor:set-floorplan', requireAdmin(socket, 'sponsor:set-floorplan', async ({ name, color }) => {

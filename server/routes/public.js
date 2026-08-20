@@ -3,6 +3,7 @@ const path = require('path');
 const express = require('express');
 const sponsors = require('../models/sponsors');
 const partners = require('../models/partners');
+const countries = require('../data/countries');
 
 const router = express.Router();
 
@@ -38,6 +39,15 @@ router.get('/sponsors/recommend', async (req, res, next) => {
     const sqm = Number(req.query.sqm) || 0;
     res.json({ sponsors: await sponsors.recommend(sqm) });
   } catch (e) { next(e); }
+});
+
+// The built-in country list, for the admin's assign dropdown and the public
+// floorplan's search filter. Static data with no per-show state, so it is
+// public and cacheable — the alternative (pushing 249 rows down the socket on
+// every connect) would cost every visitor the same bytes on every reconnect.
+router.get('/countries', (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.json({ countries: countries.COUNTRIES.map(c => ({ code: c.code, name: c.name, flag: c.flag, aliases: c.aliases })) });
 });
 
 module.exports = router;

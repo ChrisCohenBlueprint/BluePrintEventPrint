@@ -66,6 +66,26 @@ let sponsorColor = '', sponsorName = '';
 let tagCatalogue = [];
 const tagByKey = (key) => tagCatalogue.find(t => t.key === key) || null;
 
+// The country list, fetched once from /countries. Booths carry an ISO code;
+// this resolves it to a name, a flag and the everyday names people search by
+// ("USA", "Holland"), so the label can be corrected server-side without any
+// stand having to be re-saved.
+let countryList = [];
+let countryByCode = new Map();
+const countryOf = (code) => countryByCode.get(String(code || '').toUpperCase()) || null;
+
+fetch('/countries', { cache: 'force-cache' })
+  .then(r => r.ok ? r.json() : { countries: [] })
+  .then(d => {
+    countryList = Array.isArray(d.countries) ? d.countries : [];
+    countryByCode = new Map(countryList.map(c => [c.code, c]));
+    // The plan and the first broadcast may already have arrived — redraw the
+    // filter's country dropdown and any open stand now that codes resolve.
+    refreshFilterOptions();
+    if (selectedId) renderPanel(selectedId);
+  })
+  .catch(() => { /* search still works on company + activity without it */ });
+
 // Readable text colour for a given background — dark ink on light brands, white
 // on dark ones (WCAG relative-luminance threshold).
 function contrastText(hex) {
@@ -558,10 +578,13 @@ function exhibitorHTML(b, status) {
     .map(t => `<span class="tag-chip" style="background:${esc(t.color)};color:${esc(contrastText(t.color))}">${esc(t.label)}</span>`)
     .join('');
 
+  const country = countryOf(b.country);
+
   return `
     <div class="stand-exhibitor">
       <div class="stand-exhibitor-lbl">Exhibitor</div>
       <div class="stand-exhibitor-name">${esc(b.company)}</div>
+      ${country ? `<div class="stand-country"><span class="stand-flag">${esc(country.flag)}</span>${esc(country.name)}</div>` : ''}
       ${chips ? `<div class="stand-tags">${chips}</div>` : ''}
     </div>`;
 }
@@ -689,6 +712,14 @@ socket.on('state:full', (rows) => {
   if (selectedId && !booths[selectedId]) { selectedId = null; hideSelection(); }
   stateReady = true;
 
+  // A stand booked, released or re-tagged while the page is open changes both
+  // what the filter dropdowns can offer and what the current filter matches.
+  // Ahead of everything below: the first broadcast returns early once it has
+  // tagged the map, and applyVisual paints the highlight from these matches.
+  refreshFilterOptions();
+  filterMatches = computeMatches();
+  applyFilter();
+
   // First broadcast may arrive before the plan has finished downloading.
   if (!tagged) { tagBooths(); lastMapSig = BoothMap.signature(rows); return; }
 
@@ -738,6 +769,8 @@ socket.on('settings', (s) => {
 socket.on('tags:catalogue', (list) => {
   tagCatalogue = Array.isArray(list) ? list : [];
   if (selectedId) renderPanel(selectedId);      // repaint an open stand's chips
+  refreshFilterOptions();                       // a renamed activity relabels its option
+  applyFilter();                                // a deleted one may unmatch stands
 });
 
 socket.on('floorplan-sponsor', (s) => {
@@ -877,6 +910,381 @@ async function downloadPlan() {
   }
 }
 
+// ─── Smart search ─────────────────────────────────────────────────────────────
+//
+// One filter, three ways in: free text, a country dropdown and a business
+// activity dropdown. They AND together — "Germany" + "Base Oils" is the stands
+// that are both — so the two dropdowns narrow a text search rather than
+// replacing it.
+//
+// The country and activity a stand carries only reach the public client on a
+// SOLD stand (see booths.toPublic), so a search can never reveal who is behind
+// a provisional hold.
+//
+// Matching stands are lit; everything else fades. Nothing is hidden: a visitor
+// searching for a competitor still has to see the hall around them, and hiding
+// stands would leave holes in a plan whose whole value is being a map.
+
+const filter = { q: '', country: '', activity: '' };
+
+// boothNumbers currently matching, or null when no filter is active. null and
+// "the empty set" are deliberately different: no filter paints nothing, while a
+// filter that matches nothing fades the whole plan (and says so).
+let filterMatches = null;
+
+const filterActive = () => !!(filter.q || filter.country || filter.activity);
+
+/** Every string a stand can be found by, lowercased once per search. */
+function haystack(n, b) {
+  const parts = [n, b.displayNumber || '', b.company || ''];
+  const c = countryOf(b.country);
+  if (c) parts.push(c.name, c.code, ...(c.aliases || []));
+  (b.tags || []).forEach(k => { const t = tagByKey(k); if (t) parts.push(t.label); });
+  return parts.filter(Boolean).join(' ␟ ').toLowerCase();
+}
+
+/**
+ * Which stands match.
+ *
+ * Free text is split on whitespace and EVERY term must hit — so "germany base
+ * oils" narrows rather than widens, which is what someone typing a second word
+ * is asking for. A two-letter term also matches a country code exactly, so "de"
+ * finds Germany without "de" matching every company with those letters in it.
+ */
+function computeMatches() {
+  if (!filterActive()) return null;
+
+  const terms = filter.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const found = new Set();
+
+  Object.entries(booths).forEach(([n, b]) => {
+    if (!b) return;
+    if (filter.country && (b.country || '') !== filter.country) return;
+    if (filter.activity && !(b.tags || []).includes(filter.activity)) return;
+
+    if (terms.length) {
+      const hay  = haystack(n, b);
+      const code = (b.country || '').toLowerCase();
+      const ok = terms.every(t => hay.includes(t) || (t.length === 2 && t === code));
+      if (!ok) return;
+    }
+    found.add(n);
+  });
+
+  return found;
+}
+
+/** The lit/faded classes for one stand. Also called from applyVisual. */
+function paintFilterOn(el, n) {
+  const active = !!filterMatches;
+  el.classList.toggle('booth-match', active && filterMatches.has(n));
+  el.classList.toggle('booth-dim',   active && !filterMatches.has(n));
+}
+
+function paintFilter() {
+  if (!svgDoc) return;
+  svgDoc.querySelectorAll('[data-booth]').forEach(el => paintFilterOn(el, el.getAttribute('data-booth')));
+  // The exhibitor names are siblings of the stands, not children, so they have
+  // to be faded separately or a dimmed stand keeps a full-strength name on it.
+  svgDoc.querySelectorAll('[id^="text-booth-"]').forEach(t => {
+    const n = t.id.slice('text-booth-'.length);
+    t.classList.toggle('booth-dim', !!filterMatches && !filterMatches.has(n));
+  });
+}
+
+/** Recompute, repaint, and report the count. The single entry point. */
+function applyFilter() {
+  filterMatches = computeMatches();
+  paintFilter();
+
+  const box = document.getElementById('fps-count');
+  const clear = document.getElementById('fps-clear');
+  if (clear) clear.hidden = !filterActive();
+  if (!box) return;
+
+  if (!filterMatches) { box.hidden = true; box.textContent = ''; return; }
+  const k = filterMatches.size;
+  box.hidden = false;
+  box.textContent = k === 0 ? 'No stands match' : `${k} stand${k === 1 ? '' : 's'}`;
+  box.classList.toggle('fps-count-none', k === 0);
+}
+
+function clearFilter() {
+  filter.q = filter.country = filter.activity = '';
+  const input = document.getElementById('fps-input');
+  if (input) input.value = '';
+  const cSel = document.getElementById('fps-country');
+  const aSel = document.getElementById('fps-activity');
+  if (cSel) cSel.value = '';
+  if (aSel) aSel.value = '';
+  hideSuggestions();
+  applyFilter();
+}
+
+/**
+ * Rebuild the two dropdowns from what is actually ON the plan.
+ *
+ * Offering all 249 countries when eleven are represented would make the visitor
+ * hunt through a list that is mostly dead ends; the counts do the same job as a
+ * result preview. Rebuilt on every broadcast, so a stand booked while the page
+ * is open adds its country to the list without a reload.
+ */
+function refreshFilterOptions() {
+  const countryCounts = new Map();
+  const activityCounts = new Map();
+
+  Object.values(booths).forEach(b => {
+    if (!b) return;
+    if (b.country) countryCounts.set(b.country, (countryCounts.get(b.country) || 0) + 1);
+    (b.tags || []).forEach(k => activityCounts.set(k, (activityCounts.get(k) || 0) + 1));
+  });
+
+  fillSelect('fps-country', 'All countries', filter.country,
+    [...countryCounts.entries()]
+      .map(([code, n]) => ({ value: code, label: `${countryOf(code)?.flag || ''} ${countryOf(code)?.name || code}`.trim(), n }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'en')));
+
+  fillSelect('fps-activity', 'All activities', filter.activity,
+    [...activityCounts.entries()]
+      .map(([key, n]) => ({ value: key, label: tagByKey(key)?.label || key, n }))
+      .filter(o => tagByKey(o.value))
+      .sort((a, b) => a.label.localeCompare(b.label, 'en')));
+}
+
+// Signature of what each dropdown currently offers, so an unchanged list is
+// left alone. Rebuilding on every broadcast would snap the menu shut under a
+// visitor who had it open when any admin anywhere touched a stand.
+const selectSig = {};
+
+function fillSelect(id, allLabel, current, options) {
+  const sel = document.getElementById(id);
+  if (!sel) return;
+
+  // Rebuild the OPTIONS only when they actually changed…
+  const sig = options.map(o => `${o.value}:${o.label}:${o.n}`).join('|');
+  if (selectSig[id] !== sig) {
+    selectSig[id] = sig;
+    sel.replaceChildren();
+    const all = document.createElement('option');
+    all.value = '';
+    all.textContent = allLabel;
+    sel.appendChild(all);
+    options.forEach(o => {
+      const el = document.createElement('option');
+      el.value = o.value;
+      el.textContent = `${o.label} (${o.n})`;
+      sel.appendChild(el);
+    });
+  }
+
+  // …but always sync the SELECTION, which changes without the list changing —
+  // picking a country from the suggestions is exactly that case.
+  //
+  // A filter can also outlive the value it names (the last German stand was
+  // released). Keep the selection if it still exists, otherwise drop the filter
+  // rather than leave a select reading "All" while it is still being applied.
+  if (!current) sel.value = '';
+  else if (options.some(o => o.value === current)) sel.value = current;
+  else { if (id === 'fps-country') filter.country = ''; else filter.activity = ''; sel.value = ''; }
+
+  sel.disabled = options.length === 0;
+}
+
+// ── Suggestions ──────────────────────────────────────────────────────────────
+// What the box offers as you type: the countries and activities on the plan,
+// then the exhibitors themselves. Picking a country or activity moves the query
+// into the matching dropdown, so the box is left free for the next term.
+
+let suggestions = [];
+let suggestIndex = -1;
+
+function buildSuggestions(q) {
+  const term = q.trim().toLowerCase();
+  if (term.length < 2) return [];
+
+  const out = [];
+  const counts = { country: new Map(), activity: new Map() };
+  const companies = [];
+
+  Object.entries(booths).forEach(([n, b]) => {
+    if (!b) return;
+    if (b.country) counts.country.set(b.country, (counts.country.get(b.country) || 0) + 1);
+    (b.tags || []).forEach(k => counts.activity.set(k, (counts.activity.get(k) || 0) + 1));
+    if (b.company && b.company.toLowerCase().includes(term)) companies.push({ n, company: b.company });
+  });
+
+  counts.country.forEach((n, code) => {
+    const c = countryOf(code);
+    if (!c) return;
+    const hit = c.name.toLowerCase().includes(term)
+             || c.code.toLowerCase() === term
+             || (c.aliases || []).some(a => a.toLowerCase().includes(term));
+    if (hit) out.push({ kind: 'country', value: code, label: `${c.flag} ${c.name}`, meta: `${n} stand${n === 1 ? '' : 's'}` });
+  });
+
+  counts.activity.forEach((n, key) => {
+    const t = tagByKey(key);
+    if (t && t.label.toLowerCase().includes(term)) {
+      out.push({ kind: 'activity', value: key, label: t.label, color: t.color, meta: `${n} stand${n === 1 ? '' : 's'}` });
+    }
+  });
+
+  // Exhibitors: a name that STARTS with what was typed is what was meant more
+  // often than one that merely contains it, so those come first.
+  companies.sort((a, b) => {
+    const sa = a.company.toLowerCase().startsWith(term) ? 0 : 1;
+    const sb = b.company.toLowerCase().startsWith(term) ? 0 : 1;
+    return sa - sb || a.company.localeCompare(b.company, 'en');
+  });
+  companies.slice(0, 6).forEach(c =>
+    out.push({ kind: 'booth', value: c.n, label: c.company, meta: `Stand ${shownN(c.n)}` }));
+
+  // A stand number typed straight in.
+  Object.keys(booths).forEach(n => {
+    if (out.length > 20) return;
+    if (String(shownN(n)).toLowerCase() === term || n.toLowerCase() === term) {
+      if (!out.some(o => o.kind === 'booth' && o.value === n)) {
+        out.push({ kind: 'booth', value: n, label: `Stand ${shownN(n)}`, meta: booths[n]?.company || STATUS_LABEL[booths[n]?.status] || '' });
+      }
+    }
+  });
+
+  return out.slice(0, 8);
+}
+
+function renderSuggestions() {
+  const box = document.getElementById('fps-suggest');
+  const input = document.getElementById('fps-input');
+  if (!box) return;
+
+  box.replaceChildren();
+  if (!suggestions.length) return hideSuggestions();
+
+  suggestions.forEach((sg, i) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'fps-sg' + (i === suggestIndex ? ' active' : '');
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', i === suggestIndex ? 'true' : 'false');
+
+    const kind = document.createElement('span');
+    kind.className = `fps-sg-kind fps-sg-${sg.kind}`;
+    kind.textContent = sg.kind === 'country' ? 'Country' : sg.kind === 'activity' ? 'Activity' : 'Exhibitor';
+    if (sg.color) { kind.style.background = sg.color; kind.style.color = contrastText(sg.color); }
+
+    const label = document.createElement('span');
+    label.className = 'fps-sg-label';
+    label.textContent = sg.label;
+
+    const meta = document.createElement('span');
+    meta.className = 'fps-sg-meta';
+    meta.textContent = sg.meta || '';
+
+    row.append(kind, label, meta);
+    // mousedown, not click: the input's blur would otherwise close the list
+    // before the click landed.
+    row.addEventListener('mousedown', (e) => { e.preventDefault(); pickSuggestion(i); });
+    box.appendChild(row);
+  });
+
+  box.classList.remove('hidden');
+  if (input) input.setAttribute('aria-expanded', 'true');
+}
+
+function hideSuggestions() {
+  const box = document.getElementById('fps-suggest');
+  const input = document.getElementById('fps-input');
+  suggestions = [];
+  suggestIndex = -1;
+  if (box) { box.classList.add('hidden'); box.replaceChildren(); }
+  if (input) input.setAttribute('aria-expanded', 'false');
+}
+
+function pickSuggestion(i) {
+  const sg = suggestions[i];
+  if (!sg) return;
+  const input = document.getElementById('fps-input');
+
+  if (sg.kind === 'booth') {
+    // A named exhibitor is a destination, not a filter: open the stand and go
+    // to it, and leave the plan lit so the visitor can see where it sits.
+    filter.q = booths[sg.value]?.company || '';
+    if (input) input.value = filter.q;
+    hideSuggestions();
+    applyFilter();
+    selectBooth(sg.value);
+    svgDoc?.querySelector(`[data-booth="${CSS.escape(sg.value)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
+  // A country or an activity belongs in its dropdown, which leaves the text box
+  // empty for the next term — "Germany" then "additives" narrows twice.
+  if (sg.kind === 'country')  filter.country  = sg.value;
+  if (sg.kind === 'activity') filter.activity = sg.value;
+  filter.q = '';
+  if (input) input.value = '';
+  hideSuggestions();
+  refreshFilterOptions();
+  applyFilter();
+}
+
+// ── Wiring ───────────────────────────────────────────────────────────────────
+(function initSearch() {
+  const input = document.getElementById('fps-input');
+  const cSel  = document.getElementById('fps-country');
+  const aSel  = document.getElementById('fps-activity');
+  const clear = document.getElementById('fps-clear');
+  if (!input) return;
+
+  input.addEventListener('input', () => {
+    filter.q = input.value.trim();
+    suggestions = buildSuggestions(input.value);
+    suggestIndex = -1;
+    renderSuggestions();
+    applyFilter();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!suggestions.length) return;
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      suggestIndex = (suggestIndex + step + suggestions.length) % suggestions.length;
+      renderSuggestions();
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (suggestIndex >= 0) return pickSuggestion(suggestIndex);
+      hideSuggestions();
+      // One match and no suggestion chosen — go straight there, which is what
+      // typing a full company name and pressing Enter is asking for.
+      if (filterMatches && filterMatches.size === 1) {
+        const n = [...filterMatches][0];
+        selectBooth(n);
+        svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return;
+    }
+    if (e.key === 'Escape') {
+      if (suggestions.length) { hideSuggestions(); return; }
+      clearFilter();
+    }
+  });
+
+  input.addEventListener('focus', () => {
+    if (input.value.trim().length >= 2) {
+      suggestions = buildSuggestions(input.value);
+      renderSuggestions();
+    }
+  });
+  input.addEventListener('blur', () => setTimeout(hideSuggestions, 120));
+
+  cSel?.addEventListener('change', () => { filter.country  = cSel.value; applyFilter(); });
+  aSel?.addEventListener('change', () => { filter.activity = aSel.value; applyFilter(); });
+  clear?.addEventListener('click', () => { clearFilter(); input.focus(); });
+})();
+
 function applyVisual(n) {
   const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   if (!el) return;
@@ -887,6 +1295,11 @@ function applyVisual(n) {
 
   if (shortlist.includes(n)) el.classList.add('booth-shortlisted');
   else el.classList.remove('booth-shortlisted');
+
+  // Search highlight. Set here as well as in paintFilter() because applyVisual
+  // is what runs after a re-tag rebuilds the elements — without it, a split or
+  // a merge would silently drop the lit-up stands while a filter was active.
+  paintFilterOn(el, n);
 
   // Floorplan-sponsor fill: a sponsored stand is painted in the brand colour,
   // overriding its status fill. Cleared inline when unsponsored so the status
@@ -922,6 +1335,9 @@ function applyVisual(n) {
       { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });
     // Keep the name legible on a dark brand fill (white text), dark ink otherwise.
     textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');
+    // The name is a sibling of the stand, not a child, so fading the shape
+    // would otherwise leave the company name at full strength over it.
+    textNode.classList.toggle('booth-dim', !!filterMatches && !filterMatches.has(n));
   } else if (textNode) {
     textNode.remove();
   }

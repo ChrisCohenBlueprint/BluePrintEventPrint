@@ -212,9 +212,15 @@
           <button class="admin-btn warning" id="aba-hold">⏳ Put on Hold</button>
           <button class="admin-btn" id="aba-release">🔓 Release</button>
         </div>
-        <!-- Exhibitor tags — only meaningful once a stand is booked or held -->
+        <!-- Exhibitor profile: where they are from and what they do. Only
+             meaningful once a stand is booked or held, and it is what the
+             public floorplan's search filters on. -->
         <div class="aba-tags-section hidden" id="aba-tags-section">
-          <div class="aba-section-title">Exhibitor Tags <span id="aba-tag-count" class="aba-tag-count">0/3</span></div>
+          <div class="aba-section-title">Country</div>
+          <select id="aba-country" class="admin-input aba-country-select">
+            <option value="">— Not set —</option>
+          </select>
+          <div class="aba-section-title aba-section-title-2">Business Activity <span id="aba-tag-count" class="aba-tag-count">0/3</span></div>
           <div class="aba-tag-current" id="aba-tag-current"></div>
           <div class="aba-tag-pick" id="aba-tag-pick"></div>
         </div>
@@ -645,14 +651,14 @@
         <div class="tool-card tool-card-wide">
           <div class="tool-header">
             <i data-lucide="tags"></i>
-            <h3>Exhibitor Tags</h3>
+            <h3>Business Activities</h3>
           </div>
-          <p>The categories you can attach to a booked stand — visitors see them, with the company name, when they click that stand on the public plan. Each stand can carry up to three. Renaming a tag updates it everywhere it is already used.</p>
+          <p>The business activities you can attach to a booked stand — visitors see them, with the company name, when they click that stand on the public plan, and can filter the whole floorplan by them. Each stand can carry up to three. Renaming one updates it everywhere it is already used. (Country is a separate, built-in list — set it on the stand itself.)</p>
           <form id="tag-form" class="tool-form">
             <div class="tool-form-row tag-new-row">
               <div class="tool-field">
-                <label>New tag</label>
-                <input id="tag-label" class="admin-input" type="text" maxlength="40" placeholder="e.g. Drilling" autocomplete="off">
+                <label>New activity</label>
+                <input id="tag-label" class="admin-input" type="text" maxlength="40" placeholder="e.g. Base Oils" autocomplete="off">
               </div>
               <div class="tool-field">
                 <label>Colour</label>

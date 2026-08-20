@@ -89,6 +89,7 @@ body {
 }
 .fp-map-toolbar {
   display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: rgba(255,255,255,0.75);
@@ -125,6 +126,123 @@ body {
 }
 .download-btn:hover { background: var(--accent); color: #fff; }
 .download-btn:disabled { opacity: .5; pointer-events: none; }
+
+/* ─── Smart search ────────────────────────────────────────────────────────────
+   Free text plus two dropdowns, sat between the legend and the view controls.
+   It takes the toolbar's spare width and shrinks before the buttons do, since
+   the buttons have a floor below which their icons stop being hittable. */
+.fp-search {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1 1 340px; min-width: 0; max-width: 620px;
+}
+.fps-box { position: relative; flex: 1 1 auto; min-width: 130px; }
+.fps-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  width: 15px; height: 15px; color: var(--muted); pointer-events: none;
+}
+.fps-input {
+  width: 100%; height: 32px;
+  padding: 0 30px 0 32px;
+  font-family: 'Raleway', sans-serif; font-size: 13px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.fps-input::placeholder { color: var(--muted); }
+.fps-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.fps-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 20px; height: 20px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: 0; border-radius: 5px;
+  color: var(--muted); cursor: pointer;
+}
+.fps-clear:hover { background: rgba(15,23,42,.06); color: var(--text); }
+.fps-clear svg { width: 13px; height: 13px; }
+.fps-clear[hidden] { display: none; }
+
+.fps-select {
+  height: 32px; max-width: 160px;
+  padding: 0 8px;
+  font-family: 'Raleway', sans-serif; font-size: 12px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; outline: none;
+}
+.fps-select:focus { border-color: var(--accent); }
+/* Nothing on the plan carries a country (or an activity) yet — say so by
+   greying the control rather than offering an empty list. */
+.fps-select:disabled { opacity: .5; cursor: default; }
+
+.fps-count {
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  white-space: nowrap;
+}
+.fps-count[hidden] { display: none; }
+.fps-count-none { color: var(--muted); }
+
+/* Suggestions. Above the map (which is z-indexed for the tooltip) and wide
+   enough to read a full company name. */
+.fps-suggest {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 120;
+  min-width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15,23,42,.14);
+  overflow: hidden;
+}
+.fps-suggest.hidden { display: none; }
+.fps-sg {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 10px;
+  background: none; border: 0; border-bottom: 1px solid var(--border);
+  font-family: 'Raleway', sans-serif; font-size: 13px; color: var(--text);
+  text-align: left; cursor: pointer;
+}
+.fps-sg:last-child { border-bottom: 0; }
+.fps-sg:hover, .fps-sg.active { background: rgba(79,70,229,.07); }
+.fps-sg-kind {
+  flex-shrink: 0;
+  padding: 2px 7px; border-radius: 20px;
+  font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+  background: rgba(15,23,42,.07); color: var(--muted);
+}
+/* An activity chip is painted in the tag's own colour (set inline); country and
+   exhibitor get the neutral chip above. */
+.fps-sg-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.fps-sg-meta  { flex-shrink: 0; font-size: 11px; color: var(--muted); }
+
+/* The result of a search, on the plan itself. Matching stands take the same
+   rose ring the admin search and the printed proposal use for "this is the one
+   you want" (--booth-marked, booth-colours.css), so the cue means the same
+   thing on every surface. Non-matching stands fade but are never hidden — the
+   value of a floorplan is being a complete map of the hall. */
+.booth-match {
+  stroke: var(--booth-marked) !important; stroke-width: 4px !important;
+  filter: drop-shadow(0 0 7px rgba(244,63,94,.85));
+}
+/* Two-class specificity so the pulse beats the on-hold pulse a matching held
+   stand also carries — and the filter above is deliberately NOT !important, or
+   it would beat the animation that is doing the glowing. The selection ring
+   still wins over the match ring: .booth-selected is !important and comes
+   later, which is right — a stand the visitor has actually opened outranks one
+   the search merely found. */
+.booth-interactive.booth-match { animation: boothFound 1.8s ease-in-out infinite; }
+/* !important because holdPulse animates opacity too, and an animation beats a
+   plain declaration — without it, on-hold stands stayed bright while the rest
+   of the hall faded. */
+.booth-dim { opacity: .3 !important; transition: opacity .25s; }
+@keyframes boothFound {
+  0%, 100% { filter: drop-shadow(0 0 5px rgba(244,63,94,.6)); }
+  50%      { filter: drop-shadow(0 0 12px rgba(244,63,94,1)); }
+}
+
+@media (max-width: 900px) {
+  /* Stacked, the search gets the full width of its own row; the dropdowns share
+     the next one rather than being cut off the right edge. */
+  .fp-search { flex: 1 1 100%; max-width: none; flex-wrap: wrap; order: 3; }
+  .fps-box { flex: 1 1 100%; }
+  .fps-select { flex: 1 1 40%; max-width: none; }
+}
 
 .fp-map-frame {
   flex: 1;
@@ -250,6 +368,11 @@ body {
   font-size: 16px; font-weight: 700; line-height: 1.3;
   overflow-wrap: anywhere;               /* a long company name must not widen the panel */
 }
+.stand-country {
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--muted);
+}
+.stand-flag { font-size: 15px; line-height: 1; }
 .stand-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 /* Colour comes from the tag catalogue, so background/text are set inline. */
 .tag-chip {
@@ -480,6 +603,8 @@ body {
   .sponsor-logos a, .sponsor-logos span { height: 68px; min-width: calc(68px * 16 / 9); }
 }
 @media (prefers-reduced-motion: reduce) {
+  .booth-match { animation: none; }
+
   .sponsor-logos a { transition: none; }
 }
 

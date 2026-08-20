@@ -851,6 +851,10 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
   color: var(--muted); margin-bottom: 10px;
 }
 .aba-tag-count { font-weight: 600; letter-spacing: 0; text-transform: none; }
+/* Country sits above the activity chips in the same block; the second heading
+   needs the gap the first one gets from the section's own padding. */
+.aba-section-title-2 { margin-top: 14px; }
+.aba-country-select { width: 100%; font-size: 13px; }
 .aba-tag-current { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; }
 .aba-tag-current .aba-tag-none { font-size: 12px; color: var(--muted); }
 .aba-tag-pick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }

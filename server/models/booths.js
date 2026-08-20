@@ -1,5 +1,6 @@
 const { getDb } = require('../db');
 const config    = require('../config');
+const countries = require('../data/countries');
 const fs        = require('fs');
 const path      = require('path');
 
@@ -33,6 +34,9 @@ function toPublic(b) {
     // Only on a SOLD stand: a hold is a provisional deal, and naming what a
     // not-yet-committed exhibitor does would publish it early.
     tags: b.status === 'sold' && Array.isArray(b.assignment?.tags) ? b.assignment.tags : [],
+    // The exhibitor's country (ISO alpha-2), withheld on a hold for the same
+    // reason as the tags. The client resolves it to a name and flag.
+    country: b.status === 'sold' ? (b.assignment?.country || null) : null,
     splitFrom: b.splitFrom || null,   // lets the client draw + number split cells
     splitAxis: b.splitAxis || null,   // 'vertical' | 'horizontal' — which edge is the divider
     viewers: b.viewers || 0,
@@ -70,6 +74,7 @@ async function setStatus(boothNumber, status, { company = null, actor = null, ex
   // converting to a sale, say) keeps them.
   if (status !== 'available' && (before.assignment?.company || null) !== (company || null)) {
     $set['assignment.tags'] = [];
+    $set['assignment.country'] = null;
   }
 
   // Freeing a stand clears its whole deal, so releasing a sale can't leave a
@@ -79,6 +84,7 @@ async function setStatus(boothNumber, status, { company = null, actor = null, ex
     $set['assignment.notes'] = '';
     $set['assignment.contactId'] = null;
     $set['assignment.tags'] = [];
+    $set['assignment.country'] = null;
   }
   const res = await col().updateOne(filter, { $set });
   return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };
@@ -146,6 +152,33 @@ async function setTags(boothNumber, keys, { valid = null, max = 3, actor = null 
     { $set: { 'assignment.tags': list, updatedAt: new Date(), updatedBy: actor } }
   );
   return { ok: true, changed: res.matchedCount === 1, tags: list, before, after: await get(boothNumber) };
+}
+
+/**
+ * Set the country of the exhibitor on a booked stand.
+ *
+ * Guarded on the stand still being sold or held, exactly like setTags — the
+ * country describes an exhibitor, so it must never be painted onto a stand that
+ * went available underneath the edit (`changed: false` reports that race).
+ *
+ * `code` is normalised against the built-in list rather than trusted: an
+ * unknown value is rejected outright, so a booth can never store a country the
+ * floorplan cannot resolve to a name. Empty clears it.
+ */
+async function setCountry(boothNumber, code, { actor = null } = {}) {
+  const before = await get(boothNumber);
+  if (!before) return { ok: false, reason: 'missing_booth' };
+
+  const raw = String(code == null ? '' : code).trim();
+  const value = raw ? countries.normalise(raw) : null;
+  if (raw && !value) return { ok: false, reason: 'unknown_country' };
+
+  const res = await col().updateOne(
+    { showId: config.showId, boothNumber, status: { $in: ['sold', 'held'] } },
+    { $set: { 'assignment.country': value, updatedAt: new Date(), updatedBy: actor } }
+  );
+  return { ok: true, changed: res.matchedCount === 1, country: value,
+           name: value ? countries.nameOf(value) : null, before, after: await get(boothNumber) };
 }
 
 /**
@@ -267,7 +300,7 @@ async function move(fromNum, toNum, { actor = null } = {}) {
   if (a.actualPrice != null && from.sqm > 0) newActual = Math.round((a.actualPrice / from.sqm) * (to.sqm || 0));
 
   const assignment = { company: a.company || null, contactId: a.contactId || null, actualPrice: newActual,
-                       notes: a.notes || '', tags: Array.isArray(a.tags) ? a.tags : [] };
+                       notes: a.notes || '', tags: Array.isArray(a.tags) ? a.tags : [], country: a.country || null };
 
   // Claim the destination FIRST, only while it is still available — so we can
   // never overwrite a booking that landed on it a moment ago.
@@ -280,7 +313,7 @@ async function move(fromNum, toNum, { actor = null } = {}) {
   // Free the source, only if it still holds the booking we just moved.
   const freed = await col().updateOne(
     { showId: config.showId, boothNumber: fromNum, status: movedStatus },
-    { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [] }, updatedAt: new Date(), updatedBy: actor } }
+    { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null }, updatedAt: new Date(), updatedBy: actor } }
   );
   if (!freed.matchedCount) {
     // The source changed under us between read and free (another admin released
@@ -291,7 +324,7 @@ async function move(fromNum, toNum, { actor = null } = {}) {
     // booking a third admin may have just placed on the destination.
     await col().updateOne(
       { showId: config.showId, boothNumber: toNum, status: movedStatus, 'assignment.company': assignment.company },
-      { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [] }, updatedAt: new Date(), updatedBy: actor } }
+      { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null }, updatedAt: new Date(), updatedBy: actor } }
     );
     return { ok: false, reason: 'move_conflict' };
   }
@@ -625,7 +658,7 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
       showId: config.showId, boothNumber: nums[i - 1],
       svgElementId: null, geometry: cellGeom(i),
       sqm: share(totalSqm, i), sqmSource: 'split', listPrice: share(totalPrice, i), status: 'available',
-      assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [] },
+      assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
       clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
       createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
     });
@@ -738,7 +771,7 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
       showId: config.showId, boothNumber: nums[i - 1], svgElementId: null,
       geometry: c.geometry, sqm: c.sqm, sqmSource: 'split', listPrice: priceOf(c.sqm),
       displayNumber: c.displayNumber, status: 'available',
-      assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [] },
+      assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
       clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
       createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
     });
@@ -952,7 +985,7 @@ async function restoreOriginalLayout() {
     geometry: { x: f.x, y: f.y, w: f.w, h: f.h },
     sqm: f.sqm, sqmSource: 'estimated', listPrice: f.price,
     status: f.status,
-    assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [] },
+    assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
     clicks: 0, createdAt: now, updatedAt: now, updatedBy: 'restore-original',
   }));
   await col().insertMany(docs);
@@ -967,6 +1000,8 @@ async function restoreOriginalLayout() {
       'assignment.contactId': a.contactId ?? null,
       'assignment.actualPrice': a.actualPrice ?? null,
       'assignment.notes': a.notes ?? '',
+      'assignment.tags': Array.isArray(a.tags) ? a.tags : [],
+      'assignment.country': a.country ?? null,
       clicks: m.old.clicks || 0,
       updatedAt: now, updatedBy: 'restore-original:carried',
     };
@@ -1041,7 +1076,7 @@ async function resetToBlankLayout() {
     geometry: { x: f.x, y: f.y, w: f.w, h: f.h },
     sqm: f.sqm, sqmSource: 'estimated', listPrice: f.price,
     status: 'available',                 // FORCE available — blank, sell-able plan
-    assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [] },
+    assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
     clicks: 0, createdAt: now, updatedAt: now, updatedBy: 'reset-blank',
   }));
   await col().insertMany(docs);
@@ -1053,5 +1088,5 @@ async function resetToBlankLayout() {
 }
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   setDisplayNumber, setSponsored, setTags, removeTag, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
+                   setDisplayNumber, setSponsored, setTags, setCountry, removeTag, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
                    repairHalvedStands, restoreOriginalLayout, resetToBlankLayout };

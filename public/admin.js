@@ -2313,7 +2313,7 @@ function tagChip(tag, { onRemove = null } = {}) {
   return chip;
 }
 
-// ── Tools → Exhibitor Tags ───────────────────────────────────────────────────
+// ── Tools → Business Activities ──────────────────────────────────────────────
 function tagUsage(key) {
   return Object.values(booths).filter(b => (dealOf(b).tags || []).includes(key)).length;
 }
@@ -2413,6 +2413,65 @@ function deleteTag(tag, uses) {
   });
 }
 
+// ── Booth panel: the exhibitor's country ─────────────────────────────────────
+// A built-in list (server/data/countries.js), fetched once and cached, rather
+// than a curated catalogue like the activities — see that file's header for
+// why. The booth stores the ISO code; the label here is only a label.
+let countryList = [];
+let countryListLoaded = null;
+
+function loadCountries() {
+  if (!countryListLoaded) {
+    countryListLoaded = fetch('/countries', { cache: 'force-cache' })
+      .then(r => r.ok ? r.json() : { countries: [] })
+      .then(d => { countryList = Array.isArray(d.countries) ? d.countries : []; fillCountrySelect(); })
+      .catch(() => { countryList = []; });
+  }
+  return countryListLoaded;
+}
+
+function fillCountrySelect() {
+  const sel = document.getElementById('aba-country');
+  if (!sel || sel.dataset.filled === '1' || !countryList.length) return;
+  countryList.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.code;
+    o.textContent = `${c.flag}  ${c.name}`;
+    sel.appendChild(o);
+  });
+  sel.dataset.filled = '1';
+  // The list arrives after the panel may already have been drawn, so re-apply
+  // the selected stand's country once the options actually exist.
+  if (selectedAdminId) renderBoothCountry(selectedAdminId);
+}
+
+function renderBoothCountry(n) {
+  const sel = document.getElementById('aba-country');
+  if (!sel) return;
+  loadCountries();
+  sel.value = dealOf(booths[n]).country || '';
+  sel.dataset.booth = n;
+}
+
+document.getElementById('aba-country')?.addEventListener('change', (e) => {
+  const n = e.target.dataset.booth;
+  if (!n) return;
+  const country = e.target.value;
+  // Saved from the server's answer, never optimistically: a rejected change
+  // (the stand was released underneath the edit) must not leave the dropdown
+  // showing a country that was not stored.
+  socket.emit('booth:set-country', { boothNumber: n, country }, (res) => {
+    if (res && res.ok) {
+      const b = booths[n];
+      if (b) { b.assignment = b.assignment || {}; b.assignment.country = res.country; }
+      adminToast(res.country ? `Country set — ${res.name}.` : 'Country cleared.', 'ok');
+    } else {
+      adminToast((res && res.error) || 'Could not save the country.', 'error');
+    }
+    renderBoothCountry(n);
+  });
+});
+
 // ── Booth panel: the tags on this stand, plus one-click add ──────────────────
 function renderBoothTags(n) {
   const section = document.getElementById('aba-tags-section');
@@ -2425,6 +2484,8 @@ function renderBoothTags(n) {
   section.classList.toggle('hidden', !booked);
   if (!booked) return;
 
+  renderBoothCountry(n);
+
   const current = boothTags(b);
   document.getElementById('aba-tag-count').textContent = `${current.length}/${MAX_BOOTH_TAGS}`;
 
@@ -2433,7 +2494,7 @@ function renderBoothTags(n) {
   if (!current.length) {
     const none = document.createElement('span');
     none.className = 'aba-tag-none';
-    none.textContent = 'No tags yet.';
+    none.textContent = 'No activity set.';
     currentBox.appendChild(none);
   } else {
     current.forEach(key => currentBox.appendChild(
@@ -2447,7 +2508,7 @@ function renderBoothTags(n) {
   if (!tagCatalogue.length) {
     const hint = document.createElement('p');
     hint.className = 'aba-tag-hint';
-    hint.textContent = 'No tags exist yet — create them under Tools → Exhibitor Tags.';
+    hint.textContent = 'No activities exist yet — create them under Tools → Business Activities.';
     pick.appendChild(hint);
     return;
   }
