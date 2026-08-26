@@ -287,6 +287,38 @@ function tagAdminBooths() {
   if (multiSel.size) renderMultiSelect();
 }
 
+// ─── Deferred exhibitor names ────────────────────────────────────────────────
+//
+// A name is fitted to the stand's real box, which exists only once the plan has
+// been laid out — and on this page the plan spends most of its life inside a
+// hidden tab. Repainting while it is hidden skips every name, and a re-tag
+// (a split, a merge, a renumber) clears the existing ones first, so a
+// structural change made from another tab could leave the plan wearing no names
+// at all when the admin next opened it.
+//
+// The old comment said it "repaints on next broadcast", but a broadcast only
+// happens when someone changes something — on a quiet plan the names stayed
+// missing until a reload that happened to be laid out in time.
+let adminLabelsDeferred = false;
+
+const adminFontReady = () => !document.fonts || document.fonts.check('600 9px Raleway');
+
+function repaintAdminLabels() {
+  if (!svgDoc || !adminTagged || !adminLabelsDeferred) return;
+  adminLabelsDeferred = false;
+  Object.values(booths).forEach(b => {
+    const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
+    if (el) applyAdminVisual(el, b.status);
+  });
+}
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) repaintAdminLabels(); });
+window.addEventListener('pageshow', repaintAdminLabels);
+if (document.fonts) document.fonts.ready.then(repaintAdminLabels);
+// The frame going from zero-sized to laid out is what happens when the
+// Floorplan tab is opened, and it fires no visibility event.
+if (window.ResizeObserver && aFrame) new ResizeObserver(repaintAdminLabels).observe(aFrame);
+
 function applyAdminVisual(el, status) {
   el.classList.remove('booth-available', 'booth-sold', 'booth-held');
   el.classList.add(`booth-${status}`);
@@ -316,12 +348,20 @@ function applyAdminVisual(el, status) {
     try {
       const vbox = BoothMap.visualBox(el);
       if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) throw new Error('not laid out');
+      // Measured before Raleway loads, a name is fitted to the fallback's
+      // metrics and comes out the wrong size once the real font swaps in.
+      if (!adminFontReady()) adminLabelsDeferred = true;
       // Wrap / hyphenate / shrink to fit — never truncate. Same weight/size as
       // the public plan so a stand looks identical on both.
       BoothMap.fitLabel(textNode, company, vbox,
         { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });
       textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');
-    } catch { /* SVG not laid out yet — repaints on next broadcast */ }
+    } catch {
+      // Not laid out — the Floorplan tab is hidden, or the panel has no size
+      // yet. Book a repaint rather than waiting for a broadcast that may never
+      // come; see repaintAdminLabels.
+      adminLabelsDeferred = true;
+    }
   } else if (textNode) {
     textNode.remove();
   }

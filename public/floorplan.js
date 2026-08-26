@@ -1285,6 +1285,40 @@ function pickSuggestion(i) {
   clear?.addEventListener('click', () => { clearFilter(); input.focus(); });
 })();
 
+// ─── Deferred exhibitor names ────────────────────────────────────────────────
+//
+// A name is fitted to the stand's real box, which only exists once the plan has
+// been laid out. When it hasn't — the page is in a hidden tab, iframed into a
+// panel that is still collapsed, or the frame is momentarily zero-sized — every
+// name is skipped.
+//
+// Nothing used to bring them back. The only thing that repainted was the next
+// state broadcast, and on a quiet plan that may never come, so the names simply
+// stayed missing until a reload that happened to be laid out in time — which is
+// why they would reappear in a different browser or a fresh tab.
+//
+// So: remember that names were deferred, and repaint when the plan becomes
+// measurable. Three signals, because no one of them covers every case —
+// visibility (a hidden tab), a size change (a collapsed panel opening, which
+// fires no visibility event), and the web font arriving.
+let labelsDeferred = false;
+
+const fontReady = () => !document.fonts || document.fonts.check('600 9px Raleway');
+
+function repaintLabels() {
+  if (!svgDoc || !tagged || !labelsDeferred) return;
+  labelsDeferred = false;
+  Object.keys(booths).forEach(applyVisual);
+}
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) repaintLabels(); });
+window.addEventListener('pageshow', repaintLabels);          // restored from the back/forward cache
+if (document.fonts) document.fonts.ready.then(repaintLabels);
+// Fires once on observe and again on every resize, so a frame going from
+// zero-sized to laid out is caught without polling. When nothing was deferred
+// this is a no-op, so an ordinary window resize costs nothing.
+if (window.ResizeObserver && frame) new ResizeObserver(repaintLabels).observe(frame);
+
 function applyVisual(n) {
   const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   if (!el) return;
@@ -1322,7 +1356,7 @@ function applyVisual(n) {
     // Measured BEFORE the node is created: bailing out afterwards left an empty
     // <text> behind on every broadcast while the plan was off-screen.
     const vbox = BoothMap.visualBox(el);
-    if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) return;
+    if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) { labelsDeferred = true; return; }
     if (!textNode) {
       textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       textNode.setAttribute('id', `text-booth-${n}`);
@@ -1330,6 +1364,11 @@ function applyVisual(n) {
       textNode.style.pointerEvents = 'none';
       el.parentNode.appendChild(textNode);
     }
+    // A name measured before Raleway has loaded is fitted to the fallback's
+    // metrics and comes out the wrong size once the real font swaps in. Paint it
+    // anyway — a correctly-sized name a moment later beats no name now — but
+    // book a refit for when the font lands.
+    if (!fontReady()) labelsDeferred = true;
     // Wrap / hyphenate / shrink to fit — never truncate.
     BoothMap.fitLabel(textNode, company, vbox,
       { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });
