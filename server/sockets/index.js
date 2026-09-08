@@ -47,8 +47,30 @@ function broadcastTags(io) { io.emit('tags:catalogue', tagCache); }
 // whatever sponsor logo an admin has put on each. Same caching rationale as the
 // tags above — seven rows that change rarely, needed by every client.
 let areaCache = [];
-async function refreshAreas() { areaCache = await planAreas.all(); }
+async function refreshAreas() {
+  const [areas, packages] = await Promise.all([planAreas.all(), sponsors.all()]);
+  const by = new Map(packages.map(p => [p.key, p]));
+  areaCache = areas.map(a => {
+    const p = a.sponsorKey ? by.get(a.sponsorKey) : null;
+    return {
+      ...a,
+      // Never a price — this reaches the public plan, where sponsorship prices
+      // are deliberately withheld (see sponsors.toPublic).
+      package: p ? { key: p.key, name: p.name, tier: p.tier,
+                     availability: p.availability || '', soldOut: p.soldOut === true } : null,
+    };
+  });
+}
 function broadcastAreas(io) { io.emit('areas:catalogue', areaCache); }
+
+// The REST side (a sponsorship package marked sold out) has to be able to push
+// the areas it just changed. register() records io for exactly this.
+let ioRef = null;
+async function notifyAreas() {
+  await refreshAreas();
+  if (ioRef) broadcastAreas(ioRef);
+  return areaCache;
+}
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 // Token bucket per socket. The public events are unauthenticated by design, so
@@ -124,6 +146,7 @@ function log(io, msg, type = 'info') {
 const stand = (n) => String(n);
 
 function register(io) {
+  ioRef = io;   // lets notifyAreas() push from the REST side
   io.use(socketAuth);
 
   // Prime the tag catalogue once at boot. A failure here is not fatal — stands
@@ -681,6 +704,16 @@ function register(io) {
       return { ok: true, ...r };
     }));
 
+    socket.on('area:set-package', requireAdmin(socket, 'area:set-package', async ({ key, sponsorKey }) => {
+      const r = await planAreas.setPackage(String(key || ''), sponsorKey, { actor: socket.data.user });
+      if (!r.ok) return { ok: false, error: 'That is not an area on this plan.' };
+      await refreshAreas(); broadcastAreas(io);
+      const a = areaCache.find(x => x.key === r.key);
+      log(io, a?.package ? `🔗 ${escapeHtml(a.label)} sells as ${escapeHtml(a.package.name)}`
+                         : `🔗 ${escapeHtml(a?.label || r.key)} unlinked from its package`, 'admin');
+      return { ok: true, ...r };
+    }));
+
     socket.on('area:set-sponsor', requireAdmin(socket, 'area:set-sponsor', async ({ key, sponsor, status }) => {
       const r = await planAreas.setSponsor(String(key || ''), { sponsor, status }, { actor: socket.data.user });
       if (!r.ok) {
@@ -787,4 +820,4 @@ function escapeHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-module.exports = { register, refresh };
+module.exports = { register, refresh, notifyAreas };

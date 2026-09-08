@@ -49,6 +49,10 @@ async function all() {
       geometry: a.geometry,
       logo: (saved && saved.logo) || null,
       sponsor: (saved && saved.sponsor) || null,
+      // Which sponsorship package sells this area, if an admin has said. The
+      // package's own details are joined on by the socket layer rather than
+      // here, so this model never has to know about the sponsors model.
+      sponsorKey: (saved && saved.sponsorKey) || null,
       // Unset means nobody has taken it yet, which is the useful default for a
       // plan that has just been published.
       status: (saved && saved.status) || 'available',
@@ -126,4 +130,45 @@ async function setSponsor(key, { sponsor, status } = {}, { actor = null } = {}) 
   return { ok: true, key, sponsor: row?.sponsor || null, status: row?.status || 'available' };
 }
 
-module.exports = { col, ensureIndexes, all, setLogo, setLabel, setSponsor, STATUSES, MAX_LOGO };
+/**
+ * Point an area at the sponsorship package that sells it — "the Networking
+ * Lounge on the plan is what the Networking Lounge package buys".
+ *
+ * The link is what stops the two drifting: with it, marking the package sold
+ * out can mark the area taken, and the admin can see which opportunity an area
+ * belongs to without holding it in their head. An empty value unlinks.
+ */
+async function setPackage(key, sponsorKey, { actor = null } = {}) {
+  if (!catalogue.isValid(key)) return { ok: false, reason: 'unknown_area' };
+  const value = String(sponsorKey == null ? '' : sponsorKey).trim().slice(0, 60) || null;
+
+  await col().updateOne(
+    { showId: config.showId, key },
+    { $set: { sponsorKey: value, updatedAt: new Date(), updatedBy: actor },
+      $setOnInsert: { showId: config.showId, key } },
+    { upsert: true });
+  return { ok: true, key, sponsorKey: value };
+}
+
+/**
+ * Carry a package's sold-out state onto every area it sells.
+ *
+ * This is the half that makes the link worth having: an admin marks the
+ * Networking Lounge package sold out in one place, and the lounges on the plan
+ * stop advertising themselves as available.
+ *
+ * Deliberately one-directional and only onto LINKED areas — an area with no
+ * package is managed by hand and must not be moved underneath its admin.
+ * Returns how many areas changed.
+ */
+async function applyPackageSoldOut(sponsorKey, soldOut, { actor = null } = {}) {
+  const key = String(sponsorKey || '');
+  if (!key) return 0;
+  const res = await col().updateMany(
+    { showId: config.showId, sponsorKey: key },
+    { $set: { status: soldOut ? 'taken' : 'available', updatedAt: new Date(), updatedBy: actor } });
+  return res.modifiedCount;
+}
+
+module.exports = { col, ensureIndexes, all, setLogo, setLabel, setSponsor, setPackage,
+                   applyPackageSoldOut, STATUSES, MAX_LOGO };

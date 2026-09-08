@@ -8,6 +8,8 @@ const sponsors  = require('../models/sponsors');
 const users     = require('../models/users');
 const partners  = require('../models/partners');
 const salesTeam = require('../data/sales-team');
+const planAreas = require('../models/plan-areas');
+const sockets   = require('../sockets');
 const planAreaData = new Map(require('../data/plan-areas').AREAS.map(a => [a.key, a]));
 const holds     = require('../services/holds');
 const { getDb } = require('../db');
@@ -268,6 +270,19 @@ router.patch('/sponsors/:key', async (req, res, next) => {
     if ('soldOut' in body) body.soldOut = truthy(body.soldOut);
     const updated = await sponsors.setFields(req.params.key, body);
     if (!updated) return res.status(404).json({ error: 'No such sponsor.' });
+
+    // A package that has sold out takes the areas it sells with it, so the plan
+    // stops advertising the Networking Lounge the moment the lounge is gone.
+    // Only areas LINKED to this package move; an unlinked one is managed by
+    // hand and must not shift underneath its admin.
+    if ('soldOut' in body) {
+      try {
+        const moved = await planAreas.applyPackageSoldOut(req.params.key, updated.soldOut === true,
+                                                          { actor: req.admin?.user || null });
+        if (moved) await sockets.notifyAreas();
+      } catch (e) { console.error('Area sold-out cascade failed:', e.message); }
+    }
+
     res.json(updated);
   } catch (e) { next(e); }
 });

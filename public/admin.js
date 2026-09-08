@@ -323,13 +323,74 @@ let planAreas = [];
 function paintAdminAreas() {
   if (!svgDoc || !planAreas.length) return;
   if (BoothMap.paintAreaLogos(svgDoc, planAreas, 'admin-area-logo-')) adminLabelsDeferred = true;
+  wireAdminAreas();
+  if (selectedAreaKey) renderAdminAreaPanel(selectedAreaKey);   // live edits from elsewhere
+}
+
+// Clicking a lounge on the plan edits that lounge. Before this the only way in
+// was Tools → Sponsored Areas, which is not where anyone looks when they can
+// see the thing they want to change.
+function wireAdminAreas() {
+  planAreas.forEach(a => {
+    const host = BoothMap.areaHost(svgDoc, a);
+    if (!host || host.dataset.areaWired === '1') return;
+    host.dataset.areaWired = '1';
+    host.classList.add('area-interactive-admin');
+    addAdminTap(host, () => selectAdminArea(a.key));
+  });
+}
+
+let selectedAreaKey = null;
+
+function selectAdminArea(key) {
+  // The stand panel and the area panel share a slot, so opening one closes the
+  // other rather than stacking two editors over each other.
+  if (selectedAdminId) {
+    multiEl(selectedAdminId)?.classList.remove('booth-selected');
+    selectedAdminId = null;
+  }
+  document.getElementById('admin-booth-action')?.classList.add('hidden');
+  svgDoc.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
+  selectedAreaKey = key;
+  svgDoc.querySelector(`[data-area="${CSS.escape(key)}"]`)?.classList.add('booth-selected');
+  renderAdminAreaPanel(key);
+}
+
+function renderAdminAreaPanel(key) {
+  const a = planAreas.find(x => x.key === key);
+  const panel = document.getElementById('admin-area-action');
+  if (!a || !panel) return;
+  panel.classList.remove('hidden');
+
+  document.getElementById('ara-name').textContent = a.label;
+  const badge = document.getElementById('ara-status-badge');
+  const taken = a.status === 'taken';
+  badge.textContent = taken ? 'Sponsored' : 'Available';
+  badge.className = `aba-badge ${taken ? 'badge-sold' : 'badge-available'}`;
+
+  const body = document.getElementById('ara-body');
+  body.replaceChildren(areaEditor(a));
 }
 
 socket.on('areas:catalogue', (list) => {
   planAreas = Array.isArray(list) ? list : [];
-  paintAdminAreas();
-  renderAreaCards();
+  ensureSponsorCache().then(() => { paintAdminAreas(); renderAreaCards(); });
 });
+
+// The "sells as" dropdown lists the sponsorship catalogue, which otherwise only
+// loads when the Sponsors tab is opened. Fetched once, so an admin who goes
+// straight to Tools still gets a populated list.
+let sponsorCacheLoad = null;
+function ensureSponsorCache() {
+  if (sponsorAdminCache.length) return Promise.resolve();
+  if (!sponsorCacheLoad) {
+    sponsorCacheLoad = fetch('/api/sponsors')
+      .then(r => r.ok ? r.json() : [])
+      .then(rows => { if (!sponsorAdminCache.length) sponsorAdminCache = rows; })
+      .catch(() => { /* the dropdown just shows "not linked" */ });
+  }
+  return sponsorCacheLoad;
+}
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) repaintAdminLabels(); });
 window.addEventListener('pageshow', repaintAdminLabels);
@@ -426,6 +487,11 @@ function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 // ─── Admin Select Booth ───────────────────────────────────────────────────────
 function selectAdminBooth(id) {
   clearMultiSelect();                              // a plain click abandons any shift-selection
+  if (selectedAreaKey) {
+    svgDoc.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
+    selectedAreaKey = null;
+    document.getElementById('admin-area-action')?.classList.add('hidden');
+  }
   if (selectedAdminId) {
     svgDoc.querySelector(`[data-booth="${CSS.escape(selectedAdminId)}"]`)?.classList.remove('booth-selected');
   }
@@ -2680,80 +2746,127 @@ function renderAreaCards() {
       });
     };
 
-    // Who has it, and whether it is still going. Naming a sponsor marks the
-    // area taken server-side — an area advertised as available under a
-    // sponsor's own logo is the one state that must never reach the plan.
-    const sponsor = document.createElement('input');
-    sponsor.type = 'text';
-    sponsor.className = 'admin-input area-sponsor';
-    sponsor.placeholder = 'Sponsor (leave blank if available)';
-    sponsor.value = a.sponsor || '';
-    sponsor.maxLength = 80;
-    sponsor.onchange = () => {
-      socket.emit('area:set-sponsor', { key: a.key, sponsor: sponsor.value }, (res) => {
-        if (!res || !res.ok) adminToast((res && res.error) || 'Could not save the sponsor.', 'error');
-      });
-    };
-
-    const status = document.createElement('select');
-    status.className = 'admin-input area-status';
-    [['available', 'Available to sponsor'], ['taken', 'Sponsored']].forEach(([v, label]) => {
-      const o = document.createElement('option');
-      o.value = v; o.textContent = label;
-      status.appendChild(o);
-    });
-    status.value = a.status || 'available';
-    status.onchange = () => {
-      socket.emit('area:set-sponsor', { key: a.key, status: status.value }, (res) => {
-        if (!res || !res.ok) adminToast((res && res.error) || 'Could not update that area.', 'error');
-      });
-    };
-
-    const drop = document.createElement('button');
-    drop.type = 'button';
-    drop.className = 'area-drop';
-    drop.title = `Drop ${a.label}'s sponsor logo here, or click to choose one`;
-    if (a.logo) {
-      const img = document.createElement('img');
-      img.src = a.logo;
-      img.alt = '';
-      drop.appendChild(img);
-    } else {
-      drop.appendChild(document.createTextNode('Drop a logo here, or click to choose'));
-    }
-
-    const take = async (file) => {
-      if (!file) return;
-      if (!file.type.startsWith('image/')) return adminToast('That file is not an image.', 'error');
-      try { saveAreaLogo(a.key, await fileToDataUrl(file, 400)); }
-      catch (err) { adminToast(err.message || 'Could not read that image.', 'error'); }
-    };
-
-    drop.onclick = () => {
-      const picker = document.createElement('input');
-      picker.type = 'file';
-      picker.accept = 'image/*';
-      picker.onchange = () => take(picker.files?.[0]);
-      picker.click();
-    };
-    ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
-      e.preventDefault(); drop.classList.add('dragover');
-    }));
-    ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => {
-      e.preventDefault(); drop.classList.remove('dragover');
-    }));
-    drop.addEventListener('drop', (e) => take(e.dataTransfer?.files?.[0]));
-
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'admin-btn danger area-remove';
-    remove.textContent = 'Remove logo';
-    remove.hidden = !a.logo;
-    remove.onclick = () => saveAreaLogo(a.key, '');
-
-    card.append(name, sponsor, status, drop, remove);
+    card.append(name, areaEditor(a));
     box.appendChild(card);
   });
+}
+
+/**
+ * The controls for one area: which package sells it, who has it, whether it is
+ * still going, and their logo.
+ *
+ * Shared between the Tools card and the panel that opens when an area is
+ * clicked on the plan, so the two can never offer different things — the split
+ * between "the image on the package" and "the logo on the area" was confusing
+ * enough without two editors that disagree.
+ */
+function areaEditor(a) {
+  const frag = document.createDocumentFragment();
+  const label = (text) => {
+    const el = document.createElement('div');
+    el.className = 'ara-field-lbl';
+    el.textContent = text;
+    return el;
+  };
+
+  // ── Which package sells this area ──
+  const pkg = document.createElement('select');
+  pkg.className = 'admin-input area-package';
+  const none = document.createElement('option');
+  none.value = ''; none.textContent = '— Not linked to a package —';
+  pkg.appendChild(none);
+  sponsorAdminCache.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.key;
+    o.textContent = `${p.name}${p.tier ? ` (${p.tier})` : ''}`;
+    pkg.appendChild(o);
+  });
+  pkg.value = a.sponsorKey || '';
+  pkg.onchange = () => {
+    socket.emit('area:set-package', { key: a.key, sponsorKey: pkg.value }, (res) => {
+      if (!res || !res.ok) adminToast((res && res.error) || 'Could not link that area.', 'error');
+    });
+  };
+
+  const note = document.createElement('div');
+  note.className = 'area-package-note';
+  note.textContent = a.package
+    ? `Sells as ${a.package.name}${a.package.availability ? ` · ${a.package.availability}` : ''}${a.package.soldOut ? ' · sold out' : ''}`
+    : 'Not linked — this area\u2019s availability is set by hand.';
+
+  // ── Who has it ──
+  const sponsor = document.createElement('input');
+  sponsor.type = 'text';
+  sponsor.className = 'admin-input area-sponsor';
+  sponsor.placeholder = 'Sponsor (leave blank if available)';
+  sponsor.value = a.sponsor || '';
+  sponsor.maxLength = 80;
+  sponsor.onchange = () => {
+    socket.emit('area:set-sponsor', { key: a.key, sponsor: sponsor.value }, (res) => {
+      if (!res || !res.ok) adminToast((res && res.error) || 'Could not save the sponsor.', 'error');
+    });
+  };
+
+  const status = document.createElement('select');
+  status.className = 'admin-input area-status';
+  [['available', 'Available to sponsor'], ['taken', 'Sponsored']].forEach(([v, text]) => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = text;
+    status.appendChild(o);
+  });
+  status.value = a.status || 'available';
+  status.onchange = () => {
+    socket.emit('area:set-sponsor', { key: a.key, status: status.value }, (res) => {
+      if (!res || !res.ok) adminToast((res && res.error) || 'Could not update that area.', 'error');
+    });
+  };
+
+  // ── Their logo, drawn on the plan ──
+  const drop = document.createElement('button');
+  drop.type = 'button';
+  drop.className = 'area-drop';
+  drop.title = `Drop ${a.label}'s sponsor logo here, or click to choose one`;
+  if (a.logo) {
+    const img = document.createElement('img');
+    img.src = a.logo; img.alt = '';
+    drop.appendChild(img);
+  } else {
+    drop.appendChild(document.createTextNode('Drop a logo here, or click to choose'));
+  }
+
+  const take = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return adminToast('That file is not an image.', 'error');
+    try { saveAreaLogo(a.key, await fileToDataUrl(file, 400)); }
+    catch (err) { adminToast(err.message || 'Could not read that image.', 'error'); }
+  };
+
+  drop.onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = 'image/*';
+    picker.onchange = () => take(picker.files?.[0]);
+    picker.click();
+  };
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.add('dragover');
+  }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.remove('dragover');
+  }));
+  drop.addEventListener('drop', (e) => take(e.dataTransfer?.files?.[0]));
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'admin-btn danger area-remove';
+  remove.textContent = 'Remove logo';
+  remove.hidden = !a.logo;
+  remove.onclick = () => saveAreaLogo(a.key, '');
+
+  frag.append(label('Sells as'), pkg, note,
+              label('Sponsor'), sponsor, status,
+              label('Sponsor logo (shown on the plan)'), drop, remove);
+  return frag;
 }
 
 /** Store (or clear) an area's logo. The cards redraw from the server's answer. */

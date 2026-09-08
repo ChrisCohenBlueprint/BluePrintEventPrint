@@ -333,6 +333,16 @@ body {
 .area-remove { width: 100%; justify-content: center; font-size: 11px; padding: 5px 8px; }
 .area-remove[hidden] { display: none; }
 
+/* The area editor, shared by the Tools cards and the on-plan panel. */
+.ara-body { display: flex; flex-direction: column; gap: 8px; }
+.ara-field-lbl {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin-top: 4px;
+}
+.area-package { width: 100%; font-size: 12px; }
+.area-package-note { font-size: 11px; color: var(--muted); }
+.area-interactive-admin { cursor: pointer; }
+
 /* ─── Sponsors table: the image column ──────────────────────────────────────── */
 .sp-image-cell { min-width: 160px; }
 .sp-image-cell.dragover { outline: 2px dashed var(--green); outline-offset: -3px; }
