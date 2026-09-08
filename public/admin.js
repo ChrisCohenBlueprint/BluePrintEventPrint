@@ -2117,7 +2117,7 @@ async function loadSponsorsAdmin() {
 
     tr.appendChild(sponsorInput(s.key, 'price', s.price ?? '', 'number', '€ POA', 90));
     tr.appendChild(sponsorInput(s.key, 'availability', s.availability ?? '', 'text', 'e.g. Exclusive', 120));
-    tr.appendChild(sponsorInput(s.key, 'image', s.image ?? '', 'text', '/sponsors/x.jpg or URL', 150));
+    tr.appendChild(sponsorImageCell(s.key, s.image ?? ''));
     tr.appendChild(sponsorInput(s.key, 'video', s.video ?? '', 'text', 'URL', 130));
 
     // Offered and Sold out are two sides of one switch. A sold-out package is
@@ -2158,6 +2158,91 @@ async function loadSponsorsAdmin() {
   });
 }
 
+/**
+ * The package's image: uploaded, pasted or linked.
+ *
+ * This column used to be a bare text box reading "/sponsors/x.jpg or URL", so
+ * the only way to give a package a picture was to host the file somewhere first
+ * and paste a link — which is no use for a logo an admin has just been emailed.
+ * The file is shrunk in the browser and stored inline, the same way partner and
+ * stand logos are, so nothing has to be hosted anywhere.
+ *
+ * A pasted path or URL still works and is still shown as text: existing
+ * packages point at /sponsors/*.jpg and must keep doing so.
+ */
+function sponsorImageCell(key, value) {
+  const td = document.createElement('td');
+  td.className = 'sp-image-cell';
+
+  const uploaded = /^data:image\//i.test(value);
+
+  const take = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return adminToast('That file is not an image.', 'error');
+    try {
+      const dataUrl = await fileToDataUrl(file, 600);
+      await saveSponsor(key, { image: dataUrl });
+      loadSponsorsAdmin();          // redraw so the thumbnail replaces the box
+    } catch (err) {
+      adminToast(err.message || 'Could not read that image.', 'error');
+    }
+  };
+
+  const pick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = 'image/*';
+    picker.onchange = () => take(picker.files?.[0]);
+    picker.click();
+  };
+
+  if (uploaded) {
+    // Already an inline image — show it, rather than a text box holding a
+    // 200,000-character data URI nobody can read or edit.
+    const img = document.createElement('img');
+    img.src = value;
+    img.alt = '';
+    img.className = 'sp-image-thumb';
+    img.title = 'Click to replace this image';
+    img.onclick = pick;
+
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'sp-image-clear';
+    clear.textContent = 'Remove';
+    clear.onclick = async () => { await saveSponsor(key, { image: '' }); loadSponsorsAdmin(); };
+
+    td.append(img, clear);
+  } else {
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'admin-input sp-image-url';
+    inp.value = value;
+    inp.placeholder = '/sponsors/x.jpg or URL';
+    inp.onchange = () => saveSponsor(key, { image: inp.value });
+
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'sp-image-upload';
+    up.textContent = 'Upload';
+    up.title = 'Upload an image, or drop one onto this cell';
+    up.onclick = pick;
+
+    td.append(inp, up);
+  }
+
+  // Dropping onto the cell works whichever state it is in.
+  ['dragenter', 'dragover'].forEach(ev => td.addEventListener(ev, (e) => {
+    e.preventDefault(); td.classList.add('dragover');
+  }));
+  ['dragleave', 'drop'].forEach(ev => td.addEventListener(ev, (e) => {
+    e.preventDefault(); td.classList.remove('dragover');
+  }));
+  td.addEventListener('drop', (e) => take(e.dataTransfer?.files?.[0]));
+
+  return td;
+}
+
 function sponsorInput(key, field, value, type, placeholder, width) {
   const td = document.createElement('td');
   const inp = document.createElement('input');
@@ -2173,9 +2258,17 @@ async function saveSponsor(key, fields) {
     const res = await fetch(`/api/sponsors/${encodeURIComponent(key)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
     });
-    adminToast(res.ok ? 'Sponsor updated.' : 'Could not save sponsor.', res.ok ? 'ok' : 'error');
+    // The server explains a rejected image (too large, not an image); saying
+    // only "Could not save sponsor" would leave the admin guessing.
+    let msg = 'Sponsor updated.';
+    if (!res.ok) {
+      msg = 'Could not save sponsor.';
+      try { msg = (await res.json()).error || msg; } catch { /* no JSON body */ }
+    }
+    adminToast(msg, res.ok ? 'ok' : 'error');
     if (res.ok && ('active' in fields || 'soldOut' in fields)) loadSponsorsAdmin();
-  } catch { adminToast('Could not save sponsor.', 'error'); }
+    return res.ok;
+  } catch { adminToast('Could not save sponsor.', 'error'); return false; }
 }
 
 // ─── Team (admin accounts) ────────────────────────────────────────────────────
