@@ -681,6 +681,20 @@ function register(io) {
       return { ok: true, ...r };
     }));
 
+    socket.on('area:set-sponsor', requireAdmin(socket, 'area:set-sponsor', async ({ key, sponsor, status }) => {
+      const r = await planAreas.setSponsor(String(key || ''), { sponsor, status }, { actor: socket.data.user });
+      if (!r.ok) {
+        return { ok: false, error: r.reason === 'bad_status'
+          ? 'An area is either available or taken.'
+          : 'That is not an area on this plan.' };
+      }
+      await refreshAreas(); broadcastAreas(io);
+      const name = areaCache.find(a => a.key === r.key)?.label || r.key;
+      log(io, r.sponsor ? `🏛️ ${escapeHtml(name)} sponsored by <strong>${escapeHtml(r.sponsor)}</strong>`
+                        : `🏛️ ${escapeHtml(name)} is available to sponsor`, 'admin');
+      return { ok: true, ...r };
+    }));
+
     socket.on('area:set-label', requireAdmin(socket, 'area:set-label', async ({ key, label }) => {
       const r = await planAreas.setLabel(String(key || ''), label, { actor: socket.data.user });
       if (!r.ok) return { ok: false, error: 'That is not an area on this plan.' };

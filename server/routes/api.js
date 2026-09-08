@@ -8,6 +8,7 @@ const sponsors  = require('../models/sponsors');
 const users     = require('../models/users');
 const partners  = require('../models/partners');
 const salesTeam = require('../data/sales-team');
+const planAreaData = new Map(require('../data/plan-areas').AREAS.map(a => [a.key, a]));
 const holds     = require('../services/holds');
 const { getDb } = require('../db');
 const { track } = require('../services/tracking');
@@ -387,6 +388,8 @@ router.post('/inquiries/:id/send', async (req, res, next) => {
 
     const c = lead.contact || {};
     const stands = (lead.boothsOfInterest || []).join(', ') || 'none specified';
+    const areaNames = (lead.areasOfInterest || [])
+      .map(k => (planAreaData.get(k) || {}).label || k);
     const sponsorKeys = lead.sponsorsOfInterest || [];
     let sponsorNames = sponsorKeys;
     if (sponsorKeys.length) {
@@ -409,6 +412,7 @@ router.post('/inquiries/:id/send', async (req, res, next) => {
       '',
       `Stands of interest:  ${stands}`,
       `Sponsorship interest: ${sponsorNames.length ? sponsorNames.join(', ') : 'none'}`,
+      `Areas of interest:   ${areaNames.length ? areaNames.join(', ') : 'none'}`,
       '',
       `Message: ${lead.message || '—'}`,
       '',

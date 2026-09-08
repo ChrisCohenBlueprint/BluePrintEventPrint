@@ -1459,6 +1459,8 @@ function renderLeadsList() {
     if (booths.length) parts.push('stands ' + booths.join(', '));
     const sponsors = l.sponsorsOfInterest || [];
     if (sponsors.length) parts.push(`+${sponsors.length} sponsorship`);
+    const areas = l.areasOfInterest || [];
+    if (areas.length) parts.push(`+${areas.length} area${areas.length > 1 ? 's' : ''}`);
     meta.textContent = parts.join(' · ') || '—';
 
     // Line 3 — date · assignee.
@@ -1674,6 +1676,10 @@ async function openLead(id) {
   // Map sponsor keys to their names for a readable label.
   const sponsorNames = (lead.sponsorsOfInterest || [])
     .map(k => (sponsorAdminCache.find(s => s.key === k) || {}).name || k);
+  // Areas are named from the live catalogue, so a renamed area reads correctly
+  // on an enquiry taken before the rename.
+  const areaNames = (lead.areasOfInterest || [])
+    .map(k => (planAreas.find(a => a.key === k) || {}).label || k);
 
   contact.append(
     field('Email', lead.contact?.email, lead.contact?.email ? `mailto:${lead.contact.email}` : null),
@@ -1683,6 +1689,7 @@ async function openLead(id) {
     field('Heard about us', lead.contact?.heardAbout),
     field('Stands of interest', (lead.boothsOfInterest || []).join(', ')),
     field('Sponsorship interest', sponsorNames.join(', ')),
+    field('Areas of interest', areaNames.join(', ')),
   );
   panel.appendChild(contact);
 
@@ -2580,6 +2587,35 @@ function renderAreaCards() {
       });
     };
 
+    // Who has it, and whether it is still going. Naming a sponsor marks the
+    // area taken server-side — an area advertised as available under a
+    // sponsor's own logo is the one state that must never reach the plan.
+    const sponsor = document.createElement('input');
+    sponsor.type = 'text';
+    sponsor.className = 'admin-input area-sponsor';
+    sponsor.placeholder = 'Sponsor (leave blank if available)';
+    sponsor.value = a.sponsor || '';
+    sponsor.maxLength = 80;
+    sponsor.onchange = () => {
+      socket.emit('area:set-sponsor', { key: a.key, sponsor: sponsor.value }, (res) => {
+        if (!res || !res.ok) adminToast((res && res.error) || 'Could not save the sponsor.', 'error');
+      });
+    };
+
+    const status = document.createElement('select');
+    status.className = 'admin-input area-status';
+    [['available', 'Available to sponsor'], ['taken', 'Sponsored']].forEach(([v, label]) => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = label;
+      status.appendChild(o);
+    });
+    status.value = a.status || 'available';
+    status.onchange = () => {
+      socket.emit('area:set-sponsor', { key: a.key, status: status.value }, (res) => {
+        if (!res || !res.ok) adminToast((res && res.error) || 'Could not update that area.', 'error');
+      });
+    };
+
     const drop = document.createElement('button');
     drop.type = 'button';
     drop.className = 'area-drop';
@@ -2622,7 +2658,7 @@ function renderAreaCards() {
     remove.hidden = !a.logo;
     remove.onclick = () => saveAreaLogo(a.key, '');
 
-    card.append(name, drop, remove);
+    card.append(name, sponsor, status, drop, remove);
     box.appendChild(card);
   });
 }

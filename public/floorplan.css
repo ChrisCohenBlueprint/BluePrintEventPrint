@@ -231,6 +231,11 @@ body {
    plain declaration — without it, on-hold stands stayed bright while the rest
    of the hall faded. */
 .booth-dim { opacity: .3 !important; transition: opacity .25s; }
+
+/* A sponsorable area answers a click like a stand does, so it gets the same
+   affordance. No colour change — only the cursor and a hover lift. */
+.area-interactive { cursor: pointer; }
+.area-interactive:hover { filter: drop-shadow(0 0 8px rgba(15,23,42,.45)); }
 @keyframes boothFound {
   0%, 100% { filter: drop-shadow(0 0 5px rgba(244,63,94,.6)); }
   50%      { filter: drop-shadow(0 0 12px rgba(244,63,94,1)); }
@@ -368,6 +373,21 @@ body {
   font-size: 16px; font-weight: 700; line-height: 1.3;
   overflow-wrap: anywhere;               /* a long company name must not widen the panel */
 }
+/* ─── Sponsorable area panel ──────────────────────────────────────────────── */
+.area-kind {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+  color: var(--muted); margin-bottom: 12px;
+}
+.area-blurb { font-size: 13px; line-height: 1.5; color: var(--muted); margin-bottom: 14px; }
+.area-logo-wrap { margin-top: 10px; }
+/* The white backing is the panel's, not the plan's: a logo is usually
+   dark-on-transparent and needs a light ground to read against a card. */
+.area-logo-img {
+  max-width: 100%; max-height: 90px;
+  background: #fff; border-radius: 6px; padding: 6px;
+  border: 1px solid var(--border);
+}
+
 .stand-country {
   display: flex; align-items: center; gap: 7px;
   margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--muted);

@@ -316,6 +316,7 @@ body {
   background: rgba(255,255,255,0.03);
 }
 .area-name { width: 100%; font-size: 12px; font-weight: 600; }
+.area-sponsor, .area-status { width: 100%; font-size: 12px; }
 /* Same drop target as the stand panel's, so the gesture is identical wherever a
    logo is added. */
 .area-drop {

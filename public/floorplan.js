@@ -276,6 +276,10 @@ function hideTooltip() { tooltip.classList.add('hidden'); }
 
 // ─── Selection ────────────────────────────────────────────────────────────────
 function selectBooth(n) {
+  if (selectedArea) {
+    svgDoc?.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
+    selectedArea = null;
+  }
   if (selectedId) {
     svgDoc.querySelector(`[data-booth="${CSS.escape(selectedId)}"]`)?.classList.remove('booth-selected');
   }
@@ -321,7 +325,7 @@ function renderShortlist() {
   const box  = document.getElementById('eq-shortlist');
   const foot = document.getElementById('eq-footer');   // fixed Send button bar
 
-  if (!shortlist.length && !sponsorShortlist.length) {
+  if (!shortlist.length && !sponsorShortlist.length && !areaShortlist.length) {
     card.classList.add('hidden'); if (foot) foot.hidden = true; box.innerHTML = ''; return;
   }
   if (!submitted) { card.classList.remove('hidden'); if (foot) foot.hidden = false; }
@@ -336,13 +340,20 @@ function renderShortlist() {
       ${esc(sponsorCache[k]?.name || k)} <span aria-hidden="true">×</span>
     </button>`).join('');
 
+  const areaChips = areaShortlist.map(k => `
+    <button type="button" class="eq-sponsor-chip" data-remove-area="${esc(k)}" aria-label="Remove ${esc(areaByKey(k)?.label || k)}">
+      ${esc(areaByKey(k)?.label || k)} <span aria-hidden="true">×</span>
+    </button>`).join('');
+
   const parts = [];
   if (shortlist.length) parts.push(`${shortlist.length} stand${shortlist.length > 1 ? 's' : ''}`);
+  if (areaShortlist.length) parts.push(`${areaShortlist.length} area${areaShortlist.length > 1 ? 's' : ''}`);
   if (sponsorShortlist.length) parts.push(`${sponsorShortlist.length} sponsorship option${sponsorShortlist.length > 1 ? 's' : ''}`);
 
   box.innerHTML = `
     <div class="eq-shortlist-lbl">Enquiring about ${parts.join(' + ')}</div>
     <div class="eq-chips">${standChips}</div>
+    ${areaChips ? `<div class="eq-sponsor-chips">${areaChips}</div>` : ''}
     ${sponsorChips ? `<div class="eq-sponsor-chips">${sponsorChips}</div>` : ''}`;
 
   box.querySelectorAll('[data-remove-booth]').forEach(btn => {
@@ -350,6 +361,9 @@ function renderShortlist() {
   });
   box.querySelectorAll('[data-remove-sponsor]').forEach(btn => {
     btn.onclick = () => toggleSponsor(btn.getAttribute('data-remove-sponsor'));
+  });
+  box.querySelectorAll('[data-remove-area]').forEach(btn => {
+    btn.onclick = () => toggleAreaShortlist(btn.getAttribute('data-remove-area'));
   });
   matchSponsorHeight();   // the enquiry column height changed; re-level the columns
 }
@@ -671,6 +685,7 @@ function initForm() {
       website:   document.getElementById('eq-website').value,   // honeypot
       boothNumbers: shortlist.slice(),
       sponsorKeys: sponsorShortlist.slice(),
+      areaKeys: areaShortlist.slice(),
     };
 
     submit.disabled = true;
@@ -777,6 +792,95 @@ function paintAreas() {
   // A miss means the plan is not laid out yet; the same deferred repaint the
   // exhibitor names use will bring the logos in when it is.
   if (BoothMap.paintAreaLogos(svgDoc, planAreas, 'area-logo-')) labelsDeferred = true;
+  wireAreas();
+}
+
+// Make each area clickable, once. These are sponsorable inventory — the VIP
+// Lounge, a conference track — so a visitor who clicks one gets the same kind
+// of answer a stand gives: who has it, or that it is available.
+function wireAreas() {
+  planAreas.forEach(a => {
+    const host = BoothMap.areaHost(svgDoc, a);
+    if (!host || host.dataset.areaWired === '1') return;
+    host.dataset.areaWired = '1';
+    host.classList.add('area-interactive');
+    host.addEventListener('mouseenter', e => showAreaTooltip(e, a.key));
+    host.addEventListener('mousemove', e => moveTooltip(e));
+    host.addEventListener('mouseleave', hideTooltip);
+    addTapListener(host, () => { hideTooltip(); selectArea(a.key); });
+  });
+}
+
+const areaByKey = (key) => planAreas.find(a => a.key === key) || null;
+
+function showAreaTooltip(e, key) {
+  const a = areaByKey(key);
+  if (!a) return;
+  document.getElementById('tt-label').textContent  = a.label;
+  document.getElementById('tt-status').textContent = a.status === 'taken' ? 'Sponsored' : 'Available to sponsor';
+  document.getElementById('tt-price').textContent  = a.status === 'taken' ? (a.sponsor || '') : '';
+  tooltip.classList.remove('hidden');
+  moveTooltip(e);
+}
+
+// The area the visitor has open, if any. Mutually exclusive with a selected
+// stand: the side panel shows one thing at a time.
+let selectedArea = null;
+
+function selectArea(key) {
+  if (selectedId) { hideSelection(); selectedId = null; }
+  svgDoc.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
+  selectedArea = key;
+  svgDoc.querySelector(`[data-area="${CSS.escape(key)}"]`)?.classList.add('booth-selected');
+  renderAreaPanel(key);
+}
+
+/** Areas the visitor wants to enquire about, alongside the stand shortlist. */
+let areaShortlist = [];
+
+function toggleAreaShortlist(key) {
+  const i = areaShortlist.indexOf(key);
+  if (i > -1) areaShortlist.splice(i, 1);
+  else if (areaShortlist.length < 10) areaShortlist.push(key);
+  renderShortlist();
+  renderAreaPanel(key);
+}
+
+function renderAreaPanel(key) {
+  const a = areaByKey(key);
+  if (!a) return;
+  const panel = document.getElementById('booth-panel');
+  panel.classList.remove('hidden');
+  document.getElementById('empty-state')?.classList.add('hidden');
+
+  const taken = a.status === 'taken';
+  const inList = areaShortlist.includes(key);
+
+  panel.innerHTML = `
+    <div class="stand-header">
+      <div class="stand-id">${esc(a.label)}</div>
+      <div class="stand-badge ${taken ? 'badge-sold' : 'badge-available'}">${taken ? 'Sponsored' : 'Available'}</div>
+    </div>
+    <div class="area-kind">${taken ? 'Sponsored area' : 'Sponsorship opportunity'}</div>
+    ${taken ? `
+      <div class="stand-exhibitor">
+        <div class="stand-exhibitor-lbl">Sponsored by</div>
+        <div class="stand-exhibitor-name">${esc(a.sponsor || 'Our sponsor')}</div>
+        ${a.logo ? `<div class="area-logo-wrap"><img class="area-logo-img" src="${esc(a.logo)}" alt=""></div>` : ''}
+      </div>
+      <div class="stand-taken-notice">
+        <i data-lucide="lock" style="width:14px;height:14px"></i>
+        This area has been sponsored.
+      </div>`
+    : `
+      <p class="area-blurb">This area is available to sponsor. Add it to your enquiry and our team will talk you through what it includes.</p>
+      <button type="button" class="btn-shortlist ${inList ? 'in-list' : ''}" id="area-shortlist-btn">
+        ${inList ? 'Added to enquiry' : 'Add to enquiry'}
+      </button>`}
+  `;
+  document.getElementById('area-shortlist-btn')?.addEventListener('click', () => toggleAreaShortlist(key));
+  lucide.createIcons();
+  syncSponsorPanel();
 }
 
 socket.on('areas:catalogue', (list) => {

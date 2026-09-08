@@ -20,7 +20,7 @@ const HEARD_OPTIONS = ['Recommendation', 'Google/Bing Search', 'Marketing Email'
  * which those details are actually persisted.
  */
 async function create({ name, firstName, lastName, email, phone, company, jobTitle, heardAbout,
-                        message, boothNumbers = [], sponsorKeys = [], sessionId = null }) {
+                        message, boothNumbers = [], sponsorKeys = [], areaKeys = [], sessionId = null }) {
   const first = clean(firstName, 80);
   const last  = clean(lastName, 80);
   // Prefer the split name; fall back to a legacy single `name` field so older
@@ -41,6 +41,9 @@ async function create({ name, firstName, lastName, email, phone, company, jobTit
 
   const hasBooths   = Array.isArray(boothNumbers) && boothNumbers.length;
   const hasSponsors = Array.isArray(sponsorKeys) && sponsorKeys.length;
+  // A sponsorable area — the VIP Lounge, a conference track — is a lead in its
+  // own right, and is the only thing some enquiries are about.
+  const hasAreas    = Array.isArray(areaKeys) && areaKeys.length;
 
   const errors = [];
   if (!contact.name)                errors.push('Please enter your name.');
@@ -48,7 +51,7 @@ async function create({ name, firstName, lastName, email, phone, company, jobTit
   // A stand or a sponsorship option — either is a valid lead. Requiring a stand
   // meant that removing the last stand while keeping sponsors left the enquiry
   // permanently un-submittable.
-  if (!hasBooths && !hasSponsors) errors.push('Please select at least one stand or sponsorship option.');
+  if (!hasBooths && !hasSponsors && !hasAreas) errors.push('Please select at least one stand, area or sponsorship option.');
   if (errors.length) return { ok: false, errors };
 
   const doc = {
@@ -57,6 +60,7 @@ async function create({ name, firstName, lastName, email, phone, company, jobTit
     contact,
     boothsOfInterest: (Array.isArray(boothNumbers) ? boothNumbers : []).slice(0, 25).map(String),
     sponsorsOfInterest: Array.isArray(sponsorKeys) ? sponsorKeys.slice(0, 25).map(String) : [],
+    areasOfInterest: Array.isArray(areaKeys) ? areaKeys.slice(0, 25).map(String) : [],
     message: clean(message, 2000),
     source:  'floorplan',
     status:  'new',

@@ -448,6 +448,16 @@
    * Returns how many areas could not be found, so a caller can retry once the
    * plan is actually laid out instead of leaving a sponsor unbranded.
    */
+  /** The artwork rectangle an area occupies, or null if the plan has moved. */
+  function areaHost(svgDoc, area) {
+    var candidates = svgDoc.querySelectorAll('.cls-6, .cls-8');
+    for (var i = 0; i < candidates.length; i++) {
+      var g = rectGeom(candidates[i]);
+      if (g && sameGeom(g, area.geometry, 2)) return candidates[i];
+    }
+    return null;
+  }
+
   function paintAreaLogos(svgDoc, areas, prefix) {
     if (!svgDoc || !areas) return 0;
     var missed = 0;
@@ -460,14 +470,19 @@
       var id = prefix + a.key;
       var node = svgDoc.querySelector('[id="' + id + '"]');
 
-      if (!a.logo) { if (node && node.parentNode) node.parentNode.removeChild(node); return; }
-
+      // Find and tag the area's rectangle FIRST, whether or not it has a logo.
+      // An area with no sponsor yet is the one most worth clicking — it is the
+      // opportunity — so tagging only the branded ones left exactly the wrong
+      // half of the plan inert.
       var host = null;
       for (var i = 0; i < candidates.length; i++) {
         var g = rectGeom(candidates[i]);
         if (g && sameGeom(g, a.geometry, 2)) { host = candidates[i]; break; }
       }
       if (!host) { missed++; return; }
+      host.setAttribute('data-area', a.key);
+
+      if (!a.logo) { if (node && node.parentNode) node.parentNode.removeChild(node); return; }
 
       var box = visualBox(host);
       if (!box || !(box.w > 0) || !(box.h > 0)) { missed++; return; }
@@ -537,5 +552,5 @@
       .sort().join('|');
   }
 
-  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, fitImage: fitImage, paintAreaLogos: paintAreaLogos, visualBox: visualBox };
+  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, fitImage: fitImage, paintAreaLogos: paintAreaLogos, areaHost: areaHost, visualBox: visualBox };
 })(window);
