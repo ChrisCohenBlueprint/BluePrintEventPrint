@@ -332,9 +332,29 @@ function applyAdminVisual(el, status) {
   else el.style.removeProperty('fill');
 
   let textNode = svgDoc.querySelector(`[id="admin-text-${id}"]`);
+  let logoNode = svgDoc.querySelector(`[id="admin-logo-${id}"]`);
   const company = dealOf(booths[id]).company;
+  // The sponsor's logo replaces the exhibitor name — same rule as the public
+  // plan, so a stand looks the same on both.
+  const logo = (booths[id]?.sponsored && booths[id]?.sponsorLogo) || null;
 
-  if (status !== 'available' && company) {
+  if (logo) {
+    if (!logoNode) {
+      logoNode = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+      logoNode.setAttribute('id', `admin-logo-${id}`);
+      logoNode.style.pointerEvents = 'none';   // the stand underneath stays clickable
+      el.parentNode.appendChild(logoNode);
+    }
+    try {
+      const box = BoothMap.visualBox(el);
+      if (!box || !(box.w > 0) || !(box.h > 0)) throw new Error('not laid out');
+      BoothMap.fitImage(logoNode, logo, box);
+    } catch { adminLabelsDeferred = true; }
+  } else if (logoNode) {
+    logoNode.remove();
+  }
+
+  if (status !== 'available' && company && !logo) {
     if (!textNode) {
       textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       textNode.setAttribute('id', `admin-text-${id}`);
@@ -492,6 +512,7 @@ function renderAdminBoothAction(n) {
     .catch(() => { clickList.textContent = 'Could not load activity.'; });
 
   renderStandActions(n);
+  renderBoothSponsor(n);
   document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
 
   renderBoothTags(n);
@@ -1150,7 +1171,11 @@ socket.on('state:full', (serverBooths) => {
   populateToolDropdowns();
   populateAdminSearchList();
   renderTagCatalogue();                       // the "used on N stands" counts move with the booths
-  if (selectedAdminId) { renderBoothTags(selectedAdminId); renderStandActions(selectedAdminId); }
+  if (selectedAdminId) {
+    renderBoothTags(selectedAdminId);
+    renderStandActions(selectedAdminId);
+    renderBoothSponsor(selectedAdminId);
+  }
 
   // Tag on the first state if the floorplan tab is already open; otherwise
   // loadAdminSVG() tags when the tab is first shown.
@@ -2500,6 +2525,98 @@ function deleteTag(tag, uses) {
     else adminToast((res && res.error) || 'Could not delete that tag.', 'error');
   });
 }
+
+// ── Booth panel: the sponsor and their logo ──────────────────────────────────
+//
+// The logo is drawn INSIDE the stand on both plans, in place of the exhibitor
+// name — on a small stand there is room for one or the other, and a logo
+// already says the name. It is offered only once the stand is marked as having
+// a sponsor, which is the same flag the floorplan-sponsor tooling uses; marking
+// a stand changes no colours on its own (the brand fill only applies when a
+// floorplan sponsor colour is actually set).
+function renderBoothSponsor(n) {
+  const section = document.getElementById('aba-sponsor-section');
+  if (!section) return;
+  const b = booths[n];
+  if (!b) return;
+
+  const on = b.sponsored === true;
+  const toggle = document.getElementById('aba-sponsored');
+  toggle.checked = on;
+  toggle.dataset.booth = n;
+
+  const box = document.getElementById('aba-logo-box');
+  box.classList.toggle('hidden', !on);
+  box.dataset.booth = n;
+
+  const preview = document.getElementById('aba-logo-preview');
+  const hint    = document.getElementById('aba-logo-hint');
+  const remove  = document.getElementById('aba-logo-remove');
+  const logo    = b.sponsorLogo || '';
+
+  preview.hidden = !logo;
+  if (logo) preview.src = logo; else preview.removeAttribute('src');
+  hint.hidden   = !!logo;
+  remove.hidden = !logo;
+}
+
+/** Store (or clear) this stand's logo, redrawing from the server's answer. */
+function saveBoothLogo(boothNumber, dataUrl) {
+  socket.emit('booth:set-logo', { boothNumber, logo: dataUrl || '' }, (res) => {
+    if (res && res.ok) {
+      const b = booths[boothNumber];
+      if (b) b.sponsorLogo = res.logo;
+      adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
+    } else {
+      adminToast((res && res.error) || 'Could not save the logo.', 'error');
+    }
+    renderBoothSponsor(boothNumber);
+  });
+}
+
+document.getElementById('aba-sponsored')?.addEventListener('change', (e) => {
+  const n = e.target.dataset.booth;
+  if (!n) return;
+  socket.emit('booth:set-sponsored', { boothNumber: n, sponsored: e.target.checked }, (res) => {
+    if (!res || !res.ok) adminToast((res && res.error) || 'Could not update the sponsor flag.', 'error');
+    else { const b = booths[n]; if (b) b.sponsored = res.sponsored; }
+    renderBoothSponsor(n);
+  });
+});
+
+(function wireBoothLogo() {
+  const drop = document.getElementById('aba-logo-drop');
+  const file = document.getElementById('aba-logo-file');
+  if (!drop || !file) return;
+
+  const boothOf = () => document.getElementById('aba-logo-box')?.dataset.booth || '';
+
+  // Shrunk to a data URI in the browser, the same way partner logos are — the
+  // server stores only inline images, so the plan's PNG download stays
+  // self-contained (see booths.setSponsorLogo).
+  const take = async (f) => {
+    const n = boothOf();
+    if (!n || !f) return;
+    try { saveBoothLogo(n, await fileToDataUrl(f, 400)); }
+    catch (err) { adminToast(err.message || 'Could not read that image.', 'error'); }
+  };
+
+  drop.addEventListener('click', () => file.click());
+  file.addEventListener('change', () => { take(file.files?.[0]); file.value = ''; });
+
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.add('dragover');
+  }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.remove('dragover');
+  }));
+  drop.addEventListener('drop', (e) => take(e.dataTransfer?.files?.[0]));
+
+  document.getElementById('aba-logo-remove')?.addEventListener('click', () => {
+    const n = boothOf();
+    if (n) saveBoothLogo(n, '');
+  });
+})();
 
 // ── Booth panel: the exhibitor's country ─────────────────────────────────────
 // A built-in list (server/data/countries.js), fetched once and cached, rather

@@ -1,6 +1,7 @@
 const { getDb } = require('../db');
 const config    = require('../config');
 const countries = require('../data/countries');
+const { safeImage } = require('../lib/safe-url');
 const fs        = require('fs');
 const path      = require('path');
 
@@ -30,6 +31,10 @@ function toPublic(b) {
     geometry: b.geometry,
     displayNumber: b.displayNumber || null,   // admin-set label shown in place of boothNumber (identity is unchanged)
     sponsored: b.sponsored === true,          // filled with the floorplan sponsor's brand colour on the plan
+    // The sponsor's logo, drawn inside the stand. Only sent for a stand that is
+    // actually flagged as sponsored, so clearing the flag takes the logo off
+    // the public plan immediately without having to also clear the image.
+    sponsorLogo: b.sponsored === true ? (b.sponsorLogo || null) : null,
     // Tag keys the visitor's floorplan resolves against the tag catalogue.
     // Only on a SOLD stand: a hold is a provisional deal, and naming what a
     // not-yet-committed exhibitor does would publish it early.
@@ -225,6 +230,48 @@ async function setSponsored(boothNumber, on, { actor = null } = {}) {
     { showId: config.showId, boothNumber },
     { $set: { sponsored: on === true, updatedAt: new Date(), updatedBy: actor } });
   return { ok: res.matchedCount === 1, sponsored: on === true };
+}
+
+// The largest inline logo we will store. Matches the partner-logo cap: a data
+// URI beyond this used to be truncated into a corrupt image, so it is rejected
+// outright and the admin is told, rather than saved broken.
+const MAX_LOGO = 2_000_000;
+
+/**
+ * Set (or clear) the sponsor logo drawn inside a stand.
+ *
+ * Guarded on the stand being flagged `sponsored` — a logo is the sponsor's, so
+ * it cannot be attached to a stand that has no sponsor. `changed: false` means
+ * the flag was taken off underneath the edit, which the caller reports rather
+ * than storing an image nothing will ever draw.
+ *
+ * Only an inline `data:image/…` URI is accepted — deliberately narrower than
+ * the safeImage used for partner logos, which also allows an http(s) URL. Two
+ * reasons, both about where this ends up. It is drawn into the plan's SVG, and
+ * the "Download Floorplan" PNG rasterises that SVG through an <img>: an
+ * external reference is not fetched in that context, so a hosted logo would
+ * simply be missing from every download, and could taint the canvas outright.
+ * It also means the public plan never fetches from a third-party host.
+ * An empty value clears it.
+ */
+async function setSponsorLogo(boothNumber, image, { actor = null } = {}) {
+  const before = await get(boothNumber);
+  if (!before) return { ok: false, reason: 'missing_booth' };
+
+  const raw = typeof image === 'string' ? image.trim() : '';
+  if (raw.length > MAX_LOGO) return { ok: false, reason: 'too_large' };
+  // safeImage first (it rejects data:text/html and friends), then narrow to the
+  // inline forms for the reasons in the header.
+  const safe = raw ? safeImage(raw) : '';
+  const value = /^data:image\/(png|jpe?g|gif|webp|svg\+xml);/i.test(safe) ? safe : '';
+  if (raw && !value) return { ok: false, reason: 'bad_image' };
+
+  const res = await col().updateOne(
+    { showId: config.showId, boothNumber, sponsored: true },
+    { $set: { sponsorLogo: value || null, updatedAt: new Date(), updatedBy: actor } }
+  );
+  return { ok: true, changed: res.matchedCount === 1, logo: value || null,
+           before, after: await get(boothNumber) };
 }
 
 /**
@@ -1088,5 +1135,5 @@ async function resetToBlankLayout() {
 }
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   setDisplayNumber, setSponsored, setTags, setCountry, removeTag, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
+                   setDisplayNumber, setSponsored, setSponsorLogo, setTags, setCountry, removeTag, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
                    repairHalvedStands, restoreOriginalLayout, resetToBlankLayout };

@@ -629,6 +629,27 @@ function register(io) {
       return { ok: true, ...r };
     }));
 
+    // The sponsor's logo, drawn inside that stand on the plan. Separate from the
+    // flag above so a stand can be marked as sponsored before the artwork
+    // arrives, and so removing the logo does not unmark the stand.
+    socket.on('booth:set-logo', requireAdmin(socket, 'booth:set-logo', async ({ boothNumber, logo }) => {
+      const n = stand(boothNumber);
+      const r = await booths.setSponsorLogo(n, logo, { actor: socket.data.user });
+      if (!r.ok) {
+        const why = r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'too_large'     ? 'that image is too large — use a smaller logo'
+                  : r.reason === 'bad_image'     ? 'that is not an image we can store'
+                  : 'it could not be saved';
+        return { ok: false, error: `Could not save the logo — ${why}.` };
+      }
+      if (!r.changed) return { ok: false, error: `Stand ${n} has no sponsor — mark it as sponsored first.` };
+      track({ type: 'booth.set_logo', boothNumber: n, socket, meta: { cleared: !r.logo } });
+      await refresh(); broadcastState(io);
+      log(io, r.logo ? `🖼️ Stand ${escapeHtml(n)} sponsor logo set`
+                     : `🖼️ Stand ${escapeHtml(n)} sponsor logo removed`, 'admin');
+      return { ok: true, logo: r.logo };
+    }));
+
     // Change the €/unit rate. Password-gated (re-enter the admin's own login
     // password), because it reprices every stand's list price across the board.
     socket.on('settings:set-rate', requireAdmin(socket, 'settings:set-rate', async ({ rate, password }) => {

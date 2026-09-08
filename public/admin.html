@@ -225,6 +225,25 @@
           <div class="aba-tag-pick" id="aba-tag-pick"></div>
         </div>
 
+        <!-- Sponsor logo. Drawn inside this stand on both plans, and only
+             offered once the stand is marked as having a sponsor. -->
+        <div class="aba-sponsor-section" id="aba-sponsor-section">
+          <div class="aba-section-title">Sponsor</div>
+          <label class="aba-sponsor-toggle">
+            <input type="checkbox" id="aba-sponsored">
+            <span>This stand has a sponsor</span>
+          </label>
+          <div class="aba-logo hidden" id="aba-logo-box">
+            <button type="button" class="aba-logo-drop" id="aba-logo-drop"
+                    title="Drop a logo here, or click to choose one">
+              <img id="aba-logo-preview" alt="" hidden>
+              <span id="aba-logo-hint">Drop a logo here, or click to choose</span>
+            </button>
+            <input type="file" id="aba-logo-file" accept="image/*" hidden>
+            <button type="button" class="admin-btn danger aba-logo-remove" id="aba-logo-remove" hidden>Remove logo</button>
+          </div>
+        </div>
+
         <!-- Deal details — admin only -->
         <div class="aba-deal-section" id="aba-deal-section" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
           <div style="font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Deal Details</div>

@@ -283,6 +283,31 @@ body {
    cannot take it. */
 .admin-btn[hidden] { display: none; }
 
+/* ─── Stand panel: sponsor logo ─────────────────────────────────────────────── */
+.aba-sponsor-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.aba-sponsor-toggle {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text); cursor: pointer;
+}
+.aba-sponsor-toggle input { cursor: pointer; }
+.aba-logo { margin-top: 10px; }
+.aba-logo.hidden { display: none; }
+/* A button, not a bare div, so the file picker is reachable by keyboard. */
+.aba-logo-drop {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; min-height: 74px; padding: 8px;
+  background: rgba(255,255,255,0.04);
+  border: 1px dashed var(--border); border-radius: 8px;
+  color: var(--muted); font-family: inherit; font-size: 11px; text-align: center;
+  cursor: pointer; transition: border-color .2s, background .2s;
+}
+.aba-logo-drop:hover, .aba-logo-drop.dragover { border-color: var(--green); background: rgba(16,185,129,0.08); }
+/* A logo is usually dark-on-transparent, which would vanish on this dark panel;
+   the light backing is the preview only, never what the plan draws. */
+.aba-logo-drop img { max-width: 100%; max-height: 90px; background: #fff; border-radius: 4px; padding: 4px; }
+.aba-logo-remove { width: 100%; justify-content: center; margin-top: 8px; font-size: 12px; }
+.aba-logo-remove[hidden] { display: none; }
+
 /* ─── Bookings Table ─────────────────────────────────────────────────────────── */
 .bookings-toolbar { display: flex; gap: 12px; margin-bottom: 16px; }
 .admin-input {

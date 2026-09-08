@@ -410,6 +410,32 @@
    * structural change (split/merge/reset) — otherwise the map only reflects
    * such changes after a full page reload, and stale overlays/handlers linger.
    */
+  /**
+   * Draw an image centred inside a stand's box, scaled to fit and with its
+   * aspect ratio kept. Same contract as fitLabel: the caller owns the element,
+   * this only sizes and positions it.
+   *
+   * The padding is proportional rather than fixed, so a logo sits comfortably
+   * inside a 9 m² stand and a 200 m² one alike.
+   */
+  function fitImage(imgEl, href, box, opts) {
+    opts = opts || {};
+    var pad = opts.pad != null ? opts.pad : Math.max(1, Math.min(box.w, box.h) * 0.12);
+    imgEl.setAttribute('x', box.x + pad);
+    imgEl.setAttribute('y', box.y + pad);
+    imgEl.setAttribute('width',  Math.max(1, box.w - pad * 2));
+    imgEl.setAttribute('height', Math.max(1, box.h - pad * 2));
+    // "meet" scales down to fit and never crops — a cropped logo is worse than
+    // a small one.
+    imgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    if (imgEl.getAttribute('href') !== href) {
+      imgEl.setAttribute('href', href);
+      // Some renderers (and the SVG-as-image path the PNG download uses) still
+      // read the xlink form.
+      imgEl.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', href);
+    }
+  }
+
   function clear(svgDoc) {
     var added = '[data-overlay],[data-split-box],[data-split-label],[data-split-size]';
     Array.prototype.forEach.call(svgDoc.querySelectorAll(added), function (n) {
@@ -420,6 +446,13 @@
       var id = t.getAttribute('id') || '';
       if ((id.indexOf('text-booth-') === 0 || id.indexOf('admin-text-') === 0) && t.parentNode) {
         t.parentNode.removeChild(t);
+      }
+    });
+    // …and the sponsor logos drawn over them, for the same reason.
+    Array.prototype.forEach.call(svgDoc.querySelectorAll('image'), function (im) {
+      var id = im.getAttribute('id') || '';
+      if ((id.indexOf('logo-booth-') === 0 || id.indexOf('admin-logo-') === 0) && im.parentNode) {
+        im.parentNode.removeChild(im);
       }
     });
     // Artwork rects tagged directly (exact matches) carry data-booth AND
@@ -456,5 +489,5 @@
       .sort().join('|');
   }
 
-  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, visualBox: visualBox };
+  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, fitImage: fitImage, visualBox: visualBox };
 })(window);

@@ -872,7 +872,8 @@ async function downloadPlan() {
     }
 
     // Rasterise the self-contained SVG through an <img> onto a canvas. The SVG
-    // has no external refs (no sponsor logo, no foreignObject), so the canvas
+    // still has no EXTERNAL refs (no foreignObject; sponsor logos are stored as
+    // inline data: URIs precisely so they survive this path), so the canvas
     // stays untainted and toBlob works.
     const xml = new XMLSerializer().serializeToString(clone);
     const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
@@ -984,12 +985,14 @@ function paintFilterOn(el, n) {
 function paintFilter() {
   if (!svgDoc) return;
   svgDoc.querySelectorAll('[data-booth]').forEach(el => paintFilterOn(el, el.getAttribute('data-booth')));
-  // The exhibitor names are siblings of the stands, not children, so they have
-  // to be faded separately or a dimmed stand keeps a full-strength name on it.
-  svgDoc.querySelectorAll('[id^="text-booth-"]').forEach(t => {
-    const n = t.id.slice('text-booth-'.length);
-    t.classList.toggle('booth-dim', !!filterMatches && !filterMatches.has(n));
-  });
+  // The exhibitor names and sponsor logos are siblings of the stands, not
+  // children, so they have to be faded separately or a dimmed stand keeps a
+  // full-strength name or logo sitting on top of it.
+  [['[id^="text-booth-"]', 'text-booth-'], ['[id^="logo-booth-"]', 'logo-booth-']]
+    .forEach(([sel, prefix]) => svgDoc.querySelectorAll(sel).forEach(node => {
+      const n = node.id.slice(prefix.length);
+      node.classList.toggle('booth-dim', !!filterMatches && !filterMatches.has(n));
+    }));
 }
 
 /** Recompute, repaint, and report the count. The single entry point. */
@@ -1347,16 +1350,36 @@ function applyVisual(n) {
   // Exhibitor name painted onto the stand, as before. textContent, never
   // innerHTML — the value reaches here from the public enquiry form.
   let textNode = svgDoc.querySelector(`#text-booth-${CSS.escape(n)}`);
+  let logoNode = svgDoc.querySelector(`#logo-booth-${CSS.escape(n)}`);
   const company = booths[n]?.company;
+  // A sponsor's logo, sent only for a stand flagged as sponsored. It REPLACES
+  // the exhibitor name rather than sitting beside it: on a 9 m² stand there is
+  // room for one or the other, and a logo already says the name.
+  const logo = booths[n]?.sponsorLogo || null;
+  const wantsName = status !== 'available' && company && !logo;
 
-  if (status !== 'available' && company) {
-    // VISUAL box (post-transform): most LEX27 stands are rotated, so the local
-    // getBBox would place the name off the stand and fit it to swapped
-    // dimensions. Null means the stand isn't laid out yet — skip this frame.
-    // Measured BEFORE the node is created: bailing out afterwards left an empty
-    // <text> behind on every broadcast while the plan was off-screen.
-    const vbox = BoothMap.visualBox(el);
-    if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) { labelsDeferred = true; return; }
+  // VISUAL box (post-transform): most LEX27 stands are rotated, so the local
+  // getBBox would place the name off the stand and fit it to swapped
+  // dimensions. Null means the stand isn't laid out yet — skip this frame.
+  // Measured BEFORE either node is created: bailing out afterwards left an empty
+  // <text> behind on every broadcast while the plan was off-screen.
+  const vbox = (wantsName || logo) ? BoothMap.visualBox(el) : null;
+  if ((wantsName || logo) && (!vbox || !(vbox.w > 0) || !(vbox.h > 0))) { labelsDeferred = true; return; }
+
+  if (logo) {
+    if (!logoNode) {
+      logoNode = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+      logoNode.setAttribute('id', `logo-booth-${n}`);
+      logoNode.style.pointerEvents = 'none';   // the stand underneath stays clickable
+      el.parentNode.appendChild(logoNode);
+    }
+    BoothMap.fitImage(logoNode, logo, vbox);
+    logoNode.classList.toggle('booth-dim', !!filterMatches && !filterMatches.has(n));
+  } else if (logoNode) {
+    logoNode.remove();
+  }
+
+  if (wantsName) {
     if (!textNode) {
       textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       textNode.setAttribute('id', `text-booth-${n}`);
