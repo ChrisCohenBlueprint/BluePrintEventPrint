@@ -5,6 +5,7 @@ const booths    = require('../models/booths');
 const sponsors  = require('../models/sponsors');
 const settings  = require('../models/settings');
 const tags      = require('../models/tags');
+const planAreas = require('../models/plan-areas');
 const users     = require('../models/users');
 const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
@@ -40,6 +41,14 @@ async function refresh() {
 let tagCache = [];
 async function refreshTags() { tagCache = await tags.catalogue(); }
 function broadcastTags(io) { io.emit('tags:catalogue', tagCache); }
+
+// ─── Plan areas ───────────────────────────────────────────────────────────────
+// The lounges, theatres and conference rooms the artwork draws in blue, with
+// whatever sponsor logo an admin has put on each. Same caching rationale as the
+// tags above — seven rows that change rarely, needed by every client.
+let areaCache = [];
+async function refreshAreas() { areaCache = await planAreas.all(); }
+function broadcastAreas(io) { io.emit('areas:catalogue', areaCache); }
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 // Token bucket per socket. The public events are unauthenticated by design, so
@@ -120,6 +129,7 @@ function register(io) {
   // Prime the tag catalogue once at boot. A failure here is not fatal — stands
   // simply render without chips until the next catalogue edit refreshes it.
   refreshTags().catch(e => console.error('Tag catalogue not loaded:', e.message));
+  refreshAreas().catch(e => console.error('Plan areas not loaded:', e.message));
 
   io.on('connection', (socket) => {
     connections++;
@@ -650,6 +660,35 @@ function register(io) {
       return { ok: true, logo: r.logo };
     }));
 
+    // ── Plan areas ────────────────────────────────────────────────────────
+    // A sponsor's logo on one of the plan's named areas, and a correction to an
+    // area's name. The areas themselves are fixed by the artwork, so there is
+    // nothing to create or delete here.
+
+    socket.on('area:set-logo', requireAdmin(socket, 'area:set-logo', async ({ key, logo }) => {
+      const r = await planAreas.setLogo(String(key || ''), logo, { actor: socket.data.user });
+      if (!r.ok) {
+        const why = r.reason === 'unknown_area' ? 'that is not an area on this plan'
+                  : r.reason === 'too_large'    ? 'that image is too large — use a smaller logo'
+                  : r.reason === 'bad_image'    ? 'that is not an image we can store'
+                  : 'it could not be saved';
+        return { ok: false, error: `Could not save the logo — ${why}.` };
+      }
+      await refreshAreas(); broadcastAreas(io);
+      const name = areaCache.find(a => a.key === r.key)?.label || r.key;
+      log(io, r.logo ? `🖼️ ${escapeHtml(name)} sponsor logo set`
+                     : `🖼️ ${escapeHtml(name)} sponsor logo removed`, 'admin');
+      return { ok: true, ...r };
+    }));
+
+    socket.on('area:set-label', requireAdmin(socket, 'area:set-label', async ({ key, label }) => {
+      const r = await planAreas.setLabel(String(key || ''), label, { actor: socket.data.user });
+      if (!r.ok) return { ok: false, error: 'That is not an area on this plan.' };
+      await refreshAreas(); broadcastAreas(io);
+      log(io, `🏛️ Plan area renamed — ${escapeHtml(r.label)}`, 'admin');
+      return { ok: true, ...r };
+    }));
+
     // Change the €/unit rate. Password-gated (re-enter the admin's own login
     // password), because it reprices every stand's list price across the board.
     socket.on('settings:set-rate', requireAdmin(socket, 'settings:set-rate', async ({ rate, password }) => {
@@ -704,6 +743,7 @@ function register(io) {
 
         socket.emit('floorplan-sponsor', await sponsors.getFloorplanSponsor());
         socket.emit('tags:catalogue', tagCache);
+        socket.emit('areas:catalogue', areaCache);
 
         // Unit is a harmless display label (public). The €/unit rate is
         // admin-only: public sqm × rate would reveal list prices.

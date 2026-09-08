@@ -285,6 +285,8 @@ function tagAdminBooths() {
   // shift-selection the admin was midway through building.
   if (selectedAdminId) multiEl(selectedAdminId)?.classList.add('booth-selected');
   if (multiSel.size) renderMultiSelect();
+
+  paintAdminAreas();   // a re-tag rebuilds the plan under the area logos
 }
 
 // ─── Deferred exhibitor names ────────────────────────────────────────────────
@@ -310,7 +312,24 @@ function repaintAdminLabels() {
     const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
     if (el) applyAdminVisual(el, b.status);
   });
+  paintAdminAreas();
 }
+
+// The plan's named areas and their sponsor logos — the admin sees the same
+// thing the public does, so a logo can be checked in place before anyone else
+// sees it.
+let planAreas = [];
+
+function paintAdminAreas() {
+  if (!svgDoc || !planAreas.length) return;
+  if (BoothMap.paintAreaLogos(svgDoc, planAreas, 'admin-area-logo-')) adminLabelsDeferred = true;
+}
+
+socket.on('areas:catalogue', (list) => {
+  planAreas = Array.isArray(list) ? list : [];
+  paintAdminAreas();
+  renderAreaCards();
+});
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) repaintAdminLabels(); });
 window.addEventListener('pageshow', repaintAdminLabels);
@@ -2523,6 +2542,96 @@ function deleteTag(tag, uses) {
   socket.emit('tags:delete', { key: tag.key }, (res) => {
     if (res && res.ok) adminToast(`Tag "${tag.label}" deleted.`, 'ok');
     else adminToast((res && res.error) || 'Could not delete that tag.', 'error');
+  });
+}
+
+// ── Tools: sponsored areas ───────────────────────────────────────────────────
+// One card per named area on the plan. The logo is uploaded rather than linked,
+// for the same reason a stand's is: the plan's PNG download rasterises the SVG
+// through an <img>, where an external reference is never fetched.
+function renderAreaCards() {
+  const box = document.getElementById('area-list');
+  if (!box) return;
+  box.replaceChildren();
+
+  if (!planAreas.length) {
+    const p = document.createElement('p');
+    p.className = 'tag-empty';
+    p.textContent = 'No named areas on this plan.';
+    box.appendChild(p);
+    return;
+  }
+
+  planAreas.forEach(a => {
+    const card = document.createElement('div');
+    card.className = 'area-card';
+
+    // The shipped names were matched from the artwork's layout, so any of them
+    // may be wrong — editable in place rather than needing a code change.
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'admin-input area-name';
+    name.value = a.label;
+    name.maxLength = 60;
+    name.title = 'Rename this area';
+    name.onchange = () => {
+      socket.emit('area:set-label', { key: a.key, label: name.value }, (res) => {
+        if (!res || !res.ok) adminToast((res && res.error) || 'Could not rename that area.', 'error');
+      });
+    };
+
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'area-drop';
+    drop.title = `Drop ${a.label}'s sponsor logo here, or click to choose one`;
+    if (a.logo) {
+      const img = document.createElement('img');
+      img.src = a.logo;
+      img.alt = '';
+      drop.appendChild(img);
+    } else {
+      drop.appendChild(document.createTextNode('Drop a logo here, or click to choose'));
+    }
+
+    const take = async (file) => {
+      if (!file) return;
+      if (!file.type.startsWith('image/')) return adminToast('That file is not an image.', 'error');
+      try { saveAreaLogo(a.key, await fileToDataUrl(file, 400)); }
+      catch (err) { adminToast(err.message || 'Could not read that image.', 'error'); }
+    };
+
+    drop.onclick = () => {
+      const picker = document.createElement('input');
+      picker.type = 'file';
+      picker.accept = 'image/*';
+      picker.onchange = () => take(picker.files?.[0]);
+      picker.click();
+    };
+    ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+      e.preventDefault(); drop.classList.add('dragover');
+    }));
+    ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => {
+      e.preventDefault(); drop.classList.remove('dragover');
+    }));
+    drop.addEventListener('drop', (e) => take(e.dataTransfer?.files?.[0]));
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'admin-btn danger area-remove';
+    remove.textContent = 'Remove logo';
+    remove.hidden = !a.logo;
+    remove.onclick = () => saveAreaLogo(a.key, '');
+
+    card.append(name, drop, remove);
+    box.appendChild(card);
+  });
+}
+
+/** Store (or clear) an area's logo. The cards redraw from the server's answer. */
+function saveAreaLogo(key, dataUrl) {
+  socket.emit('area:set-logo', { key, logo: dataUrl || '' }, (res) => {
+    if (res && res.ok) adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
+    else adminToast((res && res.error) || 'Could not save the logo.', 'error');
   });
 }
 

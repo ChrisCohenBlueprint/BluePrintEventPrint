@@ -238,6 +238,7 @@ function tagBooths() {
   }
 
   updateStatsStrip();
+  paintAreas();          // a re-tag rebuilds the plan under them
   openDeepLink();
 }
 
@@ -764,6 +765,23 @@ socket.on('settings', (s) => {
   document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
   if (selectedId) renderPanel(selectedId);
   updateStatsStrip();
+});
+
+// The plan's named areas (lounges, theatres, conference rooms) and the sponsor
+// logo on each. Pushed on connect and whenever an admin changes one, so a logo
+// appears on every open plan without a reload.
+let planAreas = [];
+
+function paintAreas() {
+  if (!svgDoc || !planAreas.length) return;
+  // A miss means the plan is not laid out yet; the same deferred repaint the
+  // exhibitor names use will bring the logos in when it is.
+  if (BoothMap.paintAreaLogos(svgDoc, planAreas, 'area-logo-')) labelsDeferred = true;
+}
+
+socket.on('areas:catalogue', (list) => {
+  planAreas = Array.isArray(list) ? list : [];
+  paintAreas();
 });
 
 socket.on('tags:catalogue', (list) => {
@@ -1312,6 +1330,7 @@ function repaintLabels() {
   if (!svgDoc || !tagged || !labelsDeferred) return;
   labelsDeferred = false;
   Object.keys(booths).forEach(applyVisual);
+  paintAreas();
 }
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) repaintLabels(); });

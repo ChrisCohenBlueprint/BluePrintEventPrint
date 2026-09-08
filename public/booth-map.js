@@ -436,6 +436,54 @@
     }
   }
 
+  /**
+   * Draw each plan area's sponsor logo onto the artwork.
+   *
+   * The areas — lounges, theatres, conference rooms — are not stands and are
+   * never bound by attach(): their fills sit outside ARTWORK_SELECTOR on
+   * purpose, so a stand can never land on one. They are found here the same way
+   * a stand is, by matching the artwork rectangle to stored geometry rather
+   * than trusting an element id that a re-export would renumber.
+   *
+   * Returns how many areas could not be found, so a caller can retry once the
+   * plan is actually laid out instead of leaving a sponsor unbranded.
+   */
+  function paintAreaLogos(svgDoc, areas, prefix) {
+    if (!svgDoc || !areas) return 0;
+    var missed = 0;
+
+    // Only the two blue fills the areas use — a tight net, so a stand-shaped
+    // rectangle of the same size elsewhere can never be mistaken for an area.
+    var candidates = Array.prototype.slice.call(svgDoc.querySelectorAll('.cls-6, .cls-8'));
+
+    areas.forEach(function (a) {
+      var id = prefix + a.key;
+      var node = svgDoc.querySelector('[id="' + id + '"]');
+
+      if (!a.logo) { if (node && node.parentNode) node.parentNode.removeChild(node); return; }
+
+      var host = null;
+      for (var i = 0; i < candidates.length; i++) {
+        var g = rectGeom(candidates[i]);
+        if (g && sameGeom(g, a.geometry, 2)) { host = candidates[i]; break; }
+      }
+      if (!host) { missed++; return; }
+
+      var box = visualBox(host);
+      if (!box || !(box.w > 0) || !(box.h > 0)) { missed++; return; }
+
+      if (!node) {
+        node = document.createElementNS(SVG_NS, 'image');
+        node.setAttribute('id', id);
+        node.style.pointerEvents = 'none';
+        host.parentNode.appendChild(node);
+      }
+      fitImage(node, a.logo, box);
+    });
+
+    return missed;
+  }
+
   function clear(svgDoc) {
     var added = '[data-overlay],[data-split-box],[data-split-label],[data-split-size]';
     Array.prototype.forEach.call(svgDoc.querySelectorAll(added), function (n) {
@@ -489,5 +537,5 @@
       .sort().join('|');
   }
 
-  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, fitImage: fitImage, visualBox: visualBox };
+  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, fitImage: fitImage, paintAreaLogos: paintAreaLogos, visualBox: visualBox };
 })(window);
