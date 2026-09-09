@@ -303,6 +303,10 @@ function tagAdminBooths() {
 // missing until a reload that happened to be laid out in time.
 let adminLabelsDeferred = false;
 
+// Matches the public plan's ceiling — see the note there. A stand must look the
+// same on both surfaces.
+const LABEL_MAX_FONT = 20;
+
 
 function repaintAdminLabels() {
   if (!svgDoc || !adminTagged || !adminLabelsDeferred) return;
@@ -453,7 +457,7 @@ function applyAdminVisual(el, status) {
       // Wrap / hyphenate / shrink to fit — never truncate. Same weight/size as
       // the public plan so a stand looks identical on both.
       BoothMap.fitLabel(textNode, company, vbox,
-        { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });
+        { family: 'Raleway, sans-serif', weight: '600', maxFont: LABEL_MAX_FONT });
       textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');
     } catch {
       // Not laid out — the Floorplan tab is hidden, or the panel has no size

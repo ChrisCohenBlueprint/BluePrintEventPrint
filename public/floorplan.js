@@ -1428,6 +1428,22 @@ function pickSuggestion(i) {
 // fires no visibility event), and the web font arriving.
 let labelsDeferred = false;
 
+// The ceiling on an exhibitor name's size, in SVG units.
+//
+// It was 9, and that was the real reason names were reported as unreadable: at
+// a whole-hall view the plan renders at roughly 0.45 px per unit, so a 9-unit
+// name is 4px on screen — a smudge. 56 of 71 names on the live plan were
+// sitting exactly at the cap, i.e. the stands had room and the cap was the only
+// thing stopping them. fitLabel still wraps, hyphenates and shrinks to fit, so
+// raising it cannot push a name outside its stand; it only stops a big stand
+// being forced to whisper.
+//
+// 20 rather than higher because the artwork sets its own type at roughly this
+// size (area names ~18-22 units, stand numbers ~7). Going further did keep
+// making the big stands bigger, but an exhibitor name has no business being the
+// largest thing on the plan.
+const LABEL_MAX_FONT = 20;
+
 
 function repaintLabels() {
   if (!svgDoc || !tagged || !labelsDeferred) return;
@@ -1518,7 +1534,7 @@ function applyVisual(n) {
     }
     // Wrap / hyphenate / shrink to fit — never truncate.
     BoothMap.fitLabel(textNode, company, vbox,
-      { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });
+      { family: 'Raleway, sans-serif', weight: '600', maxFont: LABEL_MAX_FONT });
     // Keep the name legible on a dark brand fill (white text), dark ink otherwise.
     textNode.setAttribute('fill', sponsored ? contrastText(sponsorColor) : '#111827');
     // The name is a sibling of the stand, not a child, so fading the shape
