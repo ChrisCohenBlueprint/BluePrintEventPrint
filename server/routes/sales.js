@@ -229,7 +229,7 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
      */
     const highlight = boothItems.filter(b => !b.unavailable).map(b => b.boothNumber);
     const plan = (menu.showPlan !== false && boothItems.length) ? {
-      svg: config.floorplanSvg,
+      svg: '/floorplan.svg',   // this show's artwork, uploaded or shipped
       highlight,
       booths: allBooths
         .filter(b => b.geometry)

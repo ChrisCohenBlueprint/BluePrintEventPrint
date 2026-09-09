@@ -4,6 +4,8 @@ const express = require('express');
 const sponsors = require('../models/sponsors');
 const partners = require('../models/partners');
 const countries = require('../data/countries');
+const floorplans = require('../models/floorplans');
+const config = require('../config');
 
 const router = express.Router();
 
@@ -48,6 +50,35 @@ router.get('/sponsors/recommend', async (req, res, next) => {
 router.get('/countries', (_req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.json({ countries: countries.COUNTRIES.map(c => ({ code: c.code, name: c.name, flag: c.flag, aliases: c.aliases })) });
+});
+
+/**
+ * The current show's floorplan artwork.
+ *
+ * Public, because the plan itself is public. Served from the database when a
+ * plan has been uploaded for this show, and otherwise from the file shipped in
+ * the repo — which is what keeps the event already running working with no
+ * migration and no upload.
+ *
+ * Cached hard but keyed by version, so a newly uploaded plan is fetched rather
+ * than the browser reusing the old one.
+ */
+router.get('/floorplan.svg', async (req, res, next) => {
+  try {
+    const stored = await floorplans.get();
+    res.type('image/svg+xml');
+    if (stored && stored.svg) {
+      res.set('ETag', `"${stored.version}"`);
+      res.set('Cache-Control', 'public, max-age=300');
+      if (req.get('If-None-Match') === `"${stored.version}"`) return res.status(304).end();
+      return res.send(stored.svg);
+    }
+    // Nothing uploaded for this show: the artwork that ships with the app.
+    const file = path.join(__dirname, '..', '..', 'public',
+                           String(config.floorplanSvg).replace(/^\//, ''));
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.sendFile(file);
+  } catch (e) { next(e); }
 });
 
 module.exports = router;

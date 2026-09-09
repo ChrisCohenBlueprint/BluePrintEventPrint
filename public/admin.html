@@ -695,6 +695,24 @@
           </form>
         </div>
 
+        <!-- This event's floorplan artwork. -->
+        <div class="tool-card tool-card-wide">
+          <div class="tool-header">
+            <i data-lucide="map"></i>
+            <h3>Floorplan Artwork</h3>
+          </div>
+          <p>The SVG this event's plan is drawn from. Uploading replaces it for this event only — the other events keep theirs. Stored in the database, so it survives deploys.</p>
+          <div id="artwork-meta" class="artwork-meta">Loading…</div>
+          <div id="artwork-warn" class="artwork-warn" hidden></div>
+          <button type="button" class="area-drop" id="artwork-drop" title="Drop an SVG here, or click to choose one">
+            Drop the floorplan SVG here, or click to choose
+          </button>
+          <div class="artwork-actions">
+            <a class="admin-btn" id="artwork-download" href="/floorplan.svg" download>Download current</a>
+            <button type="button" class="admin-btn danger" id="artwork-revert" hidden>Revert to the shipped plan</button>
+          </div>
+        </div>
+
         <!-- The events this deployment serves. -->
         <div class="tool-card tool-card-wide">
           <div class="tool-header">

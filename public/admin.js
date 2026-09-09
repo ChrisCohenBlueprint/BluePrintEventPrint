@@ -89,7 +89,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
 
     if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
     if (sec === 'bookings') renderBookingsTable();
-    if (sec === 'tools') { populateToolDropdowns(); loadShows(); }
+    if (sec === 'tools') { populateToolDropdowns(); loadShows(); loadArtwork(); }
     if (sec === 'leads') loadLeads();
     if (sec === 'analytics') loadAnalytics();
     if (sec === 'sponsors') loadSponsorsAdmin();
@@ -238,7 +238,9 @@ let adminTagged = false;
 async function loadAdminSVG() {
   const mount = document.getElementById('admin-svg-mount');
   try {
-    const svgRes = await fetch('/LEX27_Floorplan_Consolidated.svg');
+    // The artwork for THIS show — uploaded per event, falling back to the file
+    // shipped with the app. The page's X-Show header decides which comes back.
+    const svgRes = await fetch('/floorplan.svg');
     mount.innerHTML = await svgRes.text();
     svgDoc = mount.querySelector('svg');
     svgDoc.setAttribute('width', '100%');
@@ -2737,6 +2739,100 @@ function deleteTag(tag, uses) {
     else adminToast((res && res.error) || 'Could not delete that tag.', 'error');
   });
 }
+
+// ── Tools: this event's floorplan artwork ────────────────────────────────────
+// Uploading replaces the plan for THIS event only. The serious caveat is that
+// stands are bound to the artwork by geometry, so replacing the plan under a
+// show that already has stands can unplace them — that is warned about here
+// rather than discovered afterwards.
+async function loadArtwork() {
+  const meta = document.getElementById('artwork-meta');
+  const warn = document.getElementById('artwork-warn');
+  const revert = document.getElementById('artwork-revert');
+  if (!meta) return;
+
+  let m = null;
+  try { m = await fetch('/api/floorplan/meta').then(r => r.ok ? r.json() : null); } catch {}
+  if (!m) { meta.textContent = 'Could not read the current artwork.'; return; }
+
+  const kb = m.bytes ? ` · ${(m.bytes / 1024).toFixed(0)} KB` : '';
+  meta.textContent = m.uploaded
+    ? `Uploaded: ${m.filename}${kb}${m.uploadedAt ? ' · ' + new Date(m.uploadedAt).toLocaleString('en-GB') : ''}`
+    : `Using the plan shipped with the app (${m.filename}). Nothing uploaded for this event yet.`;
+
+  if (revert) revert.hidden = !m.uploaded;
+
+  // The warning only matters once there is something to lose.
+  if (warn) {
+    if (m.boothCount > 0) {
+      warn.hidden = false;
+      warn.textContent = `This event has ${m.boothCount} stands, and stands are matched to the artwork by their position on it. `
+        + `Replacing the plan with a differently drawn one can leave stands unplaced — they keep their bookings, but stop appearing on the map until their geometry is re-extracted. `
+        + `Safe for a new event; think twice for a live one.`;
+    } else {
+      warn.hidden = true;
+    }
+  }
+}
+
+(function wireArtwork() {
+  const drop = document.getElementById('artwork-drop');
+  if (!drop) return;
+
+  const send = async (file) => {
+    if (!file) return;
+    if (!/svg/i.test(file.type) && !/\.svg$/i.test(file.name)) {
+      return adminToast('That is not an SVG. The floorplan must be vector artwork.', 'error');
+    }
+    const meta = await fetch('/api/floorplan/meta').then(r => r.ok ? r.json() : {}).catch(() => ({}));
+    if (meta.boothCount > 0 &&
+        !confirm(`Replace the artwork for this event?\n\n${meta.boothCount} stands are positioned against the current plan. If the new one is drawn differently they may stop appearing on the map until their geometry is re-extracted. Bookings are not affected.`)) {
+      return;
+    }
+    try {
+      const svg = await file.text();
+      const res = await fetch('/api/floorplan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'image/svg+xml', 'X-Filename': file.name },
+        body: svg,
+      });
+      if (!res.ok) {
+        let msg = 'Could not upload that floorplan.';
+        try { msg = (await res.json()).error || msg; } catch {}
+        return adminToast(msg, 'error');
+      }
+      const r = await res.json();
+      adminToast(r.removed && r.removed.length
+        ? `Floorplan uploaded. Removed for safety: ${r.removed.join(', ')}.`
+        : 'Floorplan uploaded.', 'ok');
+      loadArtwork();
+    } catch (err) {
+      adminToast(err.message || 'Could not read that file.', 'error');
+    }
+  };
+
+  drop.onclick = () => {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = '.svg,image/svg+xml';
+    picker.onchange = () => send(picker.files?.[0]);
+    picker.click();
+  };
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.add('dragover');
+  }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.remove('dragover');
+  }));
+  drop.addEventListener('drop', (e) => send(e.dataTransfer?.files?.[0]));
+
+  document.getElementById('artwork-revert')?.addEventListener('click', async () => {
+    if (!confirm('Revert this event to the floorplan shipped with the app? The uploaded one is removed.')) return;
+    const res = await fetch('/api/floorplan', { method: 'DELETE' });
+    adminToast(res.ok ? 'Reverted to the shipped plan.' : 'Could not revert.', res.ok ? 'ok' : 'error');
+    loadArtwork();
+  });
+})();
 
 // ── The event this console is showing ────────────────────────────────────────
 // Admins see every event, so switching is a navigation, not a permission check:

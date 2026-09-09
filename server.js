@@ -19,6 +19,7 @@ const partners     = require('./server/models/partners');
 const tags         = require('./server/models/tags');
 const planAreas    = require('./server/models/plan-areas');
 const showsModel   = require('./server/models/shows');
+const floorplansModel = require('./server/models/floorplans');
 const menus        = require('./server/models/menus');
 const booths       = require('./server/models/booths');
 const tracking   = require('./server/services/tracking');
@@ -42,6 +43,7 @@ async function start() {
   await menus.ensureIndexes();
   await tags.ensureIndexes();
   await showsModel.ensureIndexes();
+  await floorplansModel.ensureIndexes();
   // The event this deployment already runs becomes a real row, so it is
   // editable alongside any new ones rather than living only in config.
   await showsModel.ensureSeeded();

@@ -174,7 +174,9 @@ async function load() {
   wireCollapsers();
   const mount = document.getElementById('svg-mount');
   try {
-    const svgRes = await fetch('/LEX27_Floorplan_Consolidated.svg');
+    // The artwork for THIS show — uploaded per event, falling back to the file
+    // shipped with the app. The page's X-Show header decides which comes back.
+    const svgRes = await fetch('/floorplan.svg');
     mount.innerHTML = await svgRes.text();
     svgDoc = mount.querySelector('svg');
     svgDoc.setAttribute('width', '100%');

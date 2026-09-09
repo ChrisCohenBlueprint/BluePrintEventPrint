@@ -10,6 +10,8 @@ const partners  = require('../models/partners');
 const salesTeam = require('../data/sales-team');
 const planAreas = require('../models/plan-areas');
 const showsModel = require('../models/shows');
+const floorplans = require('../models/floorplans');
+const boothsModel = require('../models/booths');
 const sockets   = require('../sockets');
 const planAreaData = new Map(require('../data/plan-areas').AREAS.map(a => [a.key, a]));
 const holds     = require('../services/holds');
@@ -18,6 +20,51 @@ const { track } = require('../services/tracking');
 const csv       = require('../lib/csv');
 
 const router = express.Router();
+
+// ─── Floorplan artwork ───────────────────────────────────────────────────────
+// One plan per show. Uploaded as a RAW body rather than JSON: a 2 MB SVG
+// base64'd into a JSON string would breach the 3 MB body limit the rest of the
+// app uses, and there is no reason to encode it at all.
+const rawSvg = express.text({ type: ['image/svg+xml', 'text/plain', 'application/octet-stream'],
+                              limit: '8mb' });
+
+router.get('/floorplan/meta', async (_req, res, next) => {
+  try {
+    const f = await floorplans.get();
+    const booths = await boothsModel.col().countDocuments({ showId: config.showId });
+    res.json(f
+      ? { uploaded: true, filename: f.filename, bytes: f.bytes,
+          uploadedAt: f.uploadedAt, uploadedBy: f.uploadedBy, boothCount: booths }
+      : { uploaded: false, filename: config.floorplanSvg, boothCount: booths });
+  } catch (e) { next(e); }
+});
+
+router.post('/floorplan', rawSvg, async (req, res, next) => {
+  try {
+    const r = await floorplans.save(req.body, {
+      filename: String(req.get('X-Filename') || 'floorplan.svg'),
+      actor: req.admin?.user || null,
+    });
+    if (!r.ok) {
+      const why = r.reason === 'empty'     ? 'the file was empty'
+                : r.reason === 'not_svg'   ? 'that does not look like an SVG'
+                : r.reason === 'too_large' ? 'the file is larger than 8 MB'
+                : 'it could not be stored';
+      return res.status(400).json({ error: `Could not upload the floorplan — ${why}.` });
+    }
+    track({ type: 'floorplan.upload', boothNumber: null, actor: req.admin?.user || 'unknown',
+            meta: { bytes: r.bytes, removed: r.removed } });
+    res.json({ ok: true, ...r });
+  } catch (e) { next(e); }
+});
+
+router.delete('/floorplan', requireOwner, async (req, res, next) => {
+  try {
+    const gone = await floorplans.remove();
+    track({ type: 'floorplan.revert', boothNumber: null, actor: req.admin?.user || 'unknown', meta: {} });
+    res.json({ ok: true, reverted: gone });
+  } catch (e) { next(e); }
+});
 
 // ─── Shows ───────────────────────────────────────────────────────────────────
 // The events this deployment serves. Listed for any admin; created and edited
