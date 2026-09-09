@@ -2782,31 +2782,25 @@ function planCard(row, isCurrent) {
   // The preview is an <img>, not inline SVG: an image cannot run anything, so
   // even an unsanitised plan could not execute here. It is also why the ground
   // is light — the artwork is drawn for paper.
-  let preview;
-  if (row.uploaded || row.boothCount > 0) {
-    preview = document.createElement('img');
-    preview.className = 'plan-preview';
-    preview.loading = 'lazy';
-    preview.alt = `${row.name || row.showId} floorplan`;
-    preview.src = `/floorplan.svg?show=${encodeURIComponent(row.slug)}&v=${row.uploadedAt || 'shipped'}`;
-    preview.onerror = () => {
-      const ph = document.createElement('div');
-      ph.className = 'plan-preview-empty';
-      ph.textContent = 'Could not load this plan';
-      preview.replaceWith(ph);
-    };
-  } else {
-    preview = document.createElement('div');
-    preview.className = 'plan-preview-empty';
-    preview.textContent = 'No floorplan yet — upload one to get started';
-  }
+  const preview = document.createElement('img');
+  preview.className = 'plan-preview';
+  preview.loading = 'lazy';
+  preview.alt = `${row.name || row.showId} floorplan`;
+  preview.src = `/floorplan.svg?show=${encodeURIComponent(row.slug)}&v=${row.uploadedAt || 'shipped'}`;
+  preview.onerror = () => {
+    const ph = document.createElement('div');
+    ph.className = 'plan-preview-empty';
+    ph.textContent = 'Could not load this plan';
+    preview.replaceWith(ph);
+  };
 
   const meta = document.createElement('div');
   meta.className = 'plan-meta';
   const kb = row.bytes ? ` · ${(row.bytes / 1024).toFixed(0)} KB` : '';
+  const stands = row.boothCount > 0 ? ` · ${row.boothCount} stands` : '';
   meta.textContent = row.uploaded
-    ? `${row.filename}${kb} · uploaded ${new Date(row.uploadedAt).toLocaleDateString('en-GB')} · ${row.boothCount} stands`
-    : `Using the plan shipped with the app · ${row.boothCount} stands`;
+    ? `${row.filename}${kb} · uploaded ${new Date(row.uploadedAt).toLocaleDateString('en-GB')}${stands}`
+    : `Using the plan shipped with the app${stands}`;
 
   const actions = document.createElement('div');
   actions.className = 'plan-actions';
@@ -2814,7 +2808,7 @@ function planCard(row, isCurrent) {
   const up = document.createElement('button');
   up.type = 'button';
   up.className = 'admin-btn';
-  up.textContent = row.uploaded || row.boothCount > 0 ? 'Replace' : 'Upload';
+  up.textContent = row.uploaded ? 'Replace' : 'Upload';
   up.onclick = () => pickPlan(row);
 
   const dl = document.createElement('a');

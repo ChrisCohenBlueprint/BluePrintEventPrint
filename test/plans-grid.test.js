@@ -56,8 +56,14 @@ const PLANS = [
   const lex = cards[0], lna = cards[1], lme = cards[2];
   check('an event with stands previews its plan', !!lex.previewSrc && /show=lex/.test(lex.previewSrc), lex.previewSrc);
   check('an uploaded plan previews too', !!lna.previewSrc && /show=lna/.test(lna.previewSrc), lna.previewSrc);
-  check('an empty event says so instead of a broken image',
-        !lme.previewSrc && /No floorplan yet/i.test(lme.emptyState || ''), lme.emptyState);
+  // Every card previews a plan, uploaded or not: an event with nothing uploaded
+  // still falls back to the shipped artwork, so there is always something to
+  // show. An empty state here read as "this event has no floorplan" for an
+  // event that plainly had one.
+  check('an event with nothing uploaded still previews the shipped plan',
+        !!lme.previewSrc && /show=lme/.test(lme.previewSrc), lme.previewSrc || lme.emptyState);
+  check('all three cards show a preview',
+        cards.every(c => !!c.previewSrc), cards.map(c => c.previewSrc ? 'y' : 'n').join(''));
 
   check('each download targets its own event', lex.downloadHref.includes('show=lex') &&
         lna.downloadHref.includes('show=lna'), `${lex.downloadHref} / ${lna.downloadHref}`);
@@ -67,9 +73,9 @@ const PLANS = [
   check('Remove is offered only where something was uploaded',
         !lex.buttons.includes('Remove') && lna.buttons.includes('Remove'),
         `lex ${lex.buttons.join(',')} | lna ${lna.buttons.join(',')}`);
-  check('an event with a plan says Replace, an empty one says Upload',
-        lex.buttons[0] === 'Replace' && lme.buttons[0] === 'Upload',
-        `${lex.buttons[0]} / ${lme.buttons[0]}`);
+  check('an uploaded plan says Replace, one without says Upload',
+        lna.buttons[0] === 'Replace' && lme.buttons[0] === 'Upload',
+        `${lna.buttons[0]} / ${lme.buttons[0]}`);
   check('the event being viewed is marked', cards.filter(c => c.current).length <= 1);
 
   // The part that matters: uploading from this page must target the card's

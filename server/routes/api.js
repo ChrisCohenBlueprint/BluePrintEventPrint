@@ -61,10 +61,11 @@ router.get('/floorplans', async (_req, res, next) => {
   try {
     const rows = await Promise.all(showsModel.list().map(sh =>
       showContext.runAs(sh.showId, async () => {
-        const f = await floorplans.get(sh.showId);
-        const boothCount = await boothsModel.col().countDocuments({ showId: sh.showId });
+        const id = sh.showId || config.defaultShow;
+        const f = await floorplans.get(id);
+        const boothCount = await boothsModel.col().countDocuments({ showId: id });
         return {
-          slug: sh.slug, showId: sh.showId, name: sh.name || sh.showId, active: sh.active !== false,
+          slug: sh.slug, showId: id, name: sh.name || id, active: sh.active !== false,
           uploaded: !!f,
           filename: f ? f.filename : config.floorplanSvg,
           bytes: f ? f.bytes : null,

@@ -54,22 +54,53 @@ async function refresh() {
 }
 
 /**
- * Make sure the event this deployment was already running exists as a row.
+ * The three events this system runs, created on boot if they are not there.
  *
- * Without this the first boot after the change would find an empty table and
- * fall back to config — which works, but means the show an organiser is looking
- * at is not editable. Seeding it makes the existing event a first-class row
- * like any other.
+ * The organiser runs Lubricant Expo in Europe, North America and the Middle
+ * East. Those are facts about the business, not something to be assembled by
+ * hand in an admin screen before anything works — so they are seeded, and the
+ * three appear without anyone creating them.
+ *
+ * The existing event keeps its show id. Every booth, lead, tag and setting is
+ * filed under it, so changing it would orphan the lot; only its slug and
+ * display name are set, and neither has anything stored against it. The two new
+ * events take ids matching the existing one's year, so the set reads
+ * consistently.
  */
+const DEFAULT_EVENTS = [
+  { slugs: ['lex'], suffix: 'LEX', name: 'Lubricant Expo Europe' },
+  { slugs: ['lna'], suffix: 'LNA', name: 'Lubricant Expo North America' },
+  { slugs: ['lme'], suffix: 'LME', name: 'Lubricant Expo Middle East' },
+];
+
 async function ensureSeeded() {
   await refresh();
-  if (cache.length) return cache;
 
-  for (const s of config.shows) {
+  // The year the running event uses — "LEX26" gives "26", so the new events
+  // become LNA26 and LME26 rather than a year picked out of the air.
+  const existing = String(config.defaultShow || '');
+  const year = (existing.match(/(\d{2,4})\s*$/) || [])[1] || '';
+
+  for (const ev of DEFAULT_EVENTS) {
+    const id = ev.suffix === existing.replace(/\d+$/, '') ? existing : `${ev.suffix}${year}`;
+    const slug = ev.slugs[0];
+
+    // Never touch an event that already exists beyond giving it a readable
+    // name: it may have a slug someone chose, and it certainly has data.
+    const already = cache.find(c => c.showId === id);
+    if (already) {
+      if (!already.name || already.name === already.showId) {
+        await col().updateOne({ showId: id }, { $set: { name: ev.name } });
+      }
+      continue;
+    }
+    // A slug already used by another event would collide on the unique index.
+    if (cache.some(c => c.slug === slug)) continue;
+
     await col().updateOne(
-      { showId: s.id },
-      { $setOnInsert: { slug: s.slug, showId: s.id, name: s.id, active: true, order: 0,
-                        createdAt: new Date() } },
+      { showId: id },
+      { $setOnInsert: { slug, showId: id, name: ev.name, active: true,
+                        order: DEFAULT_EVENTS.indexOf(ev), createdAt: new Date() } },
       { upsert: true });
   }
   return refresh();
