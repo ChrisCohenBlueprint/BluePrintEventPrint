@@ -686,6 +686,34 @@
           </form>
         </div>
 
+        <!-- The events this deployment serves. -->
+        <div class="tool-card tool-card-wide">
+          <div class="tool-header">
+            <i data-lucide="layers"></i>
+            <h3>Events</h3>
+          </div>
+          <p>Every event this system runs. Each one has its own stands, pricing, currency, sponsorship, leads and artwork — nothing is shared between them. Adding one gives it a URL straight away; it starts empty until its floorplan is uploaded.</p>
+          <form id="show-form" class="tool-form">
+            <div class="tool-form-row">
+              <div>
+                <label>Name</label>
+                <input id="show-name" class="admin-input" type="text" maxlength="80" placeholder="e.g. Lubricant Expo North America" autocomplete="off">
+              </div>
+              <div>
+                <label>URL name</label>
+                <input id="show-slug" class="admin-input" type="text" maxlength="24" placeholder="lna" autocomplete="off">
+              </div>
+              <div>
+                <label>Show id</label>
+                <input id="show-id" class="admin-input" type="text" maxlength="32" placeholder="LNA27" autocomplete="off">
+              </div>
+              <button class="admin-btn success" type="submit">Add event</button>
+            </div>
+            <p class="settings-hint">The show id is permanent — every stand, lead and setting is filed under it, so it cannot be changed later. The URL name can.</p>
+          </form>
+          <div id="show-list" class="area-list"></div>
+        </div>
+
         <!-- The plan's named areas — lounges, theatres, conference rooms — and
              the sponsor logo drawn on each. -->
         <div class="tool-card tool-card-wide">

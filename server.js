@@ -18,6 +18,7 @@ const users        = require('./server/models/users');
 const partners     = require('./server/models/partners');
 const tags         = require('./server/models/tags');
 const planAreas    = require('./server/models/plan-areas');
+const showsModel   = require('./server/models/shows');
 const menus        = require('./server/models/menus');
 const booths       = require('./server/models/booths');
 const tracking   = require('./server/services/tracking');
@@ -40,6 +41,10 @@ async function start() {
   await partners.ensureIndexes();
   await menus.ensureIndexes();
   await tags.ensureIndexes();
+  await showsModel.ensureIndexes();
+  // The event this deployment already runs becomes a real row, so it is
+  // editable alongside any new ones rather than living only in config.
+  await showsModel.ensureSeeded();
   await planAreas.ensureIndexes();
   await users.bootstrap({ username: config.adminUser, password: config.adminPass });
   // Promote the configured bootstrap account to owner (team-management tier).
