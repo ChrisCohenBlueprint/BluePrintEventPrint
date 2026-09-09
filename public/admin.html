@@ -79,7 +79,7 @@
           <div class="kpi-icon"><i data-lucide="euro"></i></div>
           <div class="kpi-body">
             <div class="kpi-label">Revenue Earned</div>
-            <div class="kpi-value" id="kpi-earned">€0</div>
+            <div class="kpi-value" id="kpi-earned">—</div>
             <div class="kpi-sub" id="kpi-earned-sqm">0 m² sold</div>
           </div>
         </div>
@@ -88,7 +88,7 @@
           <div class="kpi-body">
             <div class="kpi-label">Available Space</div>
             <div class="kpi-value" id="kpi-avail-sqm">— m²</div>
-            <div class="kpi-sub" id="kpi-avail-rev">€— potential</div>
+            <div class="kpi-sub" id="kpi-avail-rev">— potential</div>
           </div>
         </div>
         <div class="kpi-card">
@@ -131,19 +131,19 @@
         <h3>Revenue Breakdown</h3>
         <div class="rev-row">
           <span class="rev-label"><span class="dot yellow"></span> Booked Revenue</span>
-          <span class="rev-val" id="rev-booked">€0</span>
+          <span class="rev-val" id="rev-booked">—</span>
         </div>
         <div class="rev-row">
           <span class="rev-label"><span class="dot orange"></span> On Hold (Potential)</span>
-          <span class="rev-val" id="rev-held">€0</span>
+          <span class="rev-val" id="rev-held">—</span>
         </div>
         <div class="rev-row">
           <span class="rev-label"><span class="dot white"></span> Available Revenue</span>
-          <span class="rev-val" id="rev-avail">€0</span>
+          <span class="rev-val" id="rev-avail">—</span>
         </div>
         <div class="rev-row total-row">
           <span class="rev-label">Total Floor Value</span>
-          <span class="rev-val" id="rev-total">€0</span>
+          <span class="rev-val" id="rev-total">—</span>
         </div>
       </div>
     </section>
@@ -188,7 +188,7 @@
       <div id="admin-tooltip" class="fp-tooltip hidden">
         <div class="tt-label" id="att-label">Stand 001</div>
         <div class="tt-status" id="att-status">Available</div>
-        <div class="tt-price" id="att-price">€0</div>
+        <div class="tt-price" id="att-price"></div>
       </div>
       <!-- Sponsorable area panel. Same slot as the stand panel, and mutually
            exclusive with it — clicking a lounge on the plan edits the lounge
@@ -259,7 +259,7 @@
         <div class="aba-deal-section" id="aba-deal-section" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
           <div style="font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Deal Details</div>
           <div style="margin-bottom:8px;">
-            <label style="font-size:11px; color:var(--muted); display:block; margin-bottom:4px;">Actual Sale Price (€)</label>
+            <label style="font-size:11px; color:var(--muted); display:block; margin-bottom:4px;">Actual Sale Price (<span class="currency-label">€</span>)</label>
             <input type="number" id="aba-actual-price" class="admin-input" placeholder="e.g. 18500" style="width:100%; font-size:13px;">
           </div>
           <div style="margin-bottom:10px;">
@@ -279,14 +279,23 @@
         <div class="settings-block">
           <label class="settings-label">Price per unit</label>
           <div class="settings-rate-row">
-            <span class="rate-current" id="rate-current">€—</span>
-            <input type="number" id="rate-input" class="admin-input" placeholder="new €/unit, e.g. 600" min="1" step="1">
+            <span class="rate-current" id="rate-current">—</span>
+            <input type="number" id="rate-input" class="admin-input" placeholder="new rate per unit, e.g. 600" min="1" step="1">
             <input type="password" id="rate-password" class="admin-input" placeholder="Your password" autocomplete="current-password">
             <button type="button" id="rate-save" class="admin-btn success">Update rate</button>
           </div>
           <p class="settings-hint">Recalculates every stand's list price (size × rate) across the board. Negotiated deal prices are left unchanged. Requires your password.</p>
         </div>
         <div class="settings-block">
+          <label class="settings-label">Currency</label>
+          <div class="unit-toggle">
+            <button type="button" data-currency="EUR" class="admin-btn">€ EUR</button>
+            <button type="button" data-currency="USD" class="admin-btn">$ USD</button>
+            <button type="button" data-currency="GBP" class="admin-btn">£ GBP</button>
+            <button type="button" data-currency="AED" class="admin-btn">AED</button>
+          </div>
+          <p class="settings-hint">The symbol prices are shown in, for this event only. A label — it does not convert any number, so a rate of 600 stays 600.</p>
+
           <label class="settings-label">Area unit</label>
           <div class="unit-toggle">
             <button type="button" id="unit-m"  class="admin-btn">m²</button>
@@ -501,14 +510,14 @@
           <option value="gold">Gold</option>
           <option value="silver" selected>Silver</option>
         </select>
-        <input type="number" id="sp-new-price" class="admin-input" placeholder="Price (€, optional)" min="0" step="1">
+        <input type="number" id="sp-new-price" class="admin-input" placeholder="Price (optional)" min="0" step="1">
         <button type="submit" class="admin-btn success"><i data-lucide="plus"></i> Add package</button>
         <span class="sponsor-add-hint">Blurb and perks are set from the spreadsheet import above.</span>
       </form>
       <div class="sponsors-admin-wrap">
         <table class="sponsors-admin-table" id="sponsors-admin-table">
           <thead><tr>
-            <th>Option</th><th>Tier</th><th>Price (€)</th><th>Availability</th>
+            <th>Option</th><th>Tier</th><th>Price (<span class="currency-label">€</span>)</th><th>Availability</th>
             <th>Image URL</th><th>Video URL</th><th>Offered</th><th>Sold out</th><th></th>
           </tr></thead>
           <tbody id="sponsors-admin-tbody"></tbody>

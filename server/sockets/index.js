@@ -754,6 +754,20 @@ function register(io) {
     }));
 
     // Switch the area unit (m² ↔ ft²). A display label only — no numbers change.
+    // Which symbol this show's prices print with. Not password-gated like the
+    // rate is: that one rewrites every stand's list price, this one changes a
+    // symbol and touches no number.
+    socket.on('settings:set-currency', requireAdmin(socket, 'settings:set-currency', async ({ currency }) => {
+      const r = await settings.setCurrency(currency);
+      if (!r.ok) return { ok: false, error: 'That is not a currency we support.' };
+      const st = await settings.get();
+      io.emit('settings', { unit: st.unit, currency: st.currency, currencySymbol: st.currencySymbol });
+      io.to(ADMIN_ROOM).emit('settings', { unit: st.unit, currency: st.currency,
+        currencySymbol: st.currencySymbol, ratePerSqm: st.ratePerSqm });
+      log(io, `💱 Prices now shown in ${escapeHtml(r.currency)}`, 'admin');
+      return { ok: true, ...r };
+    }));
+
     socket.on('settings:set-unit', requireAdmin(socket, 'settings:set-unit', async ({ unit }) => {
       const saved = await settings.setUnit(unit);
       io.emit('settings', { unit: saved.unit });               // public: label only
@@ -795,7 +809,8 @@ function register(io) {
         // Unit is a harmless display label (public). The €/unit rate is
         // admin-only: public sqm × rate would reveal list prices.
         const st = await settings.get();
-        socket.emit('settings', { unit: st.unit, ratePerSqm: isAdmin ? st.ratePerSqm : undefined,
+        socket.emit('settings', { unit: st.unit, currency: st.currency, currencySymbol: st.currencySymbol,
+          ratePerSqm: isAdmin ? st.ratePerSqm : undefined,
           // Whether destructive admin actions need the recovery key, so the UI
           // knows to prompt for it. Admin-only — never advertised to the public.
           recoveryRequired: isAdmin ? config.recoveryEnabled() : undefined });

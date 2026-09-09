@@ -37,11 +37,17 @@
     return n;
   };
 
+  // Both come from the show, not from this file: LNA prices in dollars per
+  // square foot while LEX prices in euros per square metre, and a proposal that
+  // says otherwise is wrong in front of a client. Defaults match what this page
+  // printed before, so a show that has set neither is unchanged.
+  let CUR = '€', AREA_UNIT = 'm²';
+
   const money = (n) => (n == null || !Number.isFinite(Number(n)))
     ? '—'
-    : '€' + Number(n).toLocaleString('en-GB', { maximumFractionDigits: 0 });
+    : CUR + Number(n).toLocaleString('en-GB', { maximumFractionDigits: 0 });
 
-  const area = (n) => (n == null ? '—' : `${Number(n).toLocaleString('en-GB', { maximumFractionDigits: 1 })} m²`);
+  const area = (n) => (n == null ? '—' : `${Number(n).toLocaleString('en-GB', { maximumFractionDigits: 1 })} ${AREA_UNIT}`);
 
   let toastTimer = null;
   function toast(msg, kind = '') {
@@ -403,7 +409,7 @@
     d.placeholder = 'Detail (optional)'; d.value = item.detail || '';
 
     const p = el('input'); p.type = 'number'; p.className = 'admin-input c-price';
-    p.placeholder = '€'; p.min = '0'; p.value = item.price == null ? '' : item.price;
+    p.placeholder = CUR.trim(); p.min = '0'; p.value = item.price == null ? '' : item.price;
 
     const rm = el('button', 'icon-btn', '×');
     rm.title = 'Remove line';
@@ -528,6 +534,9 @@
       $('nav-username').textContent = me.name || me.user;
       // Only an admin or the owner previewing this dashboard gets a way back.
       $('nav-back-admin').classList.toggle('hidden', !me.isAdmin);
+
+      if (cat.currencySymbol) CUR = cat.currencySymbol;
+      if (cat.unit) AREA_UNIT = cat.unit === 'ft' ? 'ft²' : 'm²';
 
       state.sponsors = cat.sponsors || [];
       state.booths   = cat.booths || [];

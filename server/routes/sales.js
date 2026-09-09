@@ -105,7 +105,12 @@ router.get('/api/sales/catalogue', async (_req, res, next) => {
       }))
       .sort((a, b) => String(a.boothNumber).localeCompare(String(b.boothNumber), undefined, { numeric: true }));
 
-    res.json({ sponsors: remaining, soldOutCount, booths: available, rate, showId: config.showId });
+    // The show's own unit and currency travel with the catalogue: this
+    // dashboard and the printed proposal used to hardcode € and m², so a US
+    // proposal went out priced in euros per square metre.
+    const st = await settings.get();
+    res.json({ sponsors: remaining, soldOutCount, booths: available, rate, showId: config.showId,
+               unit: st.unit, currencySymbol: st.currencySymbol });
   } catch (e) { next(e); }
 });
 
@@ -252,6 +257,9 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
           .reduce((sum, i) => sum + (Number(i.price) || 0), 0)
       : null;
 
+    // The show's own unit and currency — this proposal is printed for a client,
+    // so it must not say "€" and "m²" on a North America deal.
+    const show = await settings.get();
     res.json({
       ref: menu.ref,
       title: menu.title || 'Sponsorship & Stand Proposal',
@@ -259,6 +267,8 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
       intro: menu.intro || '',
       preparedBy: { name: owner?.displayName || menu.owner, email: owner?.email || '' },
       showId: config.showId,
+      unit: show.unit,
+      currencySymbol: show.currencySymbol,
       floorplanSponsor,
       showPrices: withPrices,
       sponsors: sponsorItems,

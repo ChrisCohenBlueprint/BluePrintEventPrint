@@ -476,7 +476,7 @@ function showAdminTooltip(e, id) {
   const b = booths[id];
   document.getElementById('att-label').textContent = `Stand ${shownB(b) || id}`;
   document.getElementById('att-status').textContent = cap(b?.status || 'unknown');
-  document.getElementById('att-price').textContent = (b && b.listPrice != null) ? `€${b.listPrice.toLocaleString()}` : '';
+  document.getElementById('att-price').textContent = (b && b.listPrice != null) ? `${CUR}${b.listPrice.toLocaleString()}` : '';
   adminTooltip.classList.remove('hidden');
   moveAdminTooltip(e);
 }
@@ -543,8 +543,12 @@ function clearMultiSelect() {
 const dealOf = (b) => (b && b.assignment) || {};
 
 // Show-level settings pushed from the server: area unit (m²/ft², a label only)
-// and the €/unit rate. Both update live via the 'settings' socket event.
+// and the rate. All update live via the 'settings' socket event.
 let UNIT = 'm²', RATE = null;
+// The show's currency symbol, pushed from its settings. '€' until told otherwise,
+// so a show that has never set one prints exactly as it always did.
+let CUR = '€';
+let CURRENCY = 'EUR';
 let recoveryRequired = false;   // failsafe: destructive actions need the recovery key
 
 // The number to SHOW for a stand: the admin-set override if present, else the
@@ -576,7 +580,7 @@ function renderAdminBoothAction(n) {
   document.getElementById('aba-id').textContent      = `Stand ${shownB(b)}`;
   document.getElementById('aba-status').textContent  = cap(b.status);
   document.getElementById('aba-sqm').textContent     = `${b.sqm} ${UNIT}`;
-  document.getElementById('aba-price').textContent   = `€${(b.listPrice || 0).toLocaleString()}`;
+  document.getElementById('aba-price').textContent   = `${CUR}${(b.listPrice || 0).toLocaleString()}`;
   document.getElementById('aba-company').textContent = d.company || '—';
   document.getElementById('aba-viewers').textContent = b.viewers || 0;
   document.getElementById('aba-clicks').textContent  = b.clicks || 0;
@@ -678,7 +682,7 @@ function renderBookingsTable() {
     stand.appendChild(strong);
 
     cell(tr).textContent = `${b.sqm} ${UNIT}`;
-    cell(tr).textContent = `€${(b.listPrice || 0).toLocaleString()}`;
+    cell(tr).textContent = `${CUR}${(b.listPrice || 0).toLocaleString()}`;
 
     const priceTd = cell(tr);
     const priceIn = document.createElement('input');
@@ -1080,7 +1084,7 @@ function updateMovePreview() {
   const from = booths[document.getElementById('move-from')?.value];
   const to   = booths[document.getElementById('move-to')?.value];
   if (!from || !to) { el.classList.add('hidden'); return; }
-  const eur = n => '€' + Number(n || 0).toLocaleString();
+  const eur = n => CUR + Number(n || 0).toLocaleString();
   const dealFrom = dealOf(from);
   const rate = (dealFrom.actualPrice != null && from.sqm > 0) ? dealFrom.actualPrice / from.sqm : null;
   const newCost = rate != null ? Math.round(rate * to.sqm) : to.listPrice;
@@ -1089,7 +1093,7 @@ function updateMovePreview() {
     `<span class="mv-dir">${dir}</span> ` +
     `<b>${esc(dealFrom.company || 'Booking')}</b>: ` +
     `${from.sqm} ${UNIT} → <b>${to.sqm} ${UNIT}</b> · ` +
-    `${eur(dealFrom.actualPrice ?? from.listPrice)} → <b>${eur(newCost)}</b>` +
+    `${money(dealFrom.actualPrice ?? from.listPrice)} → <b>${money(newCost)}</b>` +
     (rate != null ? ` <span class="mv-rate">(rate kept)</span>` : ``);
   el.classList.remove('hidden');
 }
@@ -1305,16 +1309,21 @@ socket.on('floorplan-sponsor', (s) => {
   });
 });
 
-// Show settings (area unit + €/unit rate). Re-render everything that prints a
+// Show settings (area unit, currency, rate). Re-render everything that prints a
 // size or a rate so the label/price updates live.
 socket.on('settings', (s) => {
   if (s && s.unit) UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
+  if (s && s.currencySymbol) CUR = s.currencySymbol;
+  if (s && s.currency) CURRENCY = s.currency;
   if (s && s.ratePerSqm != null) RATE = s.ratePerSqm;
   if (s && s.recoveryRequired !== undefined) recoveryRequired = !!s.recoveryRequired;
   document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
-  const rf = document.getElementById('rate-current'); if (rf && RATE != null) rf.textContent = `€${RATE}/${UNIT}`;
+  document.querySelectorAll('.currency-label').forEach(el => { el.textContent = CUR.trim(); });
+  const rf = document.getElementById('rate-current'); if (rf && RATE != null) rf.textContent = `${CUR}${RATE}/${UNIT}`;
   const uBtnM = document.getElementById('unit-m'), uBtnF = document.getElementById('unit-ft');
   if (uBtnM && uBtnF) { uBtnM.classList.toggle('active', UNIT === 'm²'); uBtnF.classList.toggle('active', UNIT === 'ft²'); }
+  document.querySelectorAll('[data-currency]').forEach(b =>
+    b.classList.toggle('active', b.getAttribute('data-currency') === CURRENCY));
   updateOverview(); renderBookingsTable(); populateToolDropdowns();
 });
 
@@ -1324,10 +1333,10 @@ document.getElementById('rate-save')?.addEventListener('click', () => {
   const password = document.getElementById('rate-password').value;
   if (!Number.isFinite(rate) || rate <= 0) return adminToast('Enter a valid rate (a positive number).', 'error');
   if (!password) return adminToast('Enter your password to change the rate.', 'error');
-  if (!confirm(`Set the rate to €${rate}/${UNIT} and reprice every stand's list price? Negotiated deals are kept.`)) return;
+  if (!confirm(`Set the rate to ${CUR}${rate}/${UNIT} and reprice every stand's list price? Negotiated deals are kept.`)) return;
   socket.emit('settings:set-rate', { rate, password }, (res) => {
     if (res && res.ok) {
-      adminToast(`Rate set to €${res.ratePerSqm}/${UNIT} — ${res.repriced} stands repriced.`, 'ok');
+      adminToast(`Rate set to ${CUR}${res.ratePerSqm}/${UNIT} — ${res.repriced} stands repriced.`, 'ok');
       document.getElementById('rate-input').value = '';
       document.getElementById('rate-password').value = '';
     } else adminToast((res && res.error) || 'Could not update the rate.', 'error');
@@ -1336,6 +1345,18 @@ document.getElementById('rate-save')?.addEventListener('click', () => {
 ['m', 'ft'].forEach(u => document.getElementById(`unit-${u}`)?.addEventListener('click', () => {
   socket.emit('settings:set-unit', { unit: u }, (res) => {
     if (!(res && res.ok)) adminToast((res && res.error) || 'Could not change the unit.', 'error');
+  });
+}));
+
+// Currency. Like the unit, this is a label — it changes no stored number, which
+// the confirm makes explicit so nobody expects €600 to become its dollar value.
+document.querySelectorAll('[data-currency]').forEach(btn => btn.addEventListener('click', () => {
+  const code = btn.getAttribute('data-currency');
+  if (code === CURRENCY) return;
+  if (!confirm(`Show this event's prices in ${code}?\n\nThis changes the symbol only — a rate of ${RATE ?? '600'} stays ${RATE ?? '600'}, it is not converted.`)) return;
+  socket.emit('settings:set-currency', { currency: code }, (res) => {
+    if (res && res.ok) adminToast(`Prices now shown in ${res.currency}.`, 'ok');
+    else adminToast((res && res.error) || 'Could not change the currency.', 'error');
   });
 }));
 
@@ -1394,10 +1415,10 @@ function updateOverview() {
   const soldPct = totalSqm > 0 ? Math.round((soldSqm / totalSqm) * 100) : 0;
   const heldPct = totalSqm > 0 ? Math.round((heldSqm / totalSqm) * 100) : 0;
 
-  el('kpi-earned').textContent = `€${earnedRev.toLocaleString()}`;
+  el('kpi-earned').textContent = `${CUR}${earnedRev.toLocaleString()}`;
   el('kpi-earned-sqm').textContent = `${soldSqm.toLocaleString()} ${UNIT} sold`;
   el('kpi-avail-sqm').textContent = `${availSqm.toLocaleString()} ${UNIT}`;
-  el('kpi-avail-rev').textContent = `€${availRev.toLocaleString()} potential`;
+  el('kpi-avail-rev').textContent = `${CUR}${availRev.toLocaleString()} potential`;
   el('kpi-held-sqm').textContent = `${heldSqm.toLocaleString()} ${UNIT}`;
   el('kpi-held-count').textContent = `${held.length} stands`;
   el('kpi-total-sqm').textContent = `${totalSqm.toLocaleString()} ${UNIT}`;
@@ -1405,17 +1426,17 @@ function updateOverview() {
   el('fill-pct').textContent = `${fillPct}%`;
   el('fill-bar-sold').style.width = `${soldPct}%`;
   el('fill-bar-held').style.width = `${heldPct}%`;
-  el('rev-booked').textContent = `€${earnedRev.toLocaleString()}`;
-  el('rev-held').textContent = `€${heldRev.toLocaleString()}`;
-  el('rev-avail').textContent = `€${availRev.toLocaleString()}`;
-  el('rev-total').textContent = `€${totalRev.toLocaleString()}`;
+  el('rev-booked').textContent = `${CUR}${earnedRev.toLocaleString()}`;
+  el('rev-held').textContent = `${CUR}${heldRev.toLocaleString()}`;
+  el('rev-avail').textContent = `${CUR}${availRev.toLocaleString()}`;
+  el('rev-total').textContent = `${CUR}${totalRev.toLocaleString()}`;
 }
 
 function updateOverviewFromStats(s) {
-  el('kpi-earned').textContent = `€${s.earnedRev.toLocaleString()}`;
+  el('kpi-earned').textContent = `${CUR}${s.earnedRev.toLocaleString()}`;
   el('kpi-earned-sqm').textContent = `${s.soldSqm.toLocaleString()} ${UNIT} sold`;
   el('kpi-avail-sqm').textContent = `${s.availSqm.toLocaleString()} ${UNIT}`;
-  el('kpi-avail-rev').textContent = `€${s.availRev.toLocaleString()} potential`;
+  el('kpi-avail-rev').textContent = `${CUR}${s.availRev.toLocaleString()} potential`;
   el('kpi-held-sqm').textContent = `${s.heldSqm.toLocaleString()} ${UNIT}`;
   el('kpi-held-count').textContent = `${s.heldBooths} stands`;
   el('kpi-total-sqm').textContent = `${s.totalSqm.toLocaleString()} ${UNIT}`;
@@ -1426,10 +1447,10 @@ function updateOverviewFromStats(s) {
   el('fill-pct').textContent = `${pct}%`;
   el('fill-bar-sold').style.width = `${sold}%`;
   el('fill-bar-held').style.width = `${held}%`;
-  el('rev-booked').textContent = `€${s.earnedRev.toLocaleString()}`;
-  el('rev-held').textContent = `€${s.heldRev.toLocaleString()}`;
-  el('rev-avail').textContent = `€${s.availRev.toLocaleString()}`;
-  el('rev-total').textContent = `€${s.totalRevenue.toLocaleString()}`;
+  el('rev-booked').textContent = `${CUR}${s.earnedRev.toLocaleString()}`;
+  el('rev-held').textContent = `${CUR}${s.heldRev.toLocaleString()}`;
+  el('rev-avail').textContent = `${CUR}${s.availRev.toLocaleString()}`;
+  el('rev-total').textContent = `${CUR}${s.totalRevenue.toLocaleString()}`;
 }
 
 // ─── Activity Log ─────────────────────────────────────────────────────────────
@@ -2184,7 +2205,7 @@ async function loadSponsorsAdmin() {
     tierTd.appendChild(pill);
     tr.appendChild(tierTd);
 
-    tr.appendChild(sponsorInput(s.key, 'price', s.price ?? '', 'number', '€ POA', 90));
+    tr.appendChild(sponsorInput(s.key, 'price', s.price ?? '', 'number', `${CUR.trim()} POA`, 90));
     tr.appendChild(sponsorInput(s.key, 'availability', s.availability ?? '', 'text', 'e.g. Exclusive', 120));
     tr.appendChild(sponsorImageCell(s.key, s.image ?? ''));
     tr.appendChild(sponsorInput(s.key, 'video', s.video ?? '', 'text', 'URL', 130));

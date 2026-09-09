@@ -20,11 +20,16 @@
     return n;
   };
 
+  // Set from the proposal payload before anything is drawn — this document is
+  // printed and handed to a client, so a North America deal must not read "€"
+  // and "m²". Defaults match what this page printed before.
+  let CUR = '€', AREA_UNIT = 'm²';
+
   const money = (n) => (n == null || !Number.isFinite(Number(n)))
     ? 'On application'
-    : '€' + Number(n).toLocaleString('en-GB', { maximumFractionDigits: 0 });
+    : CUR + Number(n).toLocaleString('en-GB', { maximumFractionDigits: 0 });
 
-  const area = (n) => (n == null ? '—' : `${Number(n).toLocaleString('en-GB', { maximumFractionDigits: 1 })} m²`);
+  const area = (n) => (n == null ? '—' : `${Number(n).toLocaleString('en-GB', { maximumFractionDigits: 1 })} ${AREA_UNIT}`);
 
   const longDate = (d) => new Date(d).toLocaleDateString('en-GB',
     { day: 'numeric', month: 'long', year: 'numeric' });
@@ -233,6 +238,10 @@
     }
 
     const d = await res.json();
+
+    // Before any money or size is rendered.
+    if (d.currencySymbol) CUR = d.currencySymbol;
+    if (d.unit) AREA_UNIT = d.unit === 'ft' ? 'ft²' : 'm²';
 
     // ── Header ──
     $('brand-show').textContent = d.showId || '';
