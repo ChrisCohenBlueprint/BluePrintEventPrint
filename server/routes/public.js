@@ -78,11 +78,15 @@ router.get('/floorplan.svg', async (req, res, next) => {
     // exactly what happened. The clients now put the event in the query too, so
     // this is the belt to that pair of braces.
     res.set('Vary', 'X-Show');
-    if (stored && stored.svg) {
+    // The display copy has the exhibitor names taken out, because we draw those
+    // ourselves. It is derived from the uploaded original, which is kept intact
+    // so a re-import can always read the names back out of it.
+    const artwork = stored && (stored.displaySvg || stored.svg);
+    if (artwork) {
       res.set('ETag', `"${stored.version}"`);
       res.set('Cache-Control', 'public, max-age=300');
       if (req.get('If-None-Match') === `"${stored.version}"`) return res.status(304).end();
-      return res.send(stored.svg);
+      return res.send(artwork);
     }
     // Nothing uploaded for this show: the artwork that ships with the app.
     const file = path.join(__dirname, '..', '..', 'public',

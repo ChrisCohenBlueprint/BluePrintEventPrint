@@ -61,6 +61,28 @@ async function get(showId = config.showId) {
   return col().findOne({ showId });
 }
 
+/**
+ * Record the version of the artwork to SHOW, leaving the uploaded original
+ * untouched.
+ *
+ * The names printed inside stands are removed for display once we hold them
+ * ourselves. Overwriting the stored plan to do that destroyed the only copy of
+ * those names: a second import then read a plan with no names left in it and
+ * produced 99 stands with no exhibitors, silently, with no way back short of
+ * re-uploading the file. The original is what every extraction reads; this is
+ * only what gets served.
+ */
+async function setDisplaySvg(svg, { showId = config.showId } = {}) {
+  const text = String(svg || '');
+  if (!text.trim()) return { ok: false, reason: 'empty' };
+  await col().updateOne({ showId }, { $set: {
+    displaySvg: text,
+    displayBytes: Buffer.byteLength(text, 'utf8'),
+    version: Date.now().toString(36),   // so browsers fetch the new one
+  } });
+  return { ok: true, bytes: Buffer.byteLength(text, 'utf8') };
+}
+
 async function save(svg, { filename = 'floorplan.svg', actor = null } = {}) {
   const text = String(svg || '');
   if (!text.trim()) return { ok: false, reason: 'empty' };
@@ -97,7 +119,8 @@ async function save(svg, { filename = 'floorplan.svg', actor = null } = {}) {
     uploadedBy: actor,
     spec,
   };
-  await col().updateOne({ showId: config.showId }, { $set: doc }, { upsert: true });
+  await col().updateOne({ showId: config.showId },
+    { $set: doc, $unset: { displaySvg: '', displayBytes: '' } }, { upsert: true });
   return { ok: true, removed, bytes: doc.bytes, version: doc.version,
            filename: doc.filename, spec };
 }
@@ -107,4 +130,4 @@ async function remove(showId = config.showId) {
   return r.deletedCount === 1;
 }
 
-module.exports = { col, ensureIndexes, get, save, remove, sanitise, MAX_BYTES };
+module.exports = { setDisplaySvg, col, ensureIndexes, get, save, remove, sanitise, MAX_BYTES };

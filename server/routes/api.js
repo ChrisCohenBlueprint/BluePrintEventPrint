@@ -140,11 +140,14 @@ router.get('/stands/preview', async (_req, res, next) => {
     });
     res.json({
       ok: true,
-      stands: r.stands.length,
-      named: r.stands.filter(s => s.exhibitor).length,
+      stands: r.stands.filter(s => !s.sponsored).length,
+      named: r.stands.filter(s => !s.sponsored && s.exhibitor).length,
       // What the plan's own colours say each stand is.
-      byStatus: r.stands.reduce((a, s) => { a[s.status] = (a[s.status] || 0) + 1; return a; }, {}),
+      byStatus: r.stands.filter(s => !s.sponsored)
+        .reduce((a, s) => { a[s.status] = (a[s.status] || 0) + 1; return a; }, {}),
+      // Sponsorable space — counted, but not imported as stands.
       sponsored: r.stands.filter(s => s.sponsored).length,
+      areas: r.stands.filter(s => s.sponsored).map(s => s.exhibitor || s.number),
       fills: r.fills,
       unit: r.unit,
       totalArea: r.stands.reduce((a, s) => a + (s.area || 0), 0),
@@ -153,7 +156,8 @@ router.get('/stands/preview', async (_req, res, next) => {
       // than offering a button that fails.
       committed,
       existing: await booths.col().countDocuments({ showId: config.showId }),
-      sample: r.stands.slice(0, 10).map(s => ({ number: s.number, area: s.area, exhibitor: s.exhibitor })),
+      sample: r.stands.filter(s => !s.sponsored).slice(0, 10)
+        .map(s => ({ number: s.number, area: s.area, exhibitor: s.exhibitor, status: s.status })),
     });
   } catch (e) { next(e); }
 });
@@ -177,7 +181,7 @@ router.post('/stands/import', async (req, res, next) => {
       return res.status(400).json({ error: 'No floorplan has been uploaded for this event yet.' });
     }
 
-    const r = extractStands(f.svg);
+    const r = extractStands(f.svg);   // the original, names intact
     if (!r.stands.length) {
       return res.status(400).json({
         error: 'No stands could be read from this floorplan.',
@@ -185,7 +189,11 @@ router.post('/stands/import', async (req, res, next) => {
       });
     }
 
-    const out = await booths.importFromArtwork(r.stands, {
+    // Lounges, conference tracks and the like are sponsorable space, not
+    // sellable stands, so they are left in the artwork rather than becoming
+    // inventory with a status and a price.
+    const sellable = r.stands.filter(s => !s.sponsored);
+    const out = await booths.importFromArtwork(sellable, {
       actor: req.admin?.user || null,
       force: req.query.force === '1',
     });
@@ -202,15 +210,16 @@ router.post('/stands/import', async (req, res, next) => {
     // for this event. It is a display label, so this changes no number.
     if (r.unit) await settings.setUnit(r.unit === 'sqft' ? 'ft' : 'm');
 
-    // Now the artwork's own names come out, so ours are the only ones drawn.
+    // Now the artwork's own names come out of the copy we SHOW, so ours are the
+    // only ones drawn. The uploaded original keeps its names: overwriting it
+    // destroyed the only place they existed, and the next import then produced
+    // 99 stands with no exhibitors and no way back.
     let namesRemoved = 0;
     try {
       const names = r.stands.map(s => s.exhibitor).filter(Boolean);
       const stripped = stripExhibitorNames(f.svg, names);
       if (stripped.removed) {
-        const saved = await floorplans.save(stripped.svg, {
-          filename: f.filename, actor: req.admin?.user || null,
-        });
+        const saved = await floorplans.setDisplaySvg(stripped.svg);
         if (saved.ok) namesRemoved = stripped.removed;
       }
     } catch (e) {
@@ -227,7 +236,8 @@ router.post('/stands/import', async (req, res, next) => {
 
     track({ type: 'stands.import', boothNumber: null, actor: req.admin?.user || 'unknown',
             meta: { imported: out.imported, sold: out.sold, replaced: out.replaced } });
-    res.json({ ok: true, ...out, namesRemoved, unit: r.unit, warnings: r.warnings });
+    res.json({ ok: true, ...out, namesRemoved, unit: r.unit,
+               areasSkipped: r.stands.length - sellable.length, warnings: r.warnings });
   } catch (e) { next(e); }
 });
 

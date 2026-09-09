@@ -2962,8 +2962,10 @@ async function previewStands(row) {
   note.className = 'spec-report-note';
   note.textContent =
     `${st.available || 0} available, ${st.sold || 0} sold, ${st.held || 0} on hold` +
-    (p.sponsored ? `, ${p.sponsored} sponsorable areas` : '') +
     ` — read from the colours the plan is drawn in. ` +
+    (p.sponsored
+      ? `${p.sponsored} sponsorable areas (${(p.areas || []).join(', ')}) are left in the artwork, not imported as stands. `
+      : '') +
     `${p.totalArea.toLocaleString()} ${unit} in total. ` +
     (p.existing ? `This event currently has ${p.existing} stands, which would be replaced. ` : '') +
     'Exhibitor names become ours: drawn in our own type, searchable, and editable here.';
