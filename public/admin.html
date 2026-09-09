@@ -29,6 +29,15 @@
         <span class="nav-brand-sub">ADMIN</span>
       </div>
     </div>
+    <!-- Which event this console is showing. Admins see every event, so this is
+         a plain switcher rather than anything permission-shaped. Hidden when
+         there is only one, so a single-event setup is not cluttered by a
+         control with nothing to choose. -->
+    <div class="nav-show hidden" id="nav-show">
+      <label for="show-switch">Event</label>
+      <select id="show-switch" class="admin-input"></select>
+    </div>
+
     <ul class="nav-links">
       <li class="nav-link active" data-section="overview"><i data-lucide="layout-dashboard"></i> Overview</li>
       <li class="nav-link" data-section="floorplan"><i data-lucide="map"></i> Floorplan</li>

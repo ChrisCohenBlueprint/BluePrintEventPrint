@@ -32,7 +32,17 @@ function showMiddleware() {
     const header = String(req.get ? (req.get('X-Show') || '') : '').trim().toLowerCase();
     if (header) {
       const id = lookup(header);
-      if (!id) return res.status(400).json({ error: `Unknown show "${header}".` });
+      // An unrecognised header falls back to the default rather than failing.
+      // It used to 400, which meant one bad slug turned every request the page
+      // made into an error and left a blank floorplan — the page denying
+      // service to itself. The header comes from our own page, so a mismatch is
+      // a bug to notice, not an attack to repel. A page URL naming an unknown
+      // show is still a 404, because that IS someone asking for something that
+      // does not exist.
+      if (!id) {
+        console.warn(`Unknown show header "${header}" — falling back to ${config.defaultShow}`);
+        return showContext.runAs(config.defaultShow, next);
+      }
       return showContext.runAs(id, next);
     }
 
@@ -54,9 +64,13 @@ function showForRequest(req) {
   if (named && named.active !== false) {
     return { slug: named.slug, id: named.showId, name: named.name };
   }
+  // Whatever happens, this returns a USABLE slug. Returning one without it is
+  // what took the site down: the page injected `slug: undefined`, sent
+  // `X-Show: undefined` on every request, and each one was rejected.
   const def = shows.byId(config.defaultShow) || shows.list()[0];
-  return def ? { slug: def.slug, id: def.showId, name: def.name }
-             : { slug: '', id: config.defaultShow, name: config.defaultShow };
+  const slug = (def && def.slug) || String(config.defaultShow).toLowerCase();
+  const id = (def && def.showId) || config.defaultShow;
+  return { slug, id, name: (def && def.name) || id };
 }
 
 module.exports = { showMiddleware, showForRequest, PAGE_WITH_SHOW };

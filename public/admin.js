@@ -2738,6 +2738,38 @@ function deleteTag(tag, uses) {
   });
 }
 
+// ── The event this console is showing ────────────────────────────────────────
+// Admins see every event, so switching is a navigation, not a permission check:
+// each event is a separate URL, and moving between them is a page load. That is
+// deliberate — the alternative, swapping the data underneath a live socket, is
+// a great deal of machinery for something done a few times a day.
+async function initShowSwitcher() {
+  const wrap = document.getElementById('nav-show');
+  const sel = document.getElementById('show-switch');
+  if (!wrap || !sel) return;
+
+  let list = [];
+  try { list = await fetch('/api/shows').then(r => r.ok ? r.json() : []); } catch { list = []; }
+  const live = list.filter(sh => sh.active !== false);
+
+  // Nothing to switch between: leave it hidden rather than showing a control
+  // with one option.
+  if (live.length < 2) return;
+
+  sel.replaceChildren();
+  live.forEach(sh => {
+    const o = document.createElement('option');
+    o.value = sh.slug;
+    o.textContent = sh.name || sh.showId;
+    sel.appendChild(o);
+  });
+  sel.value = (window.__SHOW && window.__SHOW.slug) || live[0].slug;
+  wrap.classList.remove('hidden');
+
+  sel.onchange = () => { location.href = `/admin/${sel.value}`; };
+}
+initShowSwitcher();
+
 // ── Tools: the events this system runs ───────────────────────────────────────
 // Each row is a whole parallel set of data — its own stands, pricing, leads and
 // artwork. Creating one is owner-only server-side; the UI shows the list to any

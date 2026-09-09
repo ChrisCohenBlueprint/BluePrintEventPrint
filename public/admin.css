@@ -334,6 +334,16 @@ body {
 .area-remove[hidden] { display: none; }
 
 /* Events list: the two places each show lives. */
+/* Event switcher in the sidebar. */
+.nav-show { padding: 0 16px 14px; }
+.nav-show.hidden { display: none; }
+.nav-show label {
+  display: block; margin-bottom: 5px;
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted);
+}
+.nav-show select { width: 100%; font-size: 12px; }
+
 .show-links { display: flex; gap: 6px; }
 .show-link {
   flex: 1; justify-content: center; text-align: center;

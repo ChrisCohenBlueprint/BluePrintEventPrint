@@ -52,7 +52,9 @@ window.__SHOW = ${JSON.stringify(show)};
     if (!sameOrigin) return native.apply(this, arguments);
     init = init || {};
     var h = new Headers(init.headers || (typeof input === 'object' && input.headers) || {});
-    h.set('X-Show', window.__SHOW.slug);
+    // Only when we actually have one. Sending the string "undefined" is how a
+    // missing slug became a site-wide outage.
+    if (window.__SHOW && window.__SHOW.slug) h.set('X-Show', window.__SHOW.slug);
     return native.call(this, input, Object.assign({}, init, { headers: h }));
   };
 })();
