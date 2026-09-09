@@ -9,6 +9,7 @@ const users     = require('../models/users');
 const partners  = require('../models/partners');
 const salesTeam = require('../data/sales-team');
 const planAreas = require('../models/plan-areas');
+const showsModel = require('../models/shows');
 const sockets   = require('../sockets');
 const planAreaData = new Map(require('../data/plan-areas').AREAS.map(a => [a.key, a]));
 const holds     = require('../services/holds');
@@ -17,6 +18,46 @@ const { track } = require('../services/tracking');
 const csv       = require('../lib/csv');
 
 const router = express.Router();
+
+// ─── Shows ───────────────────────────────────────────────────────────────────
+// The events this deployment serves. Listed for any admin; created and edited
+// by the owner only — adding a show adds a whole parallel set of data, and
+// retiring one takes an event off the air.
+router.get('/shows', async (_req, res, next) => {
+  try { res.json(showsModel.list()); } catch (e) { next(e); }
+});
+
+router.post('/shows', requireOwner, async (req, res, next) => {
+  try {
+    const r = await showsModel.create(req.body || {});
+    if (!r.ok) {
+      const why = r.reason === 'bad_slug'   ? 'the URL name must be lowercase letters, numbers or dashes'
+                : r.reason === 'bad_id'     ? 'the show id must be letters, numbers, - or _'
+                : r.reason === 'slug_taken' ? 'that URL name is already used'
+                : r.reason === 'id_taken'   ? 'that show id already exists'
+                : 'it could not be created';
+      return res.status(400).json({ error: `Could not add the show — ${why}.` });
+    }
+    auditTeam(req, 'show.create', r.show.showId, { slug: r.show.slug });
+    // A new show starts with no cached state; warm it so it serves immediately.
+    try { await sockets.refreshAll(); } catch (e) { console.error('Warm failed:', e.message); }
+    res.status(201).json(r.show);
+  } catch (e) { next(e); }
+});
+
+router.patch('/shows/:showId', requireOwner, async (req, res, next) => {
+  try {
+    const r = await showsModel.update(req.params.showId, req.body || {});
+    if (!r.ok) {
+      return res.status(r.reason === 'missing' ? 404 : 400).json({
+        error: r.reason === 'missing'    ? 'No such show.'
+             : r.reason === 'slug_taken' ? 'That URL name is already used.'
+             : 'The URL name must be lowercase letters, numbers or dashes.' });
+    }
+    auditTeam(req, 'show.update', req.params.showId, req.body || {});
+    res.json(r.show);
+  } catch (e) { next(e); }
+});
 
 // ─── Team: admin accounts ─────────────────────────────────────────────────────
 // Behind adminAuth like everything under /api. Creating/removing accounts and

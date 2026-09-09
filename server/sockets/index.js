@@ -6,6 +6,7 @@ const sponsors  = require('../models/sponsors');
 const settings  = require('../models/settings');
 const tags      = require('../models/tags');
 const showContext = require('../show-context');
+const showsModel = require('../models/shows');
 const planAreas = require('../models/plan-areas');
 const users     = require('../models/users');
 const inquiries = require('../models/inquiries');
@@ -56,8 +57,8 @@ async function refresh() {
 
 /** Warm every show's caches — used at boot, where there is no request context. */
 async function refreshAll() {
-  for (const show of config.shows) {
-    await showContext.runAs(show.id, async () => {
+  for (const show of showsModel.list()) {
+    await showContext.runAs(show.showId, async () => {
       await refresh();
       await refreshTags();
       await refreshAreas();
@@ -216,7 +217,10 @@ function register(io) {
   refreshAll().catch(e => console.error('Show caches not warmed:', e.message));
 
   // slug → id, for resolving a socket's show from its handshake.
-  const showBySlug = new Map(config.shows.map(sh => [sh.slug, sh.id]));
+  const resolveShow = (slug) => {
+    const s = showsModel.bySlug(slug);
+    return s && s.active !== false ? s.showId : null;
+  };
 
   io.on('connection', (socket) => {
     const isAdmin = socket.data.isAdmin;
@@ -226,7 +230,7 @@ function register(io) {
     // failing the connection, since a visitor with a stale bookmark should
     // still see a floorplan.
     const slug = String(socket.handshake.query?.show || '').trim().toLowerCase();
-    socket.data.showId = showBySlug.get(slug) || config.defaultShow;
+    socket.data.showId = resolveShow(slug) || config.defaultShow;
 
     // Two rooms, both scoped to this socket's show, so a broadcast for one
     // event never reaches another's viewers.

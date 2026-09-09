@@ -1,5 +1,6 @@
 const { getDb } = require('../db');
 const showContext = require('../show-context');
+const showsModel = require('../models/shows');
 const config    = require('../config');
 const booths    = require('../models/booths');
 const { track } = require('./tracking');
@@ -149,17 +150,17 @@ async function reconcile() {
  */
 function startExpiryLoop(onExpired) {
   const tick = async () => {
-    for (const show of config.shows) {
+    for (const show of showsModel.list()) {
       try {
-        const expired = await showContext.runAs(show.id, () => reconcile());
+        const expired = await showContext.runAs(show.showId, () => reconcile());
         // AWAIT the callback: it does refresh()+broadcast, and if that rejected
         // (a DB blip right as a hold expires) an un-awaited call would escape
         // this try/catch as an unhandled rejection and take the process down.
         if (expired.length && onExpired) {
-          await showContext.runAs(show.id, () => onExpired(expired, show.id));
+          await showContext.runAs(show.showId, () => onExpired(expired, show.showId));
         }
       } catch (e) {
-        console.error(`Hold reconciliation failed for ${show.id}:`, e.message);
+        console.error(`Hold reconciliation failed for ${show.showId}:`, e.message);
       }
     }
   };
