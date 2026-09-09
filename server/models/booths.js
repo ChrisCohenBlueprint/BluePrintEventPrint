@@ -1,6 +1,7 @@
 const { getDb } = require('../db');
 const config    = require('../config');
 const countries = require('../data/countries');
+const settings  = require('./settings');
 const { safeImage } = require('../lib/safe-url');
 const fs        = require('fs');
 const path      = require('path');
@@ -1134,6 +1135,91 @@ async function resetToBlankLayout() {
   return { ok: true, inserted: docs.length };
 }
 
+
+/**
+ * Replace this show's stands with the ones read from its artwork.
+ *
+ * Everything here is scoped to `config.showId`, which is a getter reading the
+ * per-request show context — so an import can only ever touch the event it was
+ * asked for. That is not a convention to be careful about; it is enforced by
+ * the filter on every query below.
+ *
+ * REFUSES outright on a show that has commercial state. An import deletes and
+ * re-inserts, so running it on a selling event would destroy bookings, holds
+ * and the sales history attached to them. Europe has stands sold and on hold,
+ * so this guard is what makes the feature safe to expose in the admin at all —
+ * it is the difference between a tool for standing up a new event and a way to
+ * lose a live show. `force` exists for a deliberate re-import of a plan that
+ * has not sold anything yet; it does not bypass the snapshot.
+ *
+ * Stands carrying an exhibitor name are imported as sold under that name.
+ * The name then belongs to us: our renderer draws it, the smart search finds
+ * it, and sales can change it — none of which is true of a name printed into
+ * the artwork.
+ */
+async function importFromArtwork(stands, { actor = null, force = false } = {}) {
+  if (!Array.isArray(stands) || !stands.length) return { ok: false, reason: 'no_stands' };
+
+  const db = getDb();
+  const showId = config.showId;
+
+  // Anything sold, held, or carrying a company is commercial state.
+  const committed = await col().countDocuments({
+    showId,
+    $or: [{ status: { $ne: 'available' } }, { 'assignment.company': { $nin: [null, ''] } }],
+  });
+  if (committed > 0 && !force) {
+    return { ok: false, reason: 'has_bookings', committed, showId };
+  }
+
+  const existing = await col().find({ showId }).toArray();
+  if (existing.length) {
+    // The recovery path. Taken before anything is removed, never conditionally.
+    await db.collection('booths_snapshots').insertOne({
+      showId, reason: 'import-from-artwork', at: new Date(),
+      count: existing.length, booths: existing,
+    });
+  }
+
+  const perUnit = await settings.rate();
+  const now = new Date();
+  const docs = stands.map((s) => {
+    const sold = !!(s.exhibitor && s.exhibitor.trim());
+    return {
+      showId,
+      boothNumber: String(s.number),
+      svgElementId: `booth-${s.number}`,
+      geometry: s.geometry,
+      // `sqm` holds the area in whatever unit the show is set to; the unit is
+      // a display label held on the show, exactly as it already works.
+      sqm: s.area || 0,
+      sqmSource: s.areaSource === 'printed' ? 'printed' : 'estimated',
+      listPrice: s.area ? Math.round(s.area * perUnit) : null,
+      status: sold ? 'sold' : 'available',
+      assignment: {
+        company: sold ? s.exhibitor.trim() : null,
+        contactId: null, actualPrice: null,
+        notes: sold ? 'Name read from the supplied floorplan artwork.' : '',
+        tags: [], country: null,
+      },
+      clicks: 0, createdAt: now, updatedAt: now, updatedBy: actor || 'import',
+    };
+  });
+
+  await col().deleteMany({ showId });
+  await db.collection('holds').deleteMany({ showId });
+  await col().insertMany(docs);
+
+  return {
+    ok: true, showId,
+    imported: docs.length,
+    sold: docs.filter(d => d.status === 'sold').length,
+    available: docs.filter(d => d.status === 'available').length,
+    replaced: existing.length,
+    snapshot: existing.length > 0,
+  };
+}
+
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
                    setDisplayNumber, setSponsored, setSponsorLogo, setTags, setCountry, removeTag, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
-                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout };
+                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork };

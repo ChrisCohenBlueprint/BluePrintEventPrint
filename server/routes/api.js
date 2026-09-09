@@ -11,6 +11,8 @@ const salesTeam = require('../data/sales-team');
 const planAreas = require('../models/plan-areas');
 const showsModel = require('../models/shows');
 const floorplans = require('../models/floorplans');
+const settings   = require('../models/settings');
+const { extractStands, stripExhibitorNames } = require('../lib/extract-stands');
 const showContext = require('../show-context');
 const boothsModel = require('../models/booths');
 const sockets   = require('../sockets');
@@ -112,6 +114,109 @@ router.post('/floorplan', rawSvg, async (req, res, next) => {
     track({ type: 'floorplan.upload', boothNumber: null, actor: req.admin?.user || 'unknown',
             meta: { bytes: r.bytes, removed: r.removed } });
     res.json({ ok: true, ...r });
+  } catch (e) { next(e); }
+});
+
+
+/**
+ * What the stored artwork says this event's stands are.
+ *
+ * A preview: it reads and reports, and writes nothing. Import is a separate,
+ * password-gated call, because reading a plan is cheap and reversible while
+ * replacing an event's inventory is neither.
+ */
+router.get('/stands/preview', async (_req, res, next) => {
+  try {
+    const f = await floorplans.get();
+    if (!f || !f.svg) {
+      return res.json({ ok: false, reason: 'no_artwork',
+        message: 'No floorplan has been uploaded for this event yet.' });
+    }
+    const r = extractStands(f.svg);
+    const committed = await booths.col().countDocuments({
+      showId: config.showId,
+      $or: [{ status: { $ne: 'available' } }, { 'assignment.company': { $nin: [null, ''] } }],
+    });
+    res.json({
+      ok: true,
+      stands: r.stands.length,
+      named: r.stands.filter(s => s.exhibitor).length,
+      unit: r.unit,
+      totalArea: r.stands.reduce((a, s) => a + (s.area || 0), 0),
+      warnings: r.warnings,
+      // Named so the admin can say plainly why import is unavailable rather
+      // than offering a button that fails.
+      committed,
+      existing: await booths.col().countDocuments({ showId: config.showId }),
+      sample: r.stands.slice(0, 10).map(s => ({ number: s.number, area: s.area, exhibitor: s.exhibitor })),
+    });
+  } catch (e) { next(e); }
+});
+
+/**
+ * Read the stands out of this event's artwork and make them its inventory.
+ *
+ * Two writes, in this order, so a failure cannot leave names shown twice:
+ * the stands are imported first, and only then is the artwork re-stored with
+ * its printed exhibitor names removed. If the second write fails the names are
+ * drawn from our data over the artwork's own — visibly wrong, and fixable by
+ * re-running — whereas the reverse leaves stands with no names at all and no
+ * indication why.
+ */
+router.post('/stands/import', async (req, res, next) => {
+  try {
+    if (!await confirmPassword(req, res, 'no stands were imported')) return;
+
+    const f = await floorplans.get();
+    if (!f || !f.svg) {
+      return res.status(400).json({ error: 'No floorplan has been uploaded for this event yet.' });
+    }
+
+    const r = extractStands(f.svg);
+    if (!r.stands.length) {
+      return res.status(400).json({
+        error: 'No stands could be read from this floorplan.',
+        detail: r.warnings[0] || null,
+      });
+    }
+
+    const out = await booths.importFromArtwork(r.stands, {
+      actor: req.admin?.user || null,
+      force: req.query.force === '1',
+    });
+    if (!out.ok) {
+      if (out.reason === 'has_bookings') {
+        return res.status(409).json({
+          error: `This event already has ${out.committed} stands sold or on hold. Importing replaces every stand, so it is refused here — bookings would be lost.`,
+        });
+      }
+      return res.status(400).json({ error: 'The stands could not be imported.' });
+    }
+
+    // The unit follows the plan: it printed ft² or m², and that is the truth
+    // for this event. It is a display label, so this changes no number.
+    if (r.unit) await settings.setUnit(r.unit === 'sqft' ? 'ft' : 'm');
+
+    // Now the artwork's own names come out, so ours are the only ones drawn.
+    let namesRemoved = 0;
+    try {
+      const names = r.stands.map(s => s.exhibitor).filter(Boolean);
+      const stripped = stripExhibitorNames(f.svg, names);
+      if (stripped.removed) {
+        const saved = await floorplans.save(stripped.svg, {
+          filename: f.filename, actor: req.admin?.user || null,
+        });
+        if (saved.ok) namesRemoved = stripped.removed;
+      }
+    } catch (e) {
+      // Not fatal: the stands are in, and the only symptom is the artwork's
+      // old names showing under ours until this is run again.
+      console.error('Stand import: could not strip printed names —', e.message);
+    }
+
+    track({ type: 'stands.import', boothNumber: null, actor: req.admin?.user || 'unknown',
+            meta: { imported: out.imported, sold: out.sold, replaced: out.replaced } });
+    res.json({ ok: true, ...out, namesRemoved, unit: r.unit, warnings: r.warnings });
   } catch (e) { next(e); }
 });
 

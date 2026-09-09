@@ -2841,7 +2841,15 @@ function planCard(row, isCurrent) {
   rm.hidden = !row.uploaded;          // nothing uploaded, nothing to remove
   rm.onclick = () => removePlan(row);
 
-  actions.append(up, dl, rm);
+  // Reading the plan is only offered where there is a plan to read.
+  const imp = document.createElement('button');
+  imp.type = 'button';
+  imp.className = 'admin-btn';
+  imp.textContent = 'Read stands';
+  imp.hidden = !row.uploaded;
+  imp.onclick = () => previewStands(row);
+
+  actions.append(up, dl, imp, rm);
 
   // Only where there is something to lose.
   const parts = [head, preview, meta];
@@ -2908,6 +2916,113 @@ function showSpecReport(eventName, spec) {
   box.append(head, note, pre);
   document.getElementById('section-settings')?.prepend(box);
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/**
+ * Show what an event's artwork says its stands are, and offer to import them.
+ *
+ * Deliberately two steps. Reading is free and reversible; importing replaces
+ * every stand on the event, so it happens only after someone has seen the
+ * numbers and typed the admin password.
+ */
+async function previewStands(row) {
+  document.getElementById('stand-report')?.remove();
+  adminToast(`Reading ${row.name || row.showId}…`);
+
+  let p;
+  try {
+    const res = await fetch('/api/stands/preview', { headers: { 'X-Show': row.slug } });
+    p = await res.json();
+  } catch {
+    return adminToast('Could not read the floorplan.', 'error');
+  }
+  if (!p.ok) return adminToast(p.message || 'No floorplan to read for this event.', 'error');
+  if (!p.stands) {
+    return adminToast('No stands could be read — the plan\'s text may have been converted to outlines.', 'error');
+  }
+
+  const unit = p.unit === 'sqft' ? 'ft²' : 'm²';
+  const box = document.createElement('div');
+  box.id = 'stand-report';
+  box.className = 'spec-report';
+
+  const head = document.createElement('div');
+  head.className = 'spec-report-head';
+  const title = document.createElement('strong');
+  title.textContent = `${row.name || row.showId} — ${p.stands} stands readable`;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'admin-btn';
+  close.textContent = 'Close';
+  close.onclick = () => box.remove();
+  head.append(title);
+
+  const note = document.createElement('p');
+  note.className = 'spec-report-note';
+  note.textContent =
+    `${p.named} carry an exhibitor name and would import as sold; ` +
+    `${p.stands - p.named} would import as available. ` +
+    `${p.totalArea.toLocaleString()} ${unit} in total. ` +
+    (p.existing ? `This event currently has ${p.existing} stands, which would be replaced. ` : '') +
+    'The names are then ours: drawn in our own type, searchable, and editable here.';
+
+  const pre = document.createElement('pre');
+  pre.className = 'spec-report-body';
+  pre.textContent = [
+    ...(p.warnings.length ? ['Worth a look:', ...p.warnings.map(w => '  - ' + w), ''] : []),
+    '  number   area      exhibitor',
+    ...p.sample.map(s =>
+      `  ${String(s.number).padEnd(8)} ${String(s.area).padStart(5)} ${unit.padEnd(4)} ${s.exhibitor || ''}`),
+    p.stands > p.sample.length ? `  … and ${p.stands - p.sample.length} more` : '',
+  ].join('\n');
+
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'admin-btn primary';
+  if (p.committed > 0) {
+    // Never offer a button that is going to be refused. Europe has stands sold
+    // and on hold, and an import replaces every stand on the event.
+    go.disabled = true;
+    go.textContent = `Cannot import — ${p.committed} sold or on hold`;
+    go.title = 'Importing replaces every stand, so it is refused on an event that has started selling.';
+  } else {
+    go.textContent = `Import ${p.stands} stands`;
+    go.onclick = () => importStands(row, p, box);
+  }
+  head.append(go, close);
+
+  box.append(head, note, pre);
+  document.getElementById('section-settings')?.prepend(box);
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/** Import the stands, once the password is given. */
+async function importStands(row, preview, box) {
+  const pw = prompt(
+    `Import ${preview.stands} stands into ${row.name || row.showId}?\n\n` +
+    (preview.existing ? `This replaces the ${preview.existing} stands already there (a snapshot is kept).\n\n` : '') +
+    'Enter the admin password to confirm.');
+  if (!pw) return;
+
+  adminToast('Importing…');
+  let r;
+  try {
+    const res = await fetch('/api/stands/import', {
+      method: 'POST',
+      headers: { 'X-Show': row.slug, 'X-Confirm-Password': pw },
+    });
+    r = await res.json();
+    if (!res.ok) return adminToast(r.error || 'The import was refused.', 'error');
+  } catch {
+    return adminToast('The import could not be completed.', 'error');
+  }
+
+  adminToast(
+    `${row.name || row.showId}: ${r.imported} stands imported — ` +
+    `${r.sold} sold, ${r.available} available` +
+    (r.namesRemoved ? `, ${r.namesRemoved} printed names taken out of the artwork.` : '.'), 'ok');
+  box?.remove();
+  loadPlans();
 }
 
 /** Upload or replace ONE event's plan, named explicitly rather than implied. */
