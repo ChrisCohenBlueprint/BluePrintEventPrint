@@ -1,5 +1,4 @@
 const config = require('./config');
-const shows = require('./models/shows');
 const showContext = require('./show-context');
 
 /**
@@ -21,24 +20,19 @@ const showContext = require('./show-context');
 const PAGE_WITH_SHOW = /^\/(admin|floorplan|sales)\/([a-z0-9][a-z0-9-]*)\/?$/i;
 
 function showMiddleware() {
-  const lookup = (slug) => {
-    const s = shows.bySlug(slug);
-    // A retired show keeps its data but stops answering, so an event that has
-    // finished can be taken off the air without deleting anything.
-    return s && s.active !== false ? s.showId : null;
-  };
+  const bySlug = new Map(config.shows.map(s => [s.slug, s.id]));
 
   return function resolveShow(req, res, next) {
     const header = String(req.get ? (req.get('X-Show') || '') : '').trim().toLowerCase();
     if (header) {
-      const id = lookup(header);
+      const id = bySlug.get(header);
       if (!id) return res.status(400).json({ error: `Unknown show "${header}".` });
       return showContext.runAs(id, next);
     }
 
     const m = PAGE_WITH_SHOW.exec(req.path);
     if (m) {
-      const id = lookup(m[2]);
+      const id = bySlug.get(m[2].toLowerCase());
       if (!id) return res.status(404).type('html').send('<h1>404 — no such show</h1>');
       return showContext.runAs(id, next);
     }
@@ -49,14 +43,12 @@ function showMiddleware() {
 
 /** The show a page URL names, for serving that page with its show injected. */
 function showForRequest(req) {
+  const bySlug = new Map(config.shows.map(s => [s.slug, s.id]));
   const m = PAGE_WITH_SHOW.exec(req.path);
-  const named = m ? shows.bySlug(m[2]) : null;
-  if (named && named.active !== false) {
-    return { slug: named.slug, id: named.showId, name: named.name };
-  }
-  const def = shows.byId(config.defaultShow) || shows.list()[0];
-  return def ? { slug: def.slug, id: def.showId, name: def.name }
-             : { slug: '', id: config.defaultShow, name: config.defaultShow };
+  const slug = m ? m[2].toLowerCase() : null;
+  if (slug && bySlug.has(slug)) return { slug, id: bySlug.get(slug) };
+  const def = config.shows.find(x => x.id === config.defaultShow) || config.shows[0];
+  return { slug: def ? def.slug : '', id: config.defaultShow };
 }
 
 module.exports = { showMiddleware, showForRequest, PAGE_WITH_SHOW };

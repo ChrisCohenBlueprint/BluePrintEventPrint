@@ -333,13 +333,6 @@ body {
 .area-remove { width: 100%; justify-content: center; font-size: 11px; padding: 5px 8px; }
 .area-remove[hidden] { display: none; }
 
-/* Events list: the two places each show lives. */
-.show-links { display: flex; gap: 6px; }
-.show-link {
-  flex: 1; justify-content: center; text-align: center;
-  font-size: 11px; padding: 5px 8px; text-decoration: none;
-}
-
 /* The area editor, shared by the Tools cards and the on-plan panel. */
 .ara-body { display: flex; flex-direction: column; gap: 8px; }
 .ara-field-lbl {

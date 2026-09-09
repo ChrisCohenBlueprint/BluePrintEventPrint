@@ -89,7 +89,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
 
     if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
     if (sec === 'bookings') renderBookingsTable();
-    if (sec === 'tools') { populateToolDropdowns(); loadShows(); }
+    if (sec === 'tools') populateToolDropdowns();
     if (sec === 'leads') loadLeads();
     if (sec === 'analytics') loadAnalytics();
     if (sec === 'sponsors') loadSponsorsAdmin();
@@ -2737,106 +2737,6 @@ function deleteTag(tag, uses) {
     else adminToast((res && res.error) || 'Could not delete that tag.', 'error');
   });
 }
-
-// ── Tools: the events this system runs ───────────────────────────────────────
-// Each row is a whole parallel set of data — its own stands, pricing, leads and
-// artwork. Creating one is owner-only server-side; the UI shows the list to any
-// admin so they can see which event they are working in.
-let showsCache = [];
-
-async function loadShows() {
-  const box = document.getElementById('show-list');
-  if (!box) return;
-  try { showsCache = await fetch('/api/shows').then(r => r.ok ? r.json() : []); }
-  catch { showsCache = []; }
-
-  box.replaceChildren();
-  if (!showsCache.length) {
-    const p = document.createElement('p');
-    p.className = 'tag-empty';
-    p.textContent = 'No events yet.';
-    box.appendChild(p);
-    return;
-  }
-
-  showsCache.forEach(sh => {
-    const card = document.createElement('div');
-    card.className = 'area-card';
-
-    const name = document.createElement('input');
-    name.type = 'text';
-    name.className = 'admin-input area-name';
-    name.value = sh.name || sh.showId;
-    name.maxLength = 80;
-    name.onchange = () => saveShow(sh.showId, { name: name.value });
-
-    const meta = document.createElement('div');
-    meta.className = 'area-package-note';
-    meta.textContent = `id ${sh.showId}${sh.active === false ? ' · retired' : ''}`;
-
-    // The two places this event lives. Shown as links so they can be opened and
-    // checked without anyone having to remember the URL shape.
-    const links = document.createElement('div');
-    links.className = 'show-links';
-    [['Floorplan', `/floorplan/${sh.slug}`], ['Admin', `/admin/${sh.slug}`]].forEach(([label, href]) => {
-      const a = document.createElement('a');
-      a.href = href; a.target = '_blank'; a.rel = 'noopener';
-      a.className = 'admin-btn show-link';
-      a.textContent = label;
-      links.appendChild(a);
-    });
-
-    const retire = document.createElement('button');
-    retire.type = 'button';
-    retire.className = 'admin-btn area-remove';
-    retire.textContent = sh.active === false ? 'Put back on air' : 'Retire';
-    retire.title = sh.active === false
-      ? 'Make this event reachable again'
-      : 'Stop serving this event. Nothing is deleted — its data stays exactly as it is.';
-    retire.onclick = () => saveShow(sh.showId, { active: sh.active === false });
-
-    card.append(name, meta, links, retire);
-    box.appendChild(card);
-  });
-}
-
-async function saveShow(showId, fields) {
-  try {
-    const res = await fetch(`/api/shows/${encodeURIComponent(showId)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
-    });
-    if (!res.ok) {
-      let msg = 'Could not update that event.';
-      try { msg = (await res.json()).error || msg; } catch {}
-      return adminToast(msg, 'error');
-    }
-    adminToast('Event updated.', 'ok');
-    loadShows();
-  } catch { adminToast('Could not update that event.', 'error'); }
-}
-
-document.getElementById('show-form')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const name = document.getElementById('show-name').value.trim();
-  const slug = document.getElementById('show-slug').value.trim();
-  const showId = document.getElementById('show-id').value.trim();
-  if (!slug || !showId) return adminToast('A URL name and a show id are both needed.', 'error');
-
-  try {
-    const res = await fetch('/api/shows', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, slug, showId }),
-    });
-    if (!res.ok) {
-      let msg = 'Could not add that event.';
-      try { msg = (await res.json()).error || msg; } catch {}
-      return adminToast(msg, 'error');
-    }
-    adminToast(`${name || showId} added — it is live at /floorplan/${slug}.`, 'ok');
-    ['show-name', 'show-slug', 'show-id'].forEach(id => { document.getElementById(id).value = ''; });
-    loadShows();
-  } catch { adminToast('Could not add that event.', 'error'); }
-});
 
 // ── Tools: sponsored areas ───────────────────────────────────────────────────
 // One card per named area on the plan. The logo is uploaded rather than linked,
