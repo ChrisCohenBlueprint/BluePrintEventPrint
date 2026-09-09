@@ -8,7 +8,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { extractStands, repairMojibake } = require('../server/lib/extract-stands');
+const { extractStands, repairMojibake, stripExhibitorNames } = require('../server/lib/extract-stands');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`); };
@@ -49,6 +49,19 @@ check('outlined text yields no stands rather than wrong ones', outlined.stands.l
       `${outlined.stands.length} stands`);
 check('and says why, in words a person can act on',
       /outlines/i.test(outlined.warnings.join(' ')), outlined.warnings[0]);
+
+console.log('\nStripping the artwork\'s own exhibitor names');
+// Names belong in the database: baked into the drawing they are wrong the
+// moment a stand changes hands, and correcting one means a new export.
+const { svg: stripped, removed } = stripExhibitorNames(fixture, r.stands.map(s => s.exhibitor));
+const afterStrip = extractStands(stripped);
+check('the names are gone', removed === 2 && afterStrip.stands.every(s => !s.exhibitor),
+      `${removed} removed`);
+check('but every stand is still there', afterStrip.stands.length === 4);
+check('and its number and area are untouched',
+      afterStrip.stands.find(x => x.number === '104').area === 200);
+check('a plan with no names to strip is returned unchanged',
+      stripExhibitorNames(fixture, []).svg === fixture);
 
 console.log('\nIt reports rather than silently averaging');
 check('too little data to calibrate is said out loud',

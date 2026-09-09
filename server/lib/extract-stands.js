@@ -70,8 +70,14 @@ function readTexts(svg) {
     const attrs = m[1];
     const t = /transform="translate\(([-\d.]+)[\s,]+([-\d.]+)\)([^"]*)"/.exec(attrs);
     if (!t) continue;
-    // A trailing scale() marks the superscript of a unit ("²"), never a label.
-    if (/scale\(/.test(t[3])) continue;
+    // The "²" of an area label is drawn as a separate, scaled text run. It is
+    // tempting to skip everything carrying a scale(), but scale() is also how
+    // this exporter sizes ordinary display text — the plan's own "Floorplan
+    // Sponsor" title is scaled — so the test is the shape of the content: a
+    // lone digit, set smaller. A real label is never that.
+    const isSuperscript = /scale\(/.test(t[3]) &&
+      /^\d$/.test(m[2].replace(/<[^>]+>/g, '').trim());
+    if (isSuperscript) continue;
     // Multi-line labels are tspans on different baselines. Joining them
     // blind gives "NetworkingLounge", so a change of baseline becomes a space.
     let body = m[2];
@@ -227,4 +233,49 @@ function extractStands(svg) {
   return { stands, unit, unitsPerArea, rects: rects.length, texts: texts.length, warnings };
 }
 
-module.exports = { extractStands, readRects, readTexts, repairMojibake };
+
+/**
+ * Remove the exhibitor names the artwork has printed inside its stands.
+ *
+ * Names belong in the database, not in the drawing. A name baked into the
+ * artwork is wrong the moment a stand changes hands, and fixing it means
+ * asking the designer for a new export — whereas a name we hold is searchable,
+ * dims with the rest when the smart search filters, takes the contrast colour
+ * a sponsor's fill needs, and is redrawn the instant sales change it.
+ *
+ * Only the names go. Stand numbers and printed areas stay exactly as drawn:
+ * those are properties of the hall and do not change as stands are sold, and
+ * the Europe plan shows its numbers the same way.
+ *
+ * `names` is the text runs the extractor attributed to stands, so nothing is
+ * matched by guesswork — a room label like "ENTRANCE" or "Dining Area" that
+ * sits outside every stand is never touched.
+ */
+function stripExhibitorNames(svg, names) {
+  const wanted = new Set(names.filter(Boolean).map(n => n.trim()));
+  if (!wanted.size) return { svg, removed: 0 };
+
+  let removed = 0;
+  const out = svg.replace(/<text([^>]*?)>([\s\S]*?)<\/text>/g, (whole, attrs, body) => {
+    // Compare on the same flattened, repaired text the extractor read, so a
+    // name split across tspans and re-encoded still matches.
+    let flat = body;
+    const spans = [...body.matchAll(/<tspan([^>]*)>([\s\S]*?)<\/tspan>/g)];
+    if (spans.length) {
+      let lastY = null;
+      flat = spans.map(sp => {
+        const y = (/\by="([-\d.]+)"/.exec(sp[1]) || [])[1] ?? null;
+        const brk = lastY !== null && y !== null && y !== lastY ? ' ' : '';
+        lastY = y;
+        return brk + sp[2];
+      }).join('');
+    }
+    flat = repairMojibake(flat.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+    if (!wanted.has(flat)) return whole;
+    removed++;
+    return '';
+  });
+  return { svg: out, removed };
+}
+
+module.exports = { extractStands, readRects, readTexts, repairMojibake, stripExhibitorNames };
