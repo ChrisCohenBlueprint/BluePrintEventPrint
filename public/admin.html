@@ -56,6 +56,12 @@
       <div class="nav-partners-logos" id="nav-partners-logos"></div>
     </div>
 
+    <!-- Sits with the footer actions rather than in the main list: it is where
+         you configure the event, not another view of it. -->
+    <div class="nav-link nav-settings" data-section="settings">
+      <i data-lucide="settings"></i> Settings
+    </div>
+
     <a href="/floorplan" target="_blank" class="nav-view-public">
       <i data-lucide="external-link"></i> View Public Page
     </a>
@@ -535,6 +541,34 @@
     </section>
 
     <!-- ═══ SECTION: TOOLS ═══════════════════════════════════════════════════ -->
+    <!-- Settings: how this event is configured, as opposed to what is in it. -->
+    <section class="admin-section" id="section-settings">
+      <div class="section-head">
+        <h2>Settings</h2>
+        <p class="section-sub" id="settings-show-name">This event</p>
+      </div>
+      <div class="tools-grid">
+        <!-- This event's floorplan artwork. -->
+        <div class="tool-card tool-card-wide">
+          <div class="tool-header">
+            <i data-lucide="map"></i>
+            <h3>Floorplan Artwork</h3>
+          </div>
+          <p>The SVG this event's plan is drawn from. Uploading replaces it for this event only — the other events keep theirs. Stored in the database, so it survives deploys.</p>
+          <div id="artwork-meta" class="artwork-meta">Loading…</div>
+          <div id="artwork-warn" class="artwork-warn" hidden></div>
+          <button type="button" class="area-drop" id="artwork-drop" title="Drop an SVG here, or click to choose one">
+            Drop the floorplan SVG here, or click to choose
+          </button>
+          <div class="artwork-actions">
+            <a class="admin-btn" id="artwork-download" href="/floorplan.svg" download>Download current</a>
+            <button type="button" class="admin-btn danger" id="artwork-revert" hidden>Revert to the shipped plan</button>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
     <section class="admin-section" id="section-tools">
       <div class="tools-grid">
 
@@ -693,24 +727,6 @@
               <i data-lucide="hash"></i> Save Shown Number
             </button>
           </form>
-        </div>
-
-        <!-- This event's floorplan artwork. -->
-        <div class="tool-card tool-card-wide">
-          <div class="tool-header">
-            <i data-lucide="map"></i>
-            <h3>Floorplan Artwork</h3>
-          </div>
-          <p>The SVG this event's plan is drawn from. Uploading replaces it for this event only — the other events keep theirs. Stored in the database, so it survives deploys.</p>
-          <div id="artwork-meta" class="artwork-meta">Loading…</div>
-          <div id="artwork-warn" class="artwork-warn" hidden></div>
-          <button type="button" class="area-drop" id="artwork-drop" title="Drop an SVG here, or click to choose one">
-            Drop the floorplan SVG here, or click to choose
-          </button>
-          <div class="artwork-actions">
-            <a class="admin-btn" id="artwork-download" href="/floorplan.svg" download>Download current</a>
-            <button type="button" class="admin-btn danger" id="artwork-revert" hidden>Revert to the shipped plan</button>
-          </div>
         </div>
 
         <!-- The events this deployment serves. -->

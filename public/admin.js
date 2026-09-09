@@ -89,7 +89,8 @@ document.querySelectorAll('.nav-link').forEach(link => {
 
     if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
     if (sec === 'bookings') renderBookingsTable();
-    if (sec === 'tools') { populateToolDropdowns(); loadShows(); loadArtwork(); }
+    if (sec === 'tools') { populateToolDropdowns(); loadShows(); }
+    if (sec === 'settings') { loadArtwork(); nameCurrentShow(); }
     if (sec === 'leads') loadLeads();
     if (sec === 'analytics') loadAnalytics();
     if (sec === 'sponsors') loadSponsorsAdmin();
@@ -2738,6 +2739,17 @@ function deleteTag(tag, uses) {
     if (res && res.ok) adminToast(`Tag "${tag.label}" deleted.`, 'ok');
     else adminToast((res && res.error) || 'Could not delete that tag.', 'error');
   });
+}
+
+// Which event the Settings page is configuring. Worth stating outright: these
+// controls change one event and not the others, and that is not obvious from a
+// page headed "Settings".
+function nameCurrentShow() {
+  const el = document.getElementById('settings-show-name');
+  if (!el) return;
+  const sh = (window.__SHOW && (window.__SHOW.name || window.__SHOW.slug)) || '';
+  el.textContent = sh ? `Configuring ${sh} — these settings apply to this event only.`
+                      : 'These settings apply to this event only.';
 }
 
 // ── Tools: this event's floorplan artwork ────────────────────────────────────

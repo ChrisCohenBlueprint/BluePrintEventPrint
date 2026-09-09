@@ -344,6 +344,14 @@ body {
 }
 .nav-show select { width: 100%; font-size: 12px; }
 
+/* Settings sits with the footer actions, so it needs the nav-link look without
+   being inside the list. */
+.nav-settings {
+  margin: 0 12px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
 /* Floorplan artwork card. */
 .artwork-meta { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
 .artwork-warn {
@@ -352,6 +360,9 @@ body {
   color: var(--orange); font-size: 12px; line-height: 1.5;
 }
 .artwork-warn[hidden] { display: none; }
+/* A <button> sizes to its content; this one is a drop target for the whole
+   card, so it needs the width stated. */
+#artwork-drop { width: 100%; min-height: 96px; }
 .artwork-actions { display: flex; gap: 8px; margin-top: 10px; }
 .artwork-actions .admin-btn { flex: 1; justify-content: center; text-decoration: none; font-size: 12px; }
 .artwork-actions .admin-btn[hidden] { display: none; }
