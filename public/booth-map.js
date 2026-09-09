@@ -85,12 +85,34 @@
     var placed = {};
     var unplaced = [];
 
-    var artwork = Array.prototype.slice.call(svgDoc.querySelectorAll(ARTWORK_SELECTOR));
+    // ARTWORK_SELECTOR names the fill classes Europe's plan happens to use.
+    // Class names are an exporter's private numbering: in North America's plan
+    // .cls-7 and .cls-9 are TEXT styles, and its stands are .cls-15/16/17/19 —
+    // so that selector matches nothing bindable there and every stand on the
+    // event is unclickable, with no error to say why.
+    //
+    // The primary pool is left exactly as it was, and searched first, so a
+    // stand that binds today binds to the same element tomorrow. Every other
+    // rect in the plan becomes a SECOND-CHANCE pool, reached only by a stand
+    // that finds nothing in the primary. Binding is by geometry, so a wider
+    // pool cannot mis-bind anything that already had a match.
+    var primary = Array.prototype.slice.call(svgDoc.querySelectorAll(ARTWORK_SELECTOR));
+    var seen = [];
+    for (var pi = 0; pi < primary.length; pi++) seen.push(primary[pi]);
+    var spare = Array.prototype.slice.call(svgDoc.querySelectorAll('rect'))
+      .filter(function (el) { return seen.indexOf(el) === -1; });
+
+    var artwork = primary.concat(spare);
     var geoms = artwork.map(rectGeom);
     // Largest legitimate stand dimension, used to reject absurdly-large geometry
-    // that has no artwork cell to clamp against.
+    // that has no artwork cell to clamp against. Measured on the primary pool
+    // only: the spare pool can hold the hall outline, and letting that set the
+    // ceiling would stop oversized geometry being rejected at all.
     var MAX_DIM = 0;
-    geoms.forEach(function (g) { if (g) MAX_DIM = Math.max(MAX_DIM, g.w, g.h); });
+    for (var mi = 0; mi < primary.length; mi++) {
+      var mg = geoms[mi];
+      if (mg) MAX_DIM = Math.max(MAX_DIM, mg.w, mg.h);
+    }
     MAX_DIM = MAX_DIM || 1000;
 
     // Work out the split groups up front. A split stand becomes several cells:

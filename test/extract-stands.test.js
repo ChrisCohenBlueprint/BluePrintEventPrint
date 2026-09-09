@@ -24,9 +24,19 @@ check('printed areas are used as printed', by('101').area === 100 && by('101').a
 
 console.log('\nGeometry the drawing tool made awkward');
 const rot = by('104');
-check('a rotate(90) stand resolves to real x/y/w/h',
-      rot && rot.geometry.x === 70 && rot.geometry.y === 10 && rot.geometry.w === 50 && rot.geometry.h === 25,
+// Two boxes, and the difference is load-bearing. The page binds a stand to its
+// shape by reading the element's x/y/width/height attributes WITHOUT applying
+// the element's own transform, so `geometry` must be the authored box or a
+// rotated stand never binds and is silently unclickable. `visual` is where the
+// shape actually appears, and is the only space the text labels can be matched
+// in.
+check('the stored box is the one authored on the element',
+      rot && rot.geometry.x === 70 && rot.geometry.y === 10 && rot.geometry.w === 25 && rot.geometry.h === 50,
       JSON.stringify(rot && rot.geometry));
+check('the on-screen box has the rotation resolved',
+      rot && rot.visual.x === 70 && rot.visual.y === 10 && rot.visual.w === 50 && rot.visual.h === 25,
+      JSON.stringify(rot && rot.visual));
+check('and its labels were found in that on-screen space', rot.area === 200);
 
 console.log('\nLabels');
 check('a multi-line name keeps its spaces', by('103').exhibitor === 'Networking Lounge',
@@ -60,6 +70,15 @@ check('the names are gone', removed === 2 && afterStrip.stands.every(s => !s.exh
 check('but every stand is still there', afterStrip.stands.length === 4);
 check('and its number and area are untouched',
       afterStrip.stands.find(x => x.number === '104').area === 200);
+
+console.log('\nA number printed on two shapes cannot be two stands');
+// Left in, this aborts an import partway and leaves the event half-filled:
+// the stand number is the key each stand is stored under.
+const twice = extractStands(fixture.replace('>102<', '>101<'));
+check('the repeat is dropped', twice.stands.length === 3 && new Set(twice.stands.map(x => x.number)).size === 3,
+      twice.stands.map(x => x.number).join(','));
+check('and named so the artwork can be corrected',
+      twice.warnings.some(w => /printed on two different shapes/.test(w)));
 check('a plan with no names to strip is returned unchanged',
       stripExhibitorNames(fixture, []).svg === fixture);
 

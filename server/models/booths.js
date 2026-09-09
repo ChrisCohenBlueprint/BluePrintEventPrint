@@ -1136,6 +1136,40 @@ async function resetToBlankLayout() {
 }
 
 
+const IMPORT_SOURCE = 'artwork-import';
+const IMPORT_NOTE = 'Name read from the supplied floorplan artwork.';
+
+/**
+ * Stands where real commercial work has happened — the thing an import must
+ * never destroy.
+ *
+ * The distinction that matters is NOT "is this stand sold". A stand marked
+ * sold purely because the artwork printed a name on it represents no booking,
+ * no contact and no money; refusing to re-import over those would mean a
+ * botched import could never be corrected — which is precisely the state a
+ * first import can leave an event in.
+ *
+ * So a stand counts as committed when someone has done something to it that an
+ * import cannot recreate: it is on hold, it has a contact or an agreed price,
+ * or it is not available for a reason other than a previous import of this
+ * kind. Stands carry `source` for this now; the note is also matched so events
+ * imported before that field existed are still recognised.
+ */
+function commercialFilter() {
+  const fromImport = {
+    status: 'sold',
+    'assignment.contactId': null,
+    'assignment.actualPrice': null,
+    $or: [{ source: IMPORT_SOURCE }, { 'assignment.notes': IMPORT_NOTE }],
+  };
+  return {
+    $and: [
+      { $or: [{ status: { $ne: 'available' } }, { 'assignment.company': { $nin: [null, ''] } }] },
+      { $nor: [fromImport] },
+    ],
+  };
+}
+
 /**
  * Replace this show's stands with the ones read from its artwork.
  *
@@ -1163,11 +1197,7 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
   const db = getDb();
   const showId = config.showId;
 
-  // Anything sold, held, or carrying a company is commercial state.
-  const committed = await col().countDocuments({
-    showId,
-    $or: [{ status: { $ne: 'available' } }, { 'assignment.company': { $nin: [null, ''] } }],
-  });
+  const committed = await col().countDocuments({ showId, ...commercialFilter() });
   if (committed > 0 && !force) {
     return { ok: false, reason: 'has_bookings', committed, showId };
   }
@@ -1196,10 +1226,11 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
       sqmSource: s.areaSource === 'printed' ? 'printed' : 'estimated',
       listPrice: s.area ? Math.round(s.area * perUnit) : null,
       status: sold ? 'sold' : 'available',
+      source: IMPORT_SOURCE,
       assignment: {
         company: sold ? s.exhibitor.trim() : null,
         contactId: null, actualPrice: null,
-        notes: sold ? 'Name read from the supplied floorplan artwork.' : '',
+        notes: sold ? IMPORT_NOTE : '',
         tags: [], country: null,
       },
       clicks: 0, createdAt: now, updatedAt: now, updatedBy: actor || 'import',
@@ -1222,4 +1253,4 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
                    setDisplayNumber, setSponsored, setSponsorLogo, setTags, setCountry, removeTag, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
-                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork };
+                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork, commercialFilter };

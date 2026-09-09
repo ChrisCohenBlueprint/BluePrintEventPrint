@@ -133,9 +133,10 @@ router.get('/stands/preview', async (_req, res, next) => {
         message: 'No floorplan has been uploaded for this event yet.' });
     }
     const r = extractStands(f.svg);
+    // The same measure the import itself applies, so the button the admin sees
+    // and the answer it gets can never disagree.
     const committed = await booths.col().countDocuments({
-      showId: config.showId,
-      $or: [{ status: { $ne: 'available' } }, { 'assignment.company': { $nin: [null, ''] } }],
+      showId: config.showId, ...booths.commercialFilter(),
     });
     res.json({
       ok: true,
@@ -213,6 +214,12 @@ router.post('/stands/import', async (req, res, next) => {
       // old names showing under ours until this is run again.
       console.error('Stand import: could not strip printed names —', e.message);
     }
+
+    // The stands are in the database; now make the running server aware of
+    // them. Without this the import is invisible to every open page — and to
+    // every page opened afterwards, since the cache is only warmed at boot.
+    try { await sockets.notifyStands(); }
+    catch (e) { console.error('Stand import: viewers not refreshed —', e.message); }
 
     track({ type: 'stands.import', boothNumber: null, actor: req.admin?.user || 'unknown',
             meta: { imported: out.imported, sold: out.sold, replaced: out.replaced } });

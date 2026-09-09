@@ -919,4 +919,25 @@ function escapeHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-module.exports = { register, refresh, refreshAll, notifyAreas };
+
+/**
+ * Reload this show's stands from the database and push them to its viewers.
+ *
+ * The socket layer serves stands from a per-show in-memory cache warmed at
+ * boot, so a REST route that writes stands directly is invisible until
+ * something refreshes it. That is not a hypothetical: importing North
+ * America's stands wrote 96 rows the running server never saw, and every
+ * visitor was served an empty plan — no clickable stands, no names, zeroes in
+ * the stats strip — while the header, which reads the database, correctly said
+ * 21 stands available. Two readouts disagreeing on the same page, and nothing
+ * logged.
+ *
+ * notifyAreas() exists for the same reason on the areas side; this is its
+ * counterpart for stands.
+ */
+async function notifyStands() {
+  await refresh();
+  if (ioRef) broadcastState(ioRef);
+}
+
+module.exports = { register, refresh, refreshAll, notifyAreas, notifyStands };

@@ -36,13 +36,20 @@ function readRects(svg) {
 
     // Rotated stands are written about a translated origin; resolve them so
     // every rect that follows is in one coordinate space.
+    // As authored. This is what the page reports for the element when it binds
+    // a stand to its shape — it reads the x/y/width/height attributes and does
+    // NOT apply the element's own transform — so it is what must be stored.
+    const raw = { x, y, w, h };
+
     const t = /transform="translate\(([-\d.]+)[\s,]+([-\d.]+)\)\s*rotate\(90\)"/.exec(a);
     if (t) {
       const nx = parseFloat(t[1]) - (y + h);
       const ny = parseFloat(t[2]) + x;
       x = nx; y = ny; [w, h] = [h, w];
     }
-    out.push({ cls: (/class="([^"]+)"/.exec(a) || [])[1] || '', x, y, w, h });
+    // x/y/w/h are now where the shape actually appears, which is the space the
+    // text labels are positioned in and the only space they can be matched in.
+    out.push({ cls: (/class="([^"]+)"/.exec(a) || [])[1] || '', x, y, w, h, raw });
   }
   return out;
 }
@@ -182,10 +189,31 @@ function extractStands(svg) {
     stands.push({
       number: n.text,
       printedArea: a ? parseInt(AREA.exec(a.text)[1].replace(/,/g, ''), 10) : null,
-      geometry: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), w: +r.w.toFixed(2), h: +r.h.toFixed(2) },
+      geometry: { x: +r.raw.x.toFixed(2), y: +r.raw.y.toFixed(2),
+                  w: +r.raw.w.toFixed(2), h: +r.raw.h.toFixed(2) },
+      visual: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), w: +r.w.toFixed(2), h: +r.h.toFixed(2) },
       exhibitor: name ? name.text : null,
       fillClass: r.cls,
     });
+  }
+
+  // A stand number is the identity of a stand: it is the key it is stored
+  // under and the way sales refer to it. Two shapes printed with the same
+  // number cannot both be that stand, and passing both on would abort the
+  // import partway through and leave the event half-filled.
+  const byNumber = new Map();
+  const repeated = [];
+  for (const st of stands.splice(0)) {
+    if (byNumber.has(st.number)) {
+      const first = byNumber.get(st.number);
+      repeated.push(`${st.number} (${first.printedArea ?? '?'} and ${st.printedArea ?? '?'})`);
+      continue;
+    }
+    byNumber.set(st.number, st);
+    stands.push(st);
+  }
+  if (repeated.length) {
+    warnings.push(`${repeated.length} stand numbers are printed on two different shapes — ${repeated.join(', ')}. Only the first is kept; the artwork needs correcting before these stands can be sold.`);
   }
 
   const orphans = numbers.filter(n => !claimed.has(n));
@@ -200,7 +228,7 @@ function extractStands(svg) {
   let unitsPerArea = null;
   if (withArea.length >= 5) {
     const ratios = withArea
-      .map(s => (s.geometry.w * s.geometry.h) / s.printedArea)
+      .map(s => (s.visual.w * s.visual.h) / s.printedArea)
       .sort((p, q) => p - q);
     unitsPerArea = ratios[Math.floor(ratios.length / 2)];
   } else {
@@ -213,7 +241,7 @@ function extractStands(svg) {
   const disagree = [];
   for (const s of stands) {
     const derived = unitsPerArea
-      ? Math.round((s.geometry.w * s.geometry.h) / unitsPerArea)
+      ? Math.round((s.visual.w * s.visual.h) / unitsPerArea)
       : null;
     s.derivedArea = derived;
     s.area = s.printedArea != null ? s.printedArea : derived;

@@ -64,6 +64,8 @@ const STANDS = [
         inserted.find(d => d.boothNumber === '101').assignment.company === 'Acme Oils');
   check('the printed area is kept as the stand area',
         inserted.find(d => d.boothNumber === '102').sqm === 200);
+  check('every imported stand is marked as coming from artwork',
+        inserted.every(d => d.source === 'artwork-import'));
 
   console.log('\nEvery write is scoped to one event');
   const unscoped = calls.filter(c => ['deleteMany', 'count', 'find'].includes(c[0]))
@@ -83,6 +85,20 @@ const STANDS = [
   console.log('\nNothing to import is not an import');
   check('an empty read writes nothing',
         (await showContext.runAs('LNA', () => booths.importFromArtwork([]))).ok === false);
+
+  console.log('\nWhat counts as work an import must not destroy');
+  const { commercialFilter } = booths;
+  // Matching is asserted against the shape of the filter rather than a live
+  // Mongo, so read it as: which of these documents would be counted.
+  const f2 = JSON.stringify(commercialFilter());
+  check('a stand on hold counts', /"status":"held"|\$ne":"available"/.test(f2));
+  check('a contact or an agreed price counts',
+        /assignment.contactId/.test(f2) && /assignment.actualPrice/.test(f2));
+  check('a stand sold only because the artwork named it does NOT count',
+        /\$nor/.test(f2) && /artwork-import/.test(f2),
+        'so a botched import can still be corrected');
+  check('events imported before the marker existed are still recognised',
+        /Name read from the supplied floorplan artwork/.test(f2));
 
   const f = out.filter(x => !x).length;
   console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);
