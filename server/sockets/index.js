@@ -5,6 +5,7 @@ const booths    = require('../models/booths');
 const sponsors  = require('../models/sponsors');
 const settings  = require('../models/settings');
 const tags      = require('../models/tags');
+const showContext = require('../show-context');
 const planAreas = require('../models/plan-areas');
 const users     = require('../models/users');
 const inquiries = require('../models/inquiries');
@@ -40,7 +41,7 @@ async function refresh() {
 // booths in every state broadcast.
 let tagCache = [];
 async function refreshTags() { tagCache = await tags.catalogue(); }
-function broadcastTags(io) { io.emit('tags:catalogue', tagCache); }
+function broadcastTags(io) { io.to(pubRoom(config.showId)).emit('tags:catalogue', tagCache); }
 
 // ─── Plan areas ───────────────────────────────────────────────────────────────
 // The lounges, theatres and conference rooms the artwork draws in blue, with
@@ -61,7 +62,7 @@ async function refreshAreas() {
     };
   });
 }
-function broadcastAreas(io) { io.emit('areas:catalogue', areaCache); }
+function broadcastAreas(io) { io.to(pubRoom(config.showId)).emit('areas:catalogue', areaCache); }
 
 // The REST side (a sponsorship package marked sold out) has to be able to push
 // the areas it just changed. register() records io for exactly this.
@@ -111,15 +112,15 @@ function broadcastState(io) {
     // failed broadcast should degrade to a missed update, nothing worse.
     try {
       const rows = decorate();
-      io.except(ADMIN_ROOM).emit('state:full', rows.map(booths.toPublic));
-      io.to(ADMIN_ROOM).emit('state:full',     rows.map(booths.toAdmin));
+      io.to(pubRoom(config.showId)).except(adminRoom(config.showId)).emit('state:full', rows.map(booths.toPublic));
+      io.to(adminRoom(config.showId)).emit('state:full', rows.map(booths.toAdmin));
 
       const s = await booths.stats();
-      io.except(ADMIN_ROOM).emit('stats:updated', {
+      io.to(pubRoom(config.showId)).except(adminRoom(config.showId)).emit('stats:updated', {
         totalBooths: s.totalBooths, availableBooths: s.availableBooths,
         totalSqm: s.totalSqm, availSqm: s.availSqm,
       });
-      io.to(ADMIN_ROOM).emit('stats:updated', { ...s, connections });
+      io.to(adminRoom(config.showId)).emit('stats:updated', { ...s, connections });
     } catch (e) {
       console.error('Broadcast failed:', e.message);
     }
@@ -131,16 +132,34 @@ function broadcastState(io) {
  * failure rather than an unhandled rejection. Without this, anyone able to
  * induce a write failure could crash the server with a single public event.
  */
-function safe(type, handler) {
+/**
+ * Wrap a public socket handler: swallow its errors, and run it inside the
+ * show the socket belongs to. The show part matters as much as the error part —
+ * an enquiry submitted from the North America plan must be stored against North
+ * America, and that is decided here rather than in each handler.
+ */
+function safe(type, handler, socket) {
   return async (...args) => {
-    try { return await handler(...args); }
-    catch (e) { console.error(`✗ ${type} failed:`, e.stack || e.message); }
+    const run = () => handler(...args);
+    try {
+      return await (socket && socket.data.showId
+        ? showContext.runAs(socket.data.showId, run)
+        : run());
+    } catch (e) { console.error(`✗ ${type} failed:`, e.stack || e.message); }
   };
 }
 
+// ─── Per-show broadcast rooms ────────────────────────────────────────────────
+// One deployment can serve several events, so a booking on one must not appear
+// on another's plan. Every socket joins exactly two rooms — its show's public
+// room, and its show's admin room if it is an admin — and nothing is ever sent
+// with a bare io.emit again.
+const pubRoom   = (showId) => `${showId}:public`;
+const adminRoom = (showId) => `${showId}:admins`;
+
 // Activity log is admin-only — it names companies and quotes prices.
 function log(io, msg, type = 'info') {
-  io.to(ADMIN_ROOM).emit('log:entry', { msg, type, time: new Date().toLocaleTimeString('en-GB') });
+  io.to(adminRoom(config.showId)).emit('log:entry', { msg, type, time: new Date().toLocaleTimeString('en-GB') });
 }
 
 const stand = (n) => String(n);
@@ -154,10 +173,27 @@ function register(io) {
   refreshTags().catch(e => console.error('Tag catalogue not loaded:', e.message));
   refreshAreas().catch(e => console.error('Plan areas not loaded:', e.message));
 
+  // slug → id, for resolving a socket's show from its handshake.
+  const showBySlug = new Map(config.shows.map(sh => [sh.slug, sh.id]));
+
   io.on('connection', (socket) => {
     connections++;
     const isAdmin = socket.data.isAdmin;
-    if (isAdmin) socket.join(ADMIN_ROOM);
+
+    // Which event this socket is watching. The page passes its slug in the
+    // handshake; anything unrecognised falls back to the default rather than
+    // failing the connection, since a visitor with a stale bookmark should
+    // still see a floorplan.
+    const slug = String(socket.handshake.query?.show || '').trim().toLowerCase();
+    socket.data.showId = showBySlug.get(slug) || config.defaultShow;
+
+    // Two rooms, both scoped to this socket's show, so a broadcast for one
+    // event never reaches another's viewers.
+    socket.join(pubRoom(socket.data.showId));
+    if (isAdmin) {
+      socket.join(ADMIN_ROOM);                        // kept: some tooling still targets it
+      socket.join(adminRoom(socket.data.showId));
+    }
 
     // Anonymous session id for behavioural tracking. Generated server-side so a
     // client cannot claim another visitor's session.
@@ -224,7 +260,7 @@ function register(io) {
 
       await refresh();
       broadcastState(io);
-    }));
+    }, socket));
 
     // Sent when a visitor accepts analytics consent mid-session, so their
     // events attach to a stable id from that point on.
@@ -273,14 +309,14 @@ function register(io) {
           log(io, `📩 Enquiry from <strong>${escapeHtml(who)}</strong> — stands ${booths.map(escapeHtml).join(', ') || 'none'}`, 'inquiry');
           // The socket payload is rendered with textContent by the client, so it
           // carries the raw values.
-          io.to(ADMIN_ROOM).emit('inquiry:new', { id: res.id, name: who, booths });
+          io.to(adminRoom(config.showId)).emit('inquiry:new', { id: res.id, name: who, booths });
         }
         ack?.(res);
       } catch (e) {
         console.error('Inquiry failed:', e.message);
         ack?.({ ok: false, errors: ['Something went wrong. Please try again.'] });
       }
-    }));
+    }, socket));
 
     // ── Admin ─────────────────────────────────────────────────────────────────
     // Every handler below is wrapped. Previously any visitor could emit these
@@ -438,7 +474,7 @@ function register(io) {
       }
       track({ type: 'booth.consolidate', boothNumber: p, socket, meta: { secondary: s } });
       await refresh();
-      io.to(ADMIN_ROOM).emit('booth:consolidated', { primary: p, secondary: s });
+      io.to(adminRoom(config.showId)).emit('booth:consolidated', { primary: p, secondary: s });
       broadcastState(io);
       log(io, `🔗 Stand ${escapeHtml(s)} merged into ${escapeHtml(p)}`, 'admin');
     }));
@@ -459,7 +495,7 @@ function register(io) {
       }
       track({ type: 'booth.consolidate', boothNumber: r.primary.boothNumber, socket, meta: { many: r.absorbed } });
       await refresh();
-      io.to(ADMIN_ROOM).emit('booth:consolidated', { primary: r.primary.boothNumber, secondary: r.absorbed });
+      io.to(adminRoom(config.showId)).emit('booth:consolidated', { primary: r.primary.boothNumber, secondary: r.absorbed });
       broadcastState(io);
       log(io, `🔗 ${r.absorbed.length + 1} stands merged into ${escapeHtml(r.primary.boothNumber)}`, 'admin');
       return { ok: true, primary: r.primary.boothNumber, absorbed: r.absorbed };
@@ -644,7 +680,7 @@ function register(io) {
     // client so the legend swatch and any sponsored-booth fills update live.
     socket.on('sponsor:set-floorplan', requireAdmin(socket, 'sponsor:set-floorplan', async ({ name, color }) => {
       const saved = await sponsors.setFloorplanSponsor({ name, color });
-      io.emit('floorplan-sponsor', saved);
+      io.to(pubRoom(config.showId)).emit('floorplan-sponsor', saved);
       log(io, saved.color
         ? `🎨 Floorplan sponsor set — ${escapeHtml(saved.name || 'unnamed')} (${escapeHtml(saved.color)})`
         : `🎨 Floorplan sponsor cleared`, 'admin');
@@ -748,7 +784,7 @@ function register(io) {
       if (!saved.ok) return { ok: false, error: 'Enter a valid rate (a positive number).' };
       const rep = await booths.recomputeListPrices(saved.ratePerSqm, { actor: socket.data.user });
       await refresh(); broadcastState(io);
-      io.to(ADMIN_ROOM).emit('settings', { ratePerSqm: saved.ratePerSqm });
+      io.to(adminRoom(config.showId)).emit('settings', { ratePerSqm: saved.ratePerSqm });
       log(io, `💶 Rate set to €${saved.ratePerSqm}/unit — ${rep.repriced || 0} stands repriced`, 'admin');
       return { ok: true, ratePerSqm: saved.ratePerSqm, repriced: rep.repriced };
     }));
@@ -761,8 +797,8 @@ function register(io) {
       const r = await settings.setCurrency(currency);
       if (!r.ok) return { ok: false, error: 'That is not a currency we support.' };
       const st = await settings.get();
-      io.emit('settings', { unit: st.unit, currency: st.currency, currencySymbol: st.currencySymbol });
-      io.to(ADMIN_ROOM).emit('settings', { unit: st.unit, currency: st.currency,
+      io.to(pubRoom(config.showId)).emit('settings', { unit: st.unit, currency: st.currency, currencySymbol: st.currencySymbol });
+      io.to(adminRoom(config.showId)).emit('settings', { unit: st.unit, currency: st.currency,
         currencySymbol: st.currencySymbol, ratePerSqm: st.ratePerSqm });
       log(io, `💱 Prices now shown in ${escapeHtml(r.currency)}`, 'admin');
       return { ok: true, ...r };
@@ -770,7 +806,7 @@ function register(io) {
 
     socket.on('settings:set-unit', requireAdmin(socket, 'settings:set-unit', async ({ unit }) => {
       const saved = await settings.setUnit(unit);
-      io.emit('settings', { unit: saved.unit });               // public: label only
+      io.to(pubRoom(config.showId)).emit('settings', { unit: saved.unit });   // public: label only
       log(io, `📐 Area unit set to ${saved.unit === 'ft' ? 'ft²' : 'm²'}`, 'admin');
       return { ok: true, unit: saved.unit };
     }));
@@ -786,11 +822,13 @@ function register(io) {
       }
       delete activeViewers[socket.id];
       broadcastState(io);
-      io.emit('viewers:count', connections);
+      io.to(pubRoom(config.showId)).emit('viewers:count', connections);
     });
 
     // ── Initial state, sent only once every handler above is bound ────────────
-    (async () => {
+    // Inside this socket's show, so the projections and settings below describe
+    // the event the visitor actually opened.
+    (async () => showContext.runAs(socket.data.showId, async () => {
       try {
         socket.emit('session:id', socket.data.sessionId);
         const rows = decorate();
@@ -815,12 +853,12 @@ function register(io) {
           // knows to prompt for it. Admin-only — never advertised to the public.
           recoveryRequired: isAdmin ? config.recoveryEnabled() : undefined });
 
-        io.emit('viewers:count', connections);
+        io.to(pubRoom(config.showId)).emit('viewers:count', connections);
         socket.emit('ready');
       } catch (e) {
         console.error('Initial state failed:', e.message);
       }
-    })();
+    }))();
   });
 
   holdsSvc.startExpiryLoop(async (expired) => {

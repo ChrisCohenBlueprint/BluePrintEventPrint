@@ -257,11 +257,18 @@ function requireAdmin(socket, type, handler) {
     }
     // Async handler rejections would otherwise surface as an unhandled promise
     // rejection with no link back to the event that caused it.
+    //
+    // The handler runs inside this socket's show, so the ~120 `config.showId`
+    // reads beneath it resolve to the event the admin actually has open. Every
+    // admin socket event goes through here, which is why it is done once rather
+    // than in each handler.
+    const showContext = require('./show-context');
+    const runShow = (fn) => socket.data.showId ? showContext.runAs(socket.data.showId, fn) : fn();
     try {
       // The handler's return value is its acknowledgement. Returning
       // { ok: false, error } reports a business-rule failure; returning nothing
       // is treated as success. Either way the caller always gets a response.
-      const result = await handler(payload);
+      const result = await runShow(() => handler(payload));
       if (typeof ack === 'function') ack({ ok: true, ...(result || {}) });
     } catch (e) {
       console.error(`✗ ${type} failed:`, e.stack || e.message);

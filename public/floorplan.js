@@ -19,7 +19,11 @@ function sessionId() {
   return s;
 }
 
-const socket = io({ auth: { sessionId: sessionId() } });
+// The show this page is for, injected by the server (see send-page.js). Passed
+// in the handshake so the socket joins the right event's rooms — without it a
+// booking on one plan would appear on another's.
+const SHOW = (window.__SHOW && window.__SHOW.slug) || '';
+const socket = io({ auth: { sessionId: sessionId() }, query: { show: SHOW } });
 
 /** Emit a tracking-only event, suppressed when consent has not been given. */
 function emitTracked(event, payload) {

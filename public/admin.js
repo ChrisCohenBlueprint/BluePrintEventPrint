@@ -1,5 +1,8 @@
 // ─── BluePrint EventPrint — Admin Dashboard JS ────────────────────────────────
-const socket = io();
+// See floorplan.js — the show is injected by the server and carried in the
+// handshake so this admin joins the right event's rooms.
+const SHOW = (window.__SHOW && window.__SHOW.slug) || '';
+const socket = io({ query: { show: SHOW } });
 
 // Show who is signed in. currentRole gates team management — only the owner may
 // add/remove members or reset a colleague's password/2FA (the server enforces

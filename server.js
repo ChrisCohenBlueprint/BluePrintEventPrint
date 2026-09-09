@@ -9,6 +9,7 @@ const config  = require('./server/config');
 const db      = require('./server/db');
 const { adminAuth } = require('./server/auth');
 const sockets = require('./server/sockets');
+const { showMiddleware, showForRequest } = require('./server/show-middleware');
 const apiRoutes    = require('./server/routes/api');
 const authRoutes   = require('./server/routes/auth-routes');
 const publicRoutes = require('./server/routes/public');
@@ -70,6 +71,10 @@ async function start() {
   // ephemeral, so images live in the database rather than on the filesystem.
   app.use(express.json({ limit: '3mb' }));
 
+  // Which show is this request for? Resolved once and carried in async context
+  // for the rest of it — see server/show-middleware.js.
+  app.use(showMiddleware());
+
   app.get('/', (_, res) => res.redirect('/floorplan'));
 
   // Login flow, mounted BEFORE adminAuth so /login, /login/*, /logout and
@@ -89,8 +94,13 @@ async function start() {
 
   app.use('/api', apiRoutes);
 
-  app.get('/floorplan', (_, res) => sendPage(res, 'floorplan.html'));
-  app.get('/admin',     (_, res) => sendPage(res, 'admin.html'));
+  // Pages, with and without a show in the path. The unprefixed forms are kept
+  // deliberately: /floorplan is embedded in the marketing site via an iframe and
+  // /admin is bookmarked, so moving them would break both silently.
+  app.get('/floorplan',        (req, res) => sendPage(res, 'floorplan.html', showForRequest(req)));
+  app.get('/floorplan/:show',  (req, res) => sendPage(res, 'floorplan.html', showForRequest(req)));
+  app.get('/admin',            (req, res) => sendPage(res, 'admin.html',     showForRequest(req)));
+  app.get('/admin/:show',      (req, res) => sendPage(res, 'admin.html',     showForRequest(req)));
 
   // Caching: the big floorplan SVG never changes, so cache it hard. Everything
   // else (HTML/CSS/JS) must revalidate on every load — otherwise a deploy's new

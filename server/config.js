@@ -1,6 +1,26 @@
 require('dotenv').config();
 
 const crypto = require('crypto');
+const showContext = require('./show-context');
+
+// ─── Shows served by this deployment ─────────────────────────────────────────
+const DEFAULT_SHOW = process.env.SHOW_ID || 'LEX26';
+
+// "lex:LEX27,lna:LNA27" → [{ slug: 'lex', id: 'LEX27' }, …]. A malformed entry
+// is dropped rather than becoming a show nobody can reach.
+const SHOWS = (process.env.SHOWS || '')
+  .split(',')
+  .map(pair => pair.trim())
+  .filter(Boolean)
+  .map(pair => {
+    const [slug, id] = pair.split(':').map(x => (x || '').trim());
+    return slug && id ? { slug: slug.toLowerCase(), id } : null;
+  })
+  .filter(Boolean);
+
+// With SHOWS unset, this deployment serves exactly one event — the one it
+// always did — reachable at its own slug as well as the unprefixed paths.
+if (!SHOWS.length) SHOWS.push({ slug: DEFAULT_SHOW.toLowerCase(), id: DEFAULT_SHOW });
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -38,9 +58,23 @@ module.exports = {
   // the admin plan and the printed proposal cannot drift onto different files.
   floorplanSvg: process.env.FLOORPLAN_SVG || '/LEX27_Floorplan_Consolidated.svg',
 
-  // The active show. Every collection is keyed by this so a second event
-  // can be added without a schema change.
-  showId:    process.env.SHOW_ID   || 'LEX26',
+  // The shows this deployment serves, as slug → id. SHOWS is a comma-separated
+  // list of `slug:ID` pairs (e.g. "lex:LEX27,lna:LNA27,lme:LME27") giving the
+  // URL segment for each event. Unset, it is the single configured show, so an
+  // existing deploy behaves exactly as it did.
+  shows: SHOWS,
+  defaultShow: DEFAULT_SHOW,
+
+  /**
+   * The show the current request belongs to.
+   *
+   * A getter, not a value: it reads the async context set when the request
+   * arrived (see show-context.js), so the ~120 `config.showId` reads across the
+   * models resolve to the right event with no change to any of them. Outside a
+   * request it is the default show, which is what a single-show deploy and
+   * every startup task want.
+   */
+  get showId() { return showContext.current() || DEFAULT_SHOW; },
 
   // €/m², used to derive a booth's list price and to size sponsorship
   // recommendations against the buyer's likely budget.

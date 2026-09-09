@@ -18,14 +18,44 @@ const BUILD_ID = Date.now().toString(36);
 const PUBLIC = path.join(__dirname, '..', '..', 'public');
 const cache = {};
 
-function sendPage(res, file) {
+/**
+ * `show` names the event this page is for. It is injected as a small script in
+ * <head> — before the page's own scripts run — which does two things: records
+ * the show for the socket handshake, and adds an `X-Show` header to every
+ * same-origin fetch the page makes. That header is how ~40 existing `fetch()`
+ * calls reach the right event without one of them being edited.
+ */
+function sendPage(res, file, show = null) {
   if (!cache[file]) {
     const html = fs.readFileSync(path.join(PUBLIC, file), 'utf8');
     // Local .js/.css only — not external URLs, and not ones already carrying a query.
     cache[file] = html.replace(/(src|href)="([^"?:]+\.(?:js|css))"/g, `$1="$2?v=${BUILD_ID}"`);
   }
+
+  let html = cache[file];
+  if (show) {
+    const boot = `<script>
+window.__SHOW = ${JSON.stringify(show)};
+(function () {
+  var native = window.fetch;
+  window.fetch = function (input, init) {
+    // Same-origin only: a relative path, or this origin spelled out. Never add
+    // the header to a third-party request.
+    var url = (typeof input === 'string') ? input : (input && input.url) || '';
+    var sameOrigin = url.charAt(0) === '/' || url.indexOf(location.origin) === 0;
+    if (!sameOrigin) return native.apply(this, arguments);
+    init = init || {};
+    var h = new Headers(init.headers || (typeof input === 'object' && input.headers) || {});
+    h.set('X-Show', window.__SHOW.slug);
+    return native.call(this, input, Object.assign({}, init, { headers: h }));
+  };
+})();
+</script>`;
+    html = html.replace('</head>', boot + '</head>');
+  }
+
   res.set('Cache-Control', 'no-cache');
-  res.type('html').send(cache[file]);
+  res.type('html').send(html);
 }
 
 module.exports = { sendPage, BUILD_ID, PUBLIC };
