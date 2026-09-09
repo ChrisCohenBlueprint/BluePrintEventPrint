@@ -54,54 +54,59 @@ async function refresh() {
 }
 
 /**
- * The three events this system runs, created on boot if they are not there.
+ * The three events this system runs: Europe, North America, Middle East.
  *
- * The organiser runs Lubricant Expo in Europe, North America and the Middle
- * East. Those are facts about the business, not something to be assembled by
- * hand in an admin screen before anything works — so they are seeded, and the
- * three appear without anyone creating them.
+ * They are permanent. A floorplan belongs to one edition of an event — when the
+ * show is over the plan is cleared and next year's is uploaded to the same
+ * event — so the events themselves carry no year, and there is no LEX26 to
+ * retire and replace annually.
  *
- * The existing event keeps its show id. Every booth, lead, tag and setting is
- * filed under it, so changing it would orphan the lot; only its slug and
- * display name are set, and neither has anything stored against it. The two new
- * events take ids matching the existing one's year, so the set reads
- * consistently.
+ * Europe is the event already running, whatever id it was created under. That
+ * id is NOT changed here: every booth, lead, tag, hold and setting is filed
+ * against it, and renaming it in one place would orphan all of them. Only its
+ * slug and display name are set, and nothing is stored against either.
  */
 const DEFAULT_EVENTS = [
-  { slugs: ['lex'], suffix: 'LEX', name: 'Lubricant Expo Europe' },
-  { slugs: ['lna'], suffix: 'LNA', name: 'Lubricant Expo North America' },
-  { slugs: ['lme'], suffix: 'LME', name: 'Lubricant Expo Middle East' },
+  { key: 'europe',       slug: 'lex', id: 'LEX', name: 'Lubricant Expo Europe' },
+  { key: 'northamerica', slug: 'lna', id: 'LNA', name: 'Lubricant Expo North America' },
+  { key: 'middleeast',   slug: 'lme', id: 'LME', name: 'Lubricant Expo Middle East' },
 ];
 
 async function ensureSeeded() {
   await refresh();
 
-  // The year the running event uses — "LEX26" gives "26", so the new events
-  // become LNA26 and LME26 rather than a year picked out of the air.
-  const existing = String(config.defaultShow || '');
-  const year = (existing.match(/(\d{2,4})\s*$/) || [])[1] || '';
+  // Rows with no showId are wreckage from a failed deploy: nothing can be filed
+  // against an undefined show, so there is nothing to lose by removing them.
+  // Left in place they appear as a duplicate event carrying another event's
+  // stand count, which is exactly how this was noticed.
+  const junk = await col().find({ $or: [{ showId: { $exists: false } }, { showId: null }, { showId: '' }] }).toArray();
+  for (const row of junk) await col().deleteOne({ _id: row._id });
+  if (junk.length) await refresh();
+
+  // Europe is the event already running — identified by the id its data is
+  // under, not by name.
+  const europeId = config.defaultShow;
 
   for (const ev of DEFAULT_EVENTS) {
-    const id = ev.suffix === existing.replace(/\d+$/, '') ? existing : `${ev.suffix}${year}`;
-    const slug = ev.slugs[0];
+    const id = ev.key === 'europe' ? europeId : ev.id;
+    const existing = cache.find(c => c.showId === id);
 
-    // Never touch an event that already exists beyond giving it a readable
-    // name: it may have a slug someone chose, and it certainly has data.
-    const already = cache.find(c => c.showId === id);
-    if (already) {
-      if (!already.name || already.name === already.showId) {
-        await col().updateOne({ showId: id }, { $set: { name: ev.name } });
-      }
+    if (existing) {
+      // Only fill in what has never been set. An admin who renamed an event or
+      // chose its URL must not have that undone on every boot.
+      const $set = {};
+      if (!existing.name || existing.name === existing.showId) $set.name = ev.name;
+      if (Object.keys($set).length) await col().updateOne({ showId: id }, { $set });
       continue;
     }
-    // A slug already used by another event would collide on the unique index.
-    if (cache.some(c => c.slug === slug)) continue;
 
-    await col().updateOne(
-      { showId: id },
-      { $setOnInsert: { slug, showId: id, name: ev.name, active: true,
-                        order: DEFAULT_EVENTS.indexOf(ev), createdAt: new Date() } },
-      { upsert: true });
+    // A slug already taken by another event would collide on the unique index.
+    if (cache.some(c => c.slug === ev.slug)) continue;
+
+    await col().insertOne({
+      slug: ev.slug, showId: id, name: ev.name, active: true,
+      order: DEFAULT_EVENTS.indexOf(ev), createdAt: new Date(),
+    });
   }
   return refresh();
 }
