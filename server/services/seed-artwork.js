@@ -26,7 +26,7 @@ const booths = require('../models/booths');
 const { getDb } = require('../db');
 const { extractStands, stripExhibitorNames, paletteOf } = require('../lib/extract-stands');
 
-const FLAG = 'seed-artwork-lna-v1';
+const FLAG = 'seed-artwork-lna-v2';   // v1 was refused by the held-stand guard
 const SLUG = 'lna';
 const FILE = path.join(__dirname, '..', '..', 'public', 'LNA27_Floorplan_Web-Format_24.svg');
 

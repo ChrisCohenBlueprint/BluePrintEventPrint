@@ -135,9 +135,7 @@ router.get('/stands/preview', async (_req, res, next) => {
     const r = extractStands(f.svg);
     // The same measure the import itself applies, so the button the admin sees
     // and the answer it gets can never disagree.
-    const committed = await booths.col().countDocuments({
-      showId: config.showId, ...booths.commercialFilter(),
-    });
+    const committed = await booths.countCommitted();
     res.json({
       ok: true,
       stands: r.stands.filter(s => !s.sponsored).length,

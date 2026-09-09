@@ -1156,8 +1156,13 @@ const IMPORT_NOTE = 'Name read from the supplied floorplan artwork.';
  * imported before that field existed are still recognised.
  */
 function commercialFilter() {
+  // Sold OR held, with nothing a person did to it, put there by an import of
+  // this kind. `held` matters as much as `sold`: an import stores the stands
+  // the plan draws as reserved AS held, and counting those as bookings meant
+  // the four held stands an import had just created refused every import after
+  // it — the event could never be corrected once it had been imported wrong.
   const fromImport = {
-    status: 'sold',
+    status: { $in: ['sold', 'held'] },
     'assignment.contactId': null,
     'assignment.actualPrice': null,
     $or: [{ source: IMPORT_SOURCE }, { 'assignment.notes': IMPORT_NOTE }],
@@ -1168,6 +1173,28 @@ function commercialFilter() {
       { $nor: [fromImport] },
     ],
   };
+}
+
+/**
+ * How many stands on this show carry work an import cannot recreate.
+ *
+ * A stand a person actually put on hold has a row in `holds`, with a company
+ * and an expiry; one an import wrote does not. That row is the difference
+ * between a reservation someone made and a colour read off a drawing, so it is
+ * checked directly rather than inferred from the stand alone.
+ */
+async function countCommitted(showId = config.showId) {
+  const byRecord = await col().countDocuments({ showId, ...commercialFilter() });
+
+  // Any stand someone actually reserved, whatever else is true of it.
+  const held = await getDb().collection('holds').distinct('boothNumber', { showId });
+  const heldByHand = held.length
+    ? await col().countDocuments({ showId, boothNumber: { $in: held } })
+    : 0;
+
+  // They can overlap; the larger is the honest floor and is only used to
+  // decide whether to refuse.
+  return Math.max(byRecord, heldByHand);
 }
 
 /**
@@ -1197,7 +1224,7 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
   const db = getDb();
   const showId = config.showId;
 
-  const committed = await col().countDocuments({ showId, ...commercialFilter() });
+  const committed = await countCommitted(showId);
   if (committed > 0 && !force) {
     return { ok: false, reason: 'has_bookings', committed, showId };
   }
@@ -1265,4 +1292,4 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
 
 module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
                    setDisplayNumber, setSponsored, setSponsorLogo, setTags, setCountry, removeTag, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
-                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork, commercialFilter };
+                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork, commercialFilter, countCommitted };

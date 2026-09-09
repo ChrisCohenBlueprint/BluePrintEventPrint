@@ -14,7 +14,15 @@ const calls = [];
 function fakeDb(state) {
   const docs = { booths: state.booths || [], booths_snapshots: [], holds: [] };
   const col = (name) => ({
-    countDocuments: async (f) => { calls.push(['count', name, f]); return state.committed ?? 0; },
+    distinct: async (field, f) => { calls.push(['distinct', name, f]); return state.holds || []; },
+    countDocuments: async (f) => {
+      calls.push(['count', name, f]);
+      // The guard asks two different questions of the same collection: how many
+      // stands carry real commercial state, and how many are named by a row in
+      // `holds`. Answering both with one number hid a bug, so tell them apart.
+      if (f && f.boothNumber && Array.isArray(f.boothNumber.$in)) return f.boothNumber.$in.length;
+      return state.committed ?? 0;
+    },
     find: (f) => { calls.push(['find', name, f]); return { toArray: async () => docs.booths.filter(b => b.showId === f.showId) }; },
     findOne: async () => null,
     insertOne: async (d) => { calls.push(['insertOne', name, d]); docs[name].push(d); },
@@ -106,12 +114,32 @@ const STANDS = [
   check('an empty read writes nothing',
         (await showContext.runAs('LNA', () => booths.importFromArtwork([]))).ok === false);
 
+  console.log('\nStands an import itself created never block the next one');
+  // An import stores the stands a plan draws as reserved AS held. Counting
+  // those as bookings meant the four held stands an import had just created
+  // refused every import after it: an event imported wrong could never be
+  // corrected.
+  calls.length = 0;
+  db = fakeDb({ committed: 0, holds: [], booths: [{ showId: 'LNA' }] });
+  const again2 = await showContext.runAs('LNA', () => booths.importFromArtwork(STANDS));
+  check('a re-import is allowed', again2.ok === true, JSON.stringify(again2.reason));
+  check('and the guard asks the holds collection who really reserved something',
+        calls.some(c => c[0] === 'distinct' && c[1] === 'holds'));
+
+  console.log('\nA stand someone actually reserved does block it');
+  db = fakeDb({ committed: 0, holds: ['101'], booths: [{ showId: 'LNA' }] });
+  const blocked = await showContext.runAs('LNA', () => booths.importFromArtwork(STANDS));
+  check('refused on a real hold', blocked.ok === false && blocked.reason === 'has_bookings',
+        JSON.stringify(blocked.reason));
+
   console.log('\nWhat counts as work an import must not destroy');
   const { commercialFilter } = booths;
   // Matching is asserted against the shape of the filter rather than a live
   // Mongo, so read it as: which of these documents would be counted.
   const f2 = JSON.stringify(commercialFilter());
-  check('a stand on hold counts', /"status":"held"|\$ne":"available"/.test(f2));
+  check('a stand on hold that a person made counts', /"status":"held"|\$ne":"available"/.test(f2));
+  check('but an import\'s own held stands are excluded alongside its sold ones',
+        /"status":\{"\$in":\["sold","held"\]\}/.test(f2), f2.slice(0, 120));
   check('a contact or an agreed price counts',
         /assignment.contactId/.test(f2) && /assignment.actualPrice/.test(f2));
   check('a stand sold only because the artwork named it does NOT count',
