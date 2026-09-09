@@ -2750,11 +2750,18 @@ async function initShowSwitcher() {
 
   let list = [];
   try { list = await fetch('/api/shows').then(r => r.ok ? r.json() : []); } catch { list = []; }
-  const live = list.filter(sh => sh.active !== false);
+  let live = list.filter(sh => sh.active !== false);
 
-  // Nothing to switch between: leave it hidden rather than showing a control
-  // with one option.
-  if (live.length < 2) return;
+  // ALWAYS shown, even with a single event. It used to hide itself when there
+  // was nothing to switch between, on the theory that a one-option dropdown is
+  // clutter. In practice that made the whole multi-event capability invisible:
+  // you could not tell whether it existed, which event you were editing, or
+  // where to add another. Naming the event you are working in is worth the row
+  // on its own.
+  if (!live.length) {
+    const cur = (window.__SHOW && window.__SHOW.slug) || '';
+    live = [{ slug: cur, name: (window.__SHOW && window.__SHOW.name) || cur || 'This event' }];
+  }
 
   sel.replaceChildren();
   live.forEach(sh => {
@@ -2764,6 +2771,11 @@ async function initShowSwitcher() {
     sel.appendChild(o);
   });
   sel.value = (window.__SHOW && window.__SHOW.slug) || live[0].slug;
+  // If the page's show is not among the options — a registry that has moved on,
+  // a slug that no longer exists — the select would render BLANK, which reads
+  // as broken and hides which event you are editing. Fall back to naming
+  // something rather than nothing.
+  if (sel.selectedIndex < 0) sel.selectedIndex = 0;
   wrap.classList.remove('hidden');
 
   sel.onchange = () => { location.href = `/admin/${sel.value}`; };
