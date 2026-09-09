@@ -71,6 +71,12 @@ router.get('/floorplans', async (_req, res, next) => {
           bytes: f ? f.bytes : null,
           uploadedAt: f ? f.uploadedAt : null,
           uploadedBy: f ? f.uploadedBy : null,
+          // Only for plans that were uploaded. Artwork shipped with the app is
+          // deliberately not scored: it belongs to a running show that is not
+          // being changed, and a failing badge on it would only invite someone
+          // to "fix" a live event.
+          spec: f && f.spec ? { passed: f.spec.passed, total: f.spec.total,
+                                failedClauses: f.spec.failedClauses } : null,
           boothCount,
         };
       })));

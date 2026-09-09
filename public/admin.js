@@ -2806,6 +2806,19 @@ function planCard(row, isCurrent) {
     ? `${row.filename}${kb} · uploaded ${new Date(row.uploadedAt).toLocaleDateString('en-GB')}${stands}`
     : `Using the plan shipped with the app${stands}`;
 
+  // The artwork check. Shown only where a plan was uploaded — the shipped
+  // artwork belongs to a running show and is deliberately not scored.
+  let specLine = null;
+  if (row.spec) {
+    specLine = document.createElement('div');
+    const clean = row.spec.passed === row.spec.total;
+    specLine.className = 'plan-spec' + (clean ? ' is-clean' : '');
+    specLine.textContent = clean
+      ? `Artwork check: ${row.spec.passed}/${row.spec.total} — meets the specification`
+      : `Artwork check: ${row.spec.passed}/${row.spec.total} — see ${row.spec.failedClauses.join(', ')}`;
+    specLine.title = 'Specification BEC-FP-01. This is a report, not a gate — the plan is used either way.';
+  }
+
   const actions = document.createElement('div');
   actions.className = 'plan-actions';
 
@@ -2831,15 +2844,70 @@ function planCard(row, isCurrent) {
   actions.append(up, dl, rm);
 
   // Only where there is something to lose.
+  const parts = [head, preview, meta];
+  if (specLine) parts.push(specLine);
   if (row.boothCount > 0) {
     const warn = document.createElement('div');
     warn.className = 'plan-warn';
     warn.textContent = `${row.boothCount} stands are positioned against this plan. Replacing it with differently drawn artwork can leave them off the map until their geometry is re-extracted — bookings are unaffected.`;
-    card.append(head, preview, meta, warn, actions);
-  } else {
-    card.append(head, preview, meta, actions);
+    parts.push(warn);
   }
+  parts.push(actions);
+  card.append(...parts);
   return card;
+}
+
+/**
+ * The artwork report for a plan that has just been uploaded.
+ *
+ * The plan is already stored — this is not a rejection. It exists because the
+ * spec's own value is being able to hand a designer the exact clauses to fix,
+ * so the text is written to be forwarded as it stands.
+ */
+function showSpecReport(eventName, spec) {
+  document.getElementById('spec-report')?.remove();
+
+  const lines = (spec.results || []).map(r =>
+    `  ${r.ok ? 'PASS' : 'FAIL'}  [${r.clause}] ${r.name}${r.detail ? '\n        ' + r.detail : ''}`).join('\n');
+  const text = `Artwork validation — ${eventName}\n`
+             + `Specification ${spec.spec || 'BEC-FP-01'}\n\n${lines}\n\n`
+             + `${spec.passed}/${spec.total} checks passed\n`
+             + `Clauses to correct: ${spec.failedClauses.join(', ')}`;
+
+  const box = document.createElement('div');
+  box.id = 'spec-report';
+  box.className = 'spec-report';
+
+  const head = document.createElement('div');
+  head.className = 'spec-report-head';
+  const title = document.createElement('strong');
+  title.textContent = `${eventName} — artwork check ${spec.passed}/${spec.total}`;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'admin-btn';
+  close.textContent = 'Close';
+  close.onclick = () => box.remove();
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'admin-btn';
+  copy.textContent = 'Copy for the designer';
+  copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(text); adminToast('Report copied.', 'ok'); }
+    catch { adminToast('Could not copy — select the text and copy it.', 'error'); }
+  };
+  head.append(title, copy, close);
+
+  const note = document.createElement('p');
+  note.className = 'spec-report-note';
+  note.textContent = 'The plan has been saved and is in use. This is what to send whoever produced the artwork.';
+
+  const pre = document.createElement('pre');
+  pre.className = 'spec-report-body';
+  pre.textContent = text;
+
+  box.append(head, note, pre);
+  document.getElementById('section-settings')?.prepend(box);
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /** Upload or replace ONE event's plan, named explicitly rather than implied. */
@@ -2879,6 +2947,10 @@ function pickPlan(row) {
       adminToast(r.removed && r.removed.length
         ? `${row.name || row.showId}: floorplan uploaded. Removed for safety: ${r.removed.join(', ')}.`
         : `${row.name || row.showId}: floorplan uploaded.`, 'ok');
+      // The plan is stored either way; this is what to send the designer.
+      if (r.spec && r.spec.failedClauses && r.spec.failedClauses.length) {
+        showSpecReport(row.name || row.showId, r.spec);
+      }
       loadPlans();
     } catch (err) {
       adminToast(err.message || 'Could not read that file.', 'error');

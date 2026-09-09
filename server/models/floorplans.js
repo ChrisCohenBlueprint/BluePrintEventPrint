@@ -70,6 +70,21 @@ async function save(svg, { filename = 'floorplan.svg', actor = null } = {}) {
   if (!/<svg[\s>]/i.test(text)) return { ok: false, reason: 'not_svg' };
 
   const { svg: clean, removed } = sanitise(text);
+
+  // Checked against the artwork spec and RECORDED, never enforced. The plan
+  // running Europe scores 3/8 against this spec, so refusing a file that fails
+  // would refuse a live show's own artwork. What the report is for is telling a
+  // designer, in clause numbers, exactly what to correct.
+  let spec = null;
+  try {
+    const { validate, SPEC } = require('../lib/artwork-spec');
+    const r = validate(clean);
+    spec = { spec: SPEC, passed: r.passed, total: r.total,
+             failedClauses: r.failedClauses, results: r.results };
+  } catch (e) {
+    console.error('Artwork validation failed to run:', e.message);
+  }
+
   const doc = {
     showId: config.showId,
     svg: clean,
@@ -80,9 +95,11 @@ async function save(svg, { filename = 'floorplan.svg', actor = null } = {}) {
     version: Date.now().toString(36),
     uploadedAt: new Date(),
     uploadedBy: actor,
+    spec,
   };
   await col().updateOne({ showId: config.showId }, { $set: doc }, { upsert: true });
-  return { ok: true, removed, bytes: doc.bytes, version: doc.version, filename: doc.filename };
+  return { ok: true, removed, bytes: doc.bytes, version: doc.version,
+           filename: doc.filename, spec };
 }
 
 async function remove(showId = config.showId) {
