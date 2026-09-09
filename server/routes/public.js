@@ -81,7 +81,13 @@ router.get('/floorplan.svg', async (req, res, next) => {
     // The display copy has the exhibitor names taken out, because we draw those
     // ourselves. It is derived from the uploaded original, which is kept intact
     // so a re-import can always read the names back out of it.
-    const artwork = stored && (stored.displaySvg || stored.svg);
+    //
+    // ?original=1 asks for the file as it was uploaded. The admin's Download
+    // button uses it: handing back the stripped copy meant downloading a plan
+    // and re-uploading it — the obvious way to put a plan back — silently
+    // changed nothing, because the names had already been taken out of it.
+    const wantsOriginal = req.query.original === '1';
+    const artwork = stored && (wantsOriginal ? stored.svg : (stored.displaySvg || stored.svg));
     if (artwork) {
       res.set('ETag', `"${stored.version}"`);
       res.set('Cache-Control', 'public, max-age=300');

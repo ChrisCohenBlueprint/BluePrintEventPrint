@@ -2830,7 +2830,9 @@ function planCard(row, isCurrent) {
 
   const dl = document.createElement('a');
   dl.className = 'admin-btn';
-  dl.href = `/floorplan.svg?show=${encodeURIComponent(row.slug)}`;
+  // The file as it was uploaded, names and all — not the copy the public page
+  // is served, which has had them taken out.
+  dl.href = `/floorplan.svg?show=${encodeURIComponent(row.slug)}&original=1`;
   dl.setAttribute('download', `${row.slug}-floorplan.svg`);
   dl.textContent = 'Download';
 
