@@ -12,7 +12,7 @@ const planAreas = require('../models/plan-areas');
 const showsModel = require('../models/shows');
 const floorplans = require('../models/floorplans');
 const settings   = require('../models/settings');
-const { extractStands, stripExhibitorNames } = require('../lib/extract-stands');
+const { extractStands, stripExhibitorNames, paletteOf } = require('../lib/extract-stands');
 const showContext = require('../show-context');
 const boothsModel = require('../models/booths');
 const sockets   = require('../sockets');
@@ -209,6 +209,12 @@ router.post('/stands/import', async (req, res, next) => {
     // The unit follows the plan: it printed ft² or m², and that is the truth
     // for this event. It is a display label, so this changes no number.
     if (r.unit) await settings.setUnit(r.unit === 'sqft' ? 'ft' : 'm');
+
+    // Paint the app in the colours this plan is drawn in, so a stand keeps the
+    // colour the designer chose for it instead of the hall being repainted in
+    // another event's palette.
+    try { await settings.setPalette(paletteOf(r.fills)); }
+    catch (e) { console.error('Stand import: palette not stored —', e.message); }
 
     // Now the artwork's own names come out of the copy we SHOW, so ours are the
     // only ones drawn. The uploaded original keeps its names: overwriting it

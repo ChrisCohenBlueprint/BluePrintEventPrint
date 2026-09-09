@@ -17,6 +17,11 @@
   --booth-sold:      #fcdf6d;   /* "Taken" */
   --booth-held:      #f97316;   /* "On Hold" */
 
+  /* Sponsorable space — a lounge, a conference track. Defaults to the sold
+     colour so an event whose plan does not distinguish them looks unchanged.
+     Overridden per event from the artwork by booth-palette.js. */
+  --booth-sponsored: var(--booth-sold);
+
   /* The "this is the stand you want" cue: the rose ring the admin search puts
      round a found stand, and the same ring the printed proposal puts round the
      stands being offered. Not a status — it sits ON TOP of whichever status
@@ -33,4 +38,5 @@
    the fill presentation attribute on the hit-area overlays BoothMap inserts. */
 .booth-available { fill: var(--booth-available) !important; }
 .booth-sold      { fill: var(--booth-sold)      !important; }
+.booth-sponsored { fill: var(--booth-sponsored) !important; }
 .booth-held      { fill: var(--booth-held)      !important; }

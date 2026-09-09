@@ -785,7 +785,11 @@ socket.on('error:action', ({ message }) => console.warn(message));
 // Area unit label pushed from the server (m²/ft²). Update the static labels and
 // re-render the open panel + stats so the unit changes live.
 socket.on('settings', (s) => {
-  if (!s || !s.unit) return;
+  if (!s) return;
+  // The colours this event's plan is drawn in, before anything is painted.
+  BoothPalette.apply(s.palette);
+  repaintLabels();
+  if (!s.unit) return;
   UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
   document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
   if (selectedId) renderPanel(selectedId);
@@ -934,7 +938,14 @@ function renderSponsorLegend() {
 // bottom. Built by cloning the live SVG, baking the status fills inline (the
 // standalone file carries none of the app's CSS), appending a footer band, then
 // rasterising through a canvas. Coordinates are SVG user units.
-const STATUS_FILL = { available: '#ffffff', sold: '#fcdf6d', held: '#f97316' };
+// Read from the CSS variables rather than restated here, so the minimap and
+// the legend show the same colours as the plan — including the per-event
+// palette booth-palette.js applies from the artwork.
+const STATUS_FILL = {
+  get available() { return BoothPalette.fillFor('available'); },
+  get sold()      { return BoothPalette.fillFor('sold'); },
+  get held()      { return BoothPalette.fillFor('held'); },
+};
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 async function downloadPlan() {
@@ -1478,7 +1489,7 @@ function applyVisual(n) {
   if (!el) return;
 
   const status = booths[n]?.status || 'sold';
-  el.classList.remove('booth-available', 'booth-sold', 'booth-held');
+  el.classList.remove('booth-available', 'booth-sold', 'booth-held', 'booth-sponsored');
   el.classList.add(`booth-${status}`);
 
   if (shortlist.includes(n)) el.classList.add('booth-shortlisted');

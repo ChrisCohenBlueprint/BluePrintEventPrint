@@ -416,7 +416,7 @@ if (document.fonts) document.fonts.ready.then(() => { adminLabelsDeferred = true
 if (window.ResizeObserver && aFrame) new ResizeObserver(repaintAdminLabels).observe(aFrame);
 
 function applyAdminVisual(el, status) {
-  el.classList.remove('booth-available', 'booth-sold', 'booth-held');
+  el.classList.remove('booth-available', 'booth-sold', 'booth-held', 'booth-sponsored');
   el.classList.add(`booth-${status}`);
 
   const id = el.getAttribute('data-booth');
@@ -1322,6 +1322,8 @@ socket.on('floorplan-sponsor', (s) => {
 // Show settings (area unit, currency, rate). Re-render everything that prints a
 // size or a rate so the label/price updates live.
 socket.on('settings', (s) => {
+  // The colours this event's plan is drawn in.
+  if (window.BoothPalette) BoothPalette.apply(s && s.palette);
   if (s && s.unit) UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
   if (s && s.currencySymbol) CUR = s.currencySymbol;
   if (s && s.currency) CURRENCY = s.currency;

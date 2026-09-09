@@ -894,6 +894,7 @@ function register(io) {
         // admin-only: public sqm × rate would reveal list prices.
         const st = await settings.get();
         socket.emit('settings', { unit: st.unit, currency: st.currency, currencySymbol: st.currencySymbol,
+          palette: st.palette,
           ratePerSqm: isAdmin ? st.ratePerSqm : undefined,
           // Whether destructive admin actions need the recovery key, so the UI
           // knows to prompt for it. Admin-only — never advertised to the public.

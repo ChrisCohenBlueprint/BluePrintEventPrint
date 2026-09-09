@@ -421,4 +421,24 @@ function stripExhibitorNames(svg, names) {
   return { svg: out, removed };
 }
 
-module.exports = { extractStands, readRects, readTexts, repairMojibake, stripExhibitorNames };
+
+/**
+ * The colours this plan uses for each state, ready to paint the app in.
+ *
+ * Taken straight from the groups the fills were read into, so the app shows a
+ * stand in the colour the designer drew it in rather than repainting the whole
+ * hall in another event's palette.
+ */
+function paletteOf(fills) {
+  const pick = (test) => {
+    const g = fills.filter(test).sort((a, b) => b.count - a.count)[0];
+    return g ? g.fill : null;
+  };
+  return {
+    available: pick(f => f.status === 'available'),
+    sold: pick(f => f.status === 'sold' && !f.sponsored),
+    sponsored: pick(f => f.sponsored),
+  };
+}
+
+module.exports = { extractStands, paletteOf, readRects, readTexts, repairMojibake, stripExhibitorNames };

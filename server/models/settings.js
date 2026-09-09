@@ -32,7 +32,32 @@ async function get() {
     unit: doc && (doc.unit === 'ft') ? 'ft' : 'm',
     currency,
     currencySymbol: CURRENCIES[currency],
+    // The colours THIS event's artwork is drawn in. Null means the app's own
+    // palette, which is what Europe has always used.
+    palette: doc && doc.palette && doc.palette.sold ? doc.palette : null,
   };
+}
+
+/**
+ * Record the colours this event's plan is drawn in.
+ *
+ * A stand's colour should be the colour the designer chose for it. North
+ * America's plan draws sold stands light blue and sponsored areas burgundy;
+ * repainting them in Europe's yellow made the plan stop looking like the plan
+ * that was approved. Held stays the app's orange on every event, because a
+ * held stand is a state the app owns, not something the artwork drew.
+ */
+async function setPalette(palette) {
+  const hex = (v) => (/^#[0-9a-f]{3,8}$/i.test(String(v || '')) ? String(v).toLowerCase() : null);
+  const clean = {
+    available: hex(palette && palette.available),
+    sold: hex(palette && palette.sold),
+    sponsored: hex(palette && palette.sponsored),
+  };
+  if (!clean.sold) return { ok: false, reason: 'no_sold_colour' };
+  await col().updateOne({ _id: config.showId },
+    { $set: { palette: clean, updatedAt: new Date() } }, { upsert: true });
+  return { ok: true, palette: clean };
 }
 
 /** The live €/unit rate — used wherever a list price is derived. */
@@ -74,4 +99,4 @@ async function setUnit(value) {
   return { ok: true, unit };
 }
 
-module.exports = { get, rate, setRate, setUnit, setCurrency, CURRENCIES };
+module.exports = { get, rate, setRate, setUnit, setCurrency, setPalette, CURRENCIES };
