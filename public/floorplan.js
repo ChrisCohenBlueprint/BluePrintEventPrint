@@ -1430,19 +1430,15 @@ let labelsDeferred = false;
 
 // The ceiling on an exhibitor name's size, in SVG units.
 //
-// It was 9, and that was the real reason names were reported as unreadable: at
-// a whole-hall view the plan renders at roughly 0.45 px per unit, so a 9-unit
-// name is 4px on screen — a smudge. 56 of 71 names on the live plan were
-// sitting exactly at the cap, i.e. the stands had room and the cap was the only
-// thing stopping them. fitLabel still wraps, hyphenates and shrinks to fit, so
-// raising it cannot push a name outside its stand; it only stops a big stand
-// being forced to whisper.
+// Keep this at 9. It was briefly raised to 20 on the theory that names were too
+// small to read at a whole-hall view (they render at ~0.45 px per unit, so 9
+// units is about 4px on screen, and most names sit exactly at the cap). The
+// real cause of that report turned out to be a stale cached script, and at 20
+// the names dominate the plan — they out-shout the stand numbers and the
+// artwork's own lettering, and the hall stops reading as a map.
 //
-// 20 rather than higher because the artwork sets its own type at roughly this
-// size (area names ~18-22 units, stand numbers ~7). Going further did keep
-// making the big stands bigger, but an exhibitor name has no business being the
-// largest thing on the plan.
-const LABEL_MAX_FONT = 20;
+// If names ever genuinely need to be bigger, zoom is the answer, not this.
+const LABEL_MAX_FONT = 9;
 
 
 function repaintLabels() {

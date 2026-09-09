@@ -303,9 +303,9 @@ function tagAdminBooths() {
 // missing until a reload that happened to be laid out in time.
 let adminLabelsDeferred = false;
 
-// Matches the public plan's ceiling — see the note there. A stand must look the
-// same on both surfaces.
-const LABEL_MAX_FONT = 20;
+// Matches the public plan's ceiling — see the note there, including why it is
+// not larger. A stand must look the same on both surfaces.
+const LABEL_MAX_FONT = 9;
 
 
 function repaintAdminLabels() {
