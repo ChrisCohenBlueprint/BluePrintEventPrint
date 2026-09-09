@@ -2957,18 +2957,29 @@ async function previewStands(row) {
   close.onclick = () => box.remove();
   head.append(title);
 
+  const st = p.byStatus || {};
   const note = document.createElement('p');
   note.className = 'spec-report-note';
   note.textContent =
-    `${p.named} carry an exhibitor name and would import as sold; ` +
-    `${p.stands - p.named} would import as available. ` +
+    `${st.available || 0} available, ${st.sold || 0} sold, ${st.held || 0} on hold` +
+    (p.sponsored ? `, ${p.sponsored} sponsorable areas` : '') +
+    ` — read from the colours the plan is drawn in. ` +
     `${p.totalArea.toLocaleString()} ${unit} in total. ` +
     (p.existing ? `This event currently has ${p.existing} stands, which would be replaced. ` : '') +
-    'The names are then ours: drawn in our own type, searchable, and editable here.';
+    'Exhibitor names become ours: drawn in our own type, searchable, and editable here.';
 
   const pre = document.createElement('pre');
   pre.className = 'spec-report-body';
   pre.textContent = [
+    ...(p.fills && p.fills.length ? [
+      'What the plan\'s colours mean:',
+      '  colour     outline    stands  reads as',
+      ...p.fills.map(f =>
+        `  ${(f.fill || '-').padEnd(10)} ${(f.stroke || '-').padEnd(10)} ` +
+        `${String(f.count).padStart(6)}  ${f.status}${f.sponsored ? ' (sponsorable area)' : ''}` +
+        (f.example ? ` — e.g. ${f.example}` : '')),
+      '',
+    ] : []),
     ...(p.warnings.length ? ['Worth a look:', ...p.warnings.map(w => '  - ' + w), ''] : []),
     '  number   area      exhibitor',
     ...p.sample.map(s =>
@@ -3019,7 +3030,8 @@ async function importStands(row, preview, box) {
 
   adminToast(
     `${row.name || row.showId}: ${r.imported} stands imported — ` +
-    `${r.sold} sold, ${r.available} available` +
+    `${r.available} available, ${r.sold} sold, ${r.held || 0} on hold` +
+    (r.sponsored ? `, ${r.sponsored} sponsorable areas` : '') +
     (r.namesRemoved ? `, ${r.namesRemoved} printed names taken out of the artwork.` : '.'), 'ok');
   box?.remove();
   loadPlans();

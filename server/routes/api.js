@@ -142,6 +142,10 @@ router.get('/stands/preview', async (_req, res, next) => {
       ok: true,
       stands: r.stands.length,
       named: r.stands.filter(s => s.exhibitor).length,
+      // What the plan's own colours say each stand is.
+      byStatus: r.stands.reduce((a, s) => { a[s.status] = (a[s.status] || 0) + 1; return a; }, {}),
+      sponsored: r.stands.filter(s => s.sponsored).length,
+      fills: r.fills,
       unit: r.unit,
       totalArea: r.stands.reduce((a, s) => a + (s.area || 0), 0),
       warnings: r.warnings,

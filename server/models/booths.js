@@ -1214,7 +1214,12 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
   const perUnit = await settings.rate();
   const now = new Date();
   const docs = stands.map((s) => {
-    const sold = !!(s.exhibitor && s.exhibitor.trim());
+    // Status comes from the colour the plan drew the stand in, not from
+    // whether a name happens to be printed on it. North America's plan draws
+    // 70 stands in the sold colour and prints 79 names; believing the names
+    // sold nine stands that the artwork plainly showed as empty or on hold.
+    const status = s.status || 'available';
+    const named = !!(s.exhibitor && s.exhibitor.trim());
     return {
       showId,
       boothNumber: String(s.number),
@@ -1225,12 +1230,17 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
       sqm: s.area || 0,
       sqmSource: s.areaSource === 'printed' ? 'printed' : 'estimated',
       listPrice: s.area ? Math.round(s.area * perUnit) : null,
-      status: sold ? 'sold' : 'available',
+      status,
       source: IMPORT_SOURCE,
+      // A sponsorable area — a lounge or a conference track — drawn in a
+      // colour the plan uses for only a handful of shapes.
+      sponsored: s.sponsored === true,
       assignment: {
-        company: sold ? s.exhibitor.trim() : null,
+        // A name is only carried onto a stand the plan shows as taken. A name
+        // printed on an available stand is stale artwork, not a booking.
+        company: status !== 'available' && named ? s.exhibitor.trim() : null,
         contactId: null, actualPrice: null,
-        notes: sold ? IMPORT_NOTE : '',
+        notes: status !== 'available' && named ? IMPORT_NOTE : '',
         tags: [], country: null,
       },
       clicks: 0, createdAt: now, updatedAt: now, updatedBy: actor || 'import',
@@ -1246,6 +1256,8 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
     imported: docs.length,
     sold: docs.filter(d => d.status === 'sold').length,
     available: docs.filter(d => d.status === 'available').length,
+    held: docs.filter(d => d.status === 'held').length,
+    sponsored: docs.filter(d => d.sponsored).length,
     replaced: existing.length,
     snapshot: existing.length > 0,
   };

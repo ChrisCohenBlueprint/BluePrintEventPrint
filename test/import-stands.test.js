@@ -35,9 +35,20 @@ const booths = require('../server/models/booths');
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`); };
 
+// Status comes from the colour the plan drew each stand in, NOT from whether a
+// name is printed on it. Stand 103 is the case that matters: the artwork shows
+// it empty while still carrying a stale name.
 const STANDS = [
-  { number: '101', area: 100, areaSource: 'printed', geometry: { x: 1, y: 1, w: 2, h: 2 }, exhibitor: 'Acme Oils' },
-  { number: '102', area: 200, areaSource: 'printed', geometry: { x: 3, y: 1, w: 4, h: 2 }, exhibitor: null },
+  { number: '101', area: 100, areaSource: 'printed', geometry: { x: 1, y: 1, w: 2, h: 2 },
+    exhibitor: 'Acme Oils', status: 'sold' },
+  { number: '102', area: 200, areaSource: 'printed', geometry: { x: 3, y: 1, w: 4, h: 2 },
+    exhibitor: null, status: 'available' },
+  { number: '103', area: 100, areaSource: 'printed', geometry: { x: 8, y: 1, w: 2, h: 2 },
+    exhibitor: 'Stale Name Ltd', status: 'available' },
+  { number: '104', area: 300, areaSource: 'printed', geometry: { x: 1, y: 5, w: 3, h: 3 },
+    exhibitor: 'VIP Lounge', status: 'sold', sponsored: true },
+  { number: '105', area: 100, areaSource: 'printed', geometry: { x: 5, y: 5, w: 2, h: 2 },
+    exhibitor: 'Reserved Co', status: 'held' },
 ];
 
 (async () => {
@@ -53,15 +64,24 @@ const STANDS = [
   calls.length = 0;
   db = fakeDb({ committed: 0, booths: [] });
   const ok = await showContext.runAs('LNA', () => booths.importFromArtwork(STANDS, { actor: 'chris' }));
-  check('the stands are imported', ok.ok === true && ok.imported === 2, JSON.stringify(ok.imported));
-  check('a named stand becomes sold under that name', ok.sold === 1);
-  check('an unnamed stand stays available', ok.available === 1);
+  check('the stands are imported', ok.ok === true && ok.imported === 5, JSON.stringify(ok.imported));
+  check('the sold count follows the artwork, not the names',
+        ok.sold === 2, `${ok.sold} sold`);
+  check('an available stand stays available even with a name printed on it',
+        ok.available === 2, `${ok.available} available`);
+  check('a stand the plan marks on hold is imported on hold', ok.held === 1);
+  check('a sponsorable area is flagged as one', ok.sponsored === 1);
 
   const inserted = calls.find(c => c[0] === 'insertMany' && c[1] === 'booths')[2];
   check('every stand is filed under the event asked for',
         inserted.every(d => d.showId === 'LNA'), inserted.map(d => d.showId).join(','));
   check('the name is carried onto the sold stand',
         inserted.find(d => d.boothNumber === '101').assignment.company === 'Acme Oils');
+  // Believing a printed name over the plan's colours sold nine North American
+  // stands the artwork showed as empty or on hold.
+  check('a stale name on an empty stand is NOT treated as a booking',
+        inserted.find(d => d.boothNumber === '103').assignment.company === null,
+        JSON.stringify(inserted.find(d => d.boothNumber === '103').assignment.company));
   check('the printed area is kept as the stand area',
         inserted.find(d => d.boothNumber === '102').sqm === 200);
   check('every imported stand is marked as coming from artwork',

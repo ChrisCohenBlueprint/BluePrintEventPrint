@@ -22,6 +22,44 @@
  * That is what makes this hold for the next event, and the one after.
  */
 
+/**
+ * class -> {fill, stroke}, read from the plan's own <style> block.
+ *
+ * The colours are how a plan says what a stand IS. Reading them is not a
+ * nicety: on North America's plan white means empty, light blue means sold,
+ * burgundy marks a sponsored area, and a red stroke with a glow marks a stand
+ * on hold. Inferring status from whether a name happens to be printed instead
+ * got 79 stands sold where the artwork plainly said 70.
+ */
+function readPalette(svg) {
+  const style = /<style[^>]*>([\s\S]*?)<\/style>/.exec(svg);
+  const map = {};
+  if (!style) return map;
+  for (const block of style[1].matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    const fill = /fill:\s*([^;]+)/.exec(block[2]);
+    const stroke = /stroke:\s*([^;]+)/.exec(block[2]);
+    for (const sel of block[1].split(',')) {
+      const name = sel.trim().replace(/^\./, '');
+      if (!name) continue;
+      map[name] = map[name] || {};
+      if (fill) map[name].fill = fill[1].trim().toLowerCase();
+      if (stroke) map[name].stroke = stroke[1].trim().toLowerCase();
+    }
+  }
+  return map;
+}
+
+/** How light a colour is, 0 (black) to 1 (white). */
+function lightness(hex) {
+  if (!hex) return null;
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 /** Rectangles, with Illustrator's rotate(90) form resolved to plain x/y/w/h. */
 function readRects(svg) {
   const out = [];
@@ -116,6 +154,7 @@ const AREA   = /^([\d,]+)\s*(ft|m|sqm|sqft)$/i;      // "200ft" — the ² is se
  * reader could not account for. It reports; it does not write.
  */
 function extractStands(svg) {
+  const palette = readPalette(svg);
   const rects = readRects(svg);
   const texts = readTexts(svg);
   const warnings = [];
@@ -194,6 +233,8 @@ function extractStands(svg) {
       visual: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), w: +r.w.toFixed(2), h: +r.h.toFixed(2) },
       exhibitor: name ? name.text : null,
       fillClass: r.cls,
+      fill: (palette[r.cls] || {}).fill || null,
+      stroke: (palette[r.cls] || {}).stroke || null,
     });
   }
 
@@ -258,9 +299,83 @@ function extractStands(svg) {
   const noArea = stands.filter(s => s.printedArea == null).length;
   if (noArea) warnings.push(`${noArea} stands print no area; theirs is derived from the drawing.`);
 
-  return { stands, unit, unitsPerArea, rects: rects.length, texts: texts.length, warnings };
+  const fills = statusFromColour(stands, warnings);
+
+  return { stands, unit, unitsPerArea, fills,
+           rects: rects.length, texts: texts.length, warnings };
 }
 
+
+
+/**
+ * Work out what each stand IS from the colour the plan drew it in.
+ *
+ * Nothing here is a hardcoded colour. Everything is relative to the plan:
+ *
+ *   available — the near-white group. A plan draws empty space pale; it is the
+ *               one convention that holds across every floorplan seen so far,
+ *               and it is what Europe uses too.
+ *   held      — a stand outlined differently to every other stand. A designer
+ *               changes a stroke and adds a glow to make something stand out,
+ *               and a reserved stand is the thing worth standing out.
+ *   sponsored — a dark fill used by only a handful of shapes. The ordinary
+ *               sold colour is used dozens of times; a colour used three times
+ *               is marking something particular, which on these plans is the
+ *               lounges and conference tracks.
+ *   sold      — everything else.
+ *
+ * The groups are returned alongside so the mapping is visible and can be
+ * corrected, rather than being a silent guess buried in an import.
+ */
+function statusFromColour(stands, warnings) {
+  const groups = new Map();
+  for (const s of stands) {
+    const key = `${s.fill || '?'}|${s.stroke || '?'}`;
+    if (!groups.has(key)) {
+      groups.set(key, { fill: s.fill, stroke: s.stroke, count: 0, stands: [] });
+    }
+    const g = groups.get(key);
+    g.count++; g.stands.push(s);
+  }
+
+  const all = [...groups.values()];
+  if (!all.length) return [];
+
+  // The stroke nearly every stand shares. A stand that departs from it has
+  // been marked deliberately.
+  const strokeTally = new Map();
+  for (const g of all) strokeTally.set(g.stroke, (strokeTally.get(g.stroke) || 0) + g.count);
+  const commonStroke = [...strokeTally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+
+  const biggest = all.reduce((a, b) => (b.count > a.count ? b : a));
+
+  for (const g of all) {
+    const light = lightness(g.fill);
+    if (light !== null && light > 0.9) g.status = 'available';
+    else if (g.stroke !== commonStroke) g.status = 'held';
+    else g.status = 'sold';
+
+    // A dark fill used by only a few shapes is marking something particular.
+    g.sponsored = g.status === 'sold' && g !== biggest &&
+                  g.count <= Math.max(6, stands.length * 0.1) &&
+                  light !== null && light < 0.5;
+  }
+
+  for (const g of all) {
+    for (const s of g.stands) { s.status = g.status; s.sponsored = g.sponsored; }
+  }
+
+  const unknown = all.filter(g => !g.fill);
+  if (unknown.length) {
+    warnings.push(`${unknown.reduce((n, g) => n + g.count, 0)} stands have no fill colour, so their status could not be read; they are treated as sold.`);
+  }
+
+  return all.map(g => ({
+    fill: g.fill, stroke: g.stroke, count: g.count,
+    status: g.status, sponsored: g.sponsored,
+    example: (g.stands.find(s => s.exhibitor) || g.stands[0]).exhibitor || null,
+  })).sort((a, b) => b.count - a.count);
+}
 
 /**
  * Remove the exhibitor names the artwork has printed inside its stands.

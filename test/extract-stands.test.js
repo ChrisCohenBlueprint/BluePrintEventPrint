@@ -60,6 +60,41 @@ check('outlined text yields no stands rather than wrong ones', outlined.stands.l
 check('and says why, in words a person can act on',
       /outlines/i.test(outlined.warnings.join(' ')), outlined.warnings[0]);
 
+console.log('\nStatus comes from the colour the plan is drawn in');
+// The fills are how a plan says what a stand IS. Inferring it from whether a
+// name is printed got 79 North American stands sold where the artwork said 70.
+const coloured = extractStands(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <style>
+    .empty { fill: #fffcf8; stroke: #013149; }
+    .taken { fill: #689abb; stroke: #013149; }
+    .flag  { fill: #689abb; stroke: #ed1c24; }
+    .area  { fill: #7c1315; stroke: #013149; }
+  </style>
+  <rect class="empty" x="10" y="10" width="25" height="25"/>
+  <rect class="taken" x="35" y="10" width="25" height="25"/>
+  <rect class="taken" x="60" y="10" width="25" height="25"/>
+  <rect class="taken" x="85" y="10" width="25" height="25"/>
+  <rect class="flag"  x="10" y="40" width="25" height="25"/>
+  <rect class="area"  x="35" y="40" width="25" height="25"/>
+  <text transform="translate(11 16)"><tspan x="0" y="0">101</tspan></text>
+  <text transform="translate(36 16)"><tspan x="0" y="0">102</tspan></text>
+  <text transform="translate(61 16)"><tspan x="0" y="0">103</tspan></text>
+  <text transform="translate(86 16)"><tspan x="0" y="0">104</tspan></text>
+  <text transform="translate(11 46)"><tspan x="0" y="0">105</tspan></text>
+  <text transform="translate(36 46)"><tspan x="0" y="0">106</tspan></text>
+</svg>`);
+const st = (n) => coloured.stands.find(x => x.number === n);
+check('a near-white stand is empty', st('101').status === 'available', st('101').status);
+check('the plan\'s ordinary fill is sold', st('102').status === 'sold', st('102').status);
+check('a stand outlined differently is on hold', st('105').status === 'held', st('105').status);
+check('a dark fill used by only a few shapes is a sponsorable area',
+      st('106').sponsored === true && st('106').status === 'sold');
+check('the ordinary sold colour is not mistaken for a sponsorable area',
+      st('102').sponsored === false);
+check('the colour groups are reported so the mapping can be checked',
+      coloured.fills.length === 4 && coloured.fills[0].count === 3,
+      JSON.stringify(coloured.fills.map(f => `${f.fill}:${f.count}:${f.status}`)));
+
 console.log('\nStripping the artwork\'s own exhibitor names');
 // Names belong in the database: baked into the drawing they are wrong the
 // moment a stand changes hands, and correcting one means a new export.
