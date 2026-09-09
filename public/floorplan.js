@@ -1428,7 +1428,6 @@ function pickSuggestion(i) {
 // fires no visibility event), and the web font arriving.
 let labelsDeferred = false;
 
-const fontReady = () => !document.fonts || document.fonts.check('600 9px Raleway');
 
 function repaintLabels() {
   if (!svgDoc || !tagged || !labelsDeferred) return;
@@ -1439,7 +1438,14 @@ function repaintLabels() {
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) repaintLabels(); });
 window.addEventListener('pageshow', repaintLabels);          // restored from the back/forward cache
-if (document.fonts) document.fonts.ready.then(repaintLabels);
+// Refit unconditionally once the web font has settled, rather than trying to
+// ask whether it is ready. document.fonts.check('600 9px Raleway') looks like
+// the right question but is not: it answers "can this be rendered", and a
+// FALLBACK counts — it returns true even when zero Raleway faces have loaded
+// (verified in both Chrome and Edge), so the guard it was used for never once
+// fired. A name measured against the fallback and then rendered in Raleway is
+// fitted to the wrong metrics, so one forced pass here is the fix.
+if (document.fonts) document.fonts.ready.then(() => { labelsDeferred = true; repaintLabels(); });
 // Fires once on observe and again on every resize, so a frame going from
 // zero-sized to laid out is caught without polling. When nothing was deferred
 // this is a no-op, so an ordinary window resize costs nothing.
@@ -1510,11 +1516,6 @@ function applyVisual(n) {
       textNode.style.pointerEvents = 'none';
       el.parentNode.appendChild(textNode);
     }
-    // A name measured before Raleway has loaded is fitted to the fallback's
-    // metrics and comes out the wrong size once the real font swaps in. Paint it
-    // anyway — a correctly-sized name a moment later beats no name now — but
-    // book a refit for when the font lands.
-    if (!fontReady()) labelsDeferred = true;
     // Wrap / hyphenate / shrink to fit — never truncate.
     BoothMap.fitLabel(textNode, company, vbox,
       { family: 'Raleway, sans-serif', weight: '600', maxFont: 9 });

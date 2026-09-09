@@ -303,7 +303,6 @@ function tagAdminBooths() {
 // missing until a reload that happened to be laid out in time.
 let adminLabelsDeferred = false;
 
-const adminFontReady = () => !document.fonts || document.fonts.check('600 9px Raleway');
 
 function repaintAdminLabels() {
   if (!svgDoc || !adminTagged || !adminLabelsDeferred) return;
@@ -394,7 +393,10 @@ function ensureSponsorCache() {
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) repaintAdminLabels(); });
 window.addEventListener('pageshow', repaintAdminLabels);
-if (document.fonts) document.fonts.ready.then(repaintAdminLabels);
+// Forced, not conditional — see the note on the public plan: asking
+// document.fonts whether Raleway is ready returns true even when it is not
+// loaded, because a fallback satisfies the question.
+if (document.fonts) document.fonts.ready.then(() => { adminLabelsDeferred = true; repaintAdminLabels(); });
 // The frame going from zero-sized to laid out is what happens when the
 // Floorplan tab is opened, and it fires no visibility event.
 if (window.ResizeObserver && aFrame) new ResizeObserver(repaintAdminLabels).observe(aFrame);
@@ -448,9 +450,6 @@ function applyAdminVisual(el, status) {
     try {
       const vbox = BoothMap.visualBox(el);
       if (!vbox || !(vbox.w > 0) || !(vbox.h > 0)) throw new Error('not laid out');
-      // Measured before Raleway loads, a name is fitted to the fallback's
-      // metrics and comes out the wrong size once the real font swaps in.
-      if (!adminFontReady()) adminLabelsDeferred = true;
       // Wrap / hyphenate / shrink to fit — never truncate. Same weight/size as
       // the public plan so a stand looks identical on both.
       BoothMap.fitLabel(textNode, company, vbox,
