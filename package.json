@@ -1,7 +1,7 @@
 {
   "name": "blueprint-floorprint",
   "version": "1.0.0",
-  "description": "Real-time interactive exhibition floorplan — public browse-and-enquire, administrator booking, MongoDB-backed.",
+  "description": "Real-time interactive exhibition floorplan \u2014 public browse-and-enquire, administrator booking, MongoDB-backed.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -12,7 +12,8 @@
     "check:security": "node scripts/security-check.js",
     "check:browser": "node scripts/browser-check.js",
     "check": "npm run check:security && npm run check:browser",
-    "validate:artwork": "node scripts/validate-artwork.js"
+    "validate:artwork": "node scripts/validate-artwork.js",
+    "test": "node test/pages.test.js && node test/plans-grid.test.js"
   },
   "keywords": [],
   "author": "",

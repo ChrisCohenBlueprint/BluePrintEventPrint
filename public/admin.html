@@ -541,32 +541,14 @@
     </section>
 
     <!-- ═══ SECTION: TOOLS ═══════════════════════════════════════════════════ -->
-    <!-- Settings: how this event is configured, as opposed to what is in it. -->
+    <!-- Settings: every event side by side, so you can see what each is drawn
+         from without switching between them. -->
     <section class="admin-section" id="section-settings">
       <div class="section-head">
         <h2>Settings</h2>
-        <p class="section-sub" id="settings-show-name">This event</p>
+        <p class="section-sub">Every event and the floorplan it is drawn from. Uploading, replacing or removing a plan asks for your admin password.</p>
       </div>
-      <div class="tools-grid">
-        <!-- This event's floorplan artwork. -->
-        <div class="tool-card tool-card-wide">
-          <div class="tool-header">
-            <i data-lucide="map"></i>
-            <h3>Floorplan Artwork</h3>
-          </div>
-          <p>The SVG this event's plan is drawn from. Uploading replaces it for this event only — the other events keep theirs. Stored in the database, so it survives deploys. Uploading and removing both ask for your admin password.</p>
-          <div id="artwork-meta" class="artwork-meta">Loading…</div>
-          <div id="artwork-warn" class="artwork-warn" hidden></div>
-          <button type="button" class="area-drop" id="artwork-drop" title="Drop an SVG here, or click to choose one">
-            Drop the floorplan SVG here, or click to choose
-          </button>
-          <div class="artwork-actions">
-            <a class="admin-btn" id="artwork-download" href="/floorplan.svg" download>Download current</a>
-            <button type="button" class="admin-btn danger" id="artwork-revert" hidden>Revert to the shipped plan</button>
-          </div>
-        </div>
-
-      </div>
+      <div id="plans-grid" class="plans-grid">Loading…</div>
     </section>
 
     <section class="admin-section" id="section-tools">

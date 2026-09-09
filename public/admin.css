@@ -344,6 +344,41 @@ body {
 }
 .nav-show select { width: 100%; font-size: 12px; }
 
+/* ─── Settings: one card per event, side by side ──────────────────────────── */
+.plans-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.plan-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border: 1px solid var(--border); border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+}
+.plan-card.is-current { border-color: var(--accent); }
+.plan-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.plan-name { font-family: 'Raleway', sans-serif; font-size: 15px; font-weight: 700; }
+.plan-badge {
+  padding: 2px 8px; border-radius: 20px; font-size: 9px; font-weight: 800;
+  letter-spacing: .05em; text-transform: uppercase;
+  background: rgba(99,102,241,.18); color: var(--accent);
+}
+/* The preview. A light ground because the artwork is drawn for paper, not for
+   a dark console — on this background a white hall would be invisible. */
+.plan-preview {
+  display: block; width: 100%; height: 170px;
+  background: #eef3f5; border-radius: 8px; border: 1px solid var(--border);
+  object-fit: contain; padding: 6px;
+}
+.plan-preview-empty {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 170px; border-radius: 8px;
+  border: 1px dashed var(--border); color: var(--muted); font-size: 12px; text-align: center;
+}
+.plan-meta { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.plan-warn { font-size: 11px; color: var(--orange); line-height: 1.5; }
+.plan-actions { display: flex; gap: 6px; margin-top: auto; }
+.plan-actions .admin-btn {
+  flex: 1; justify-content: center; font-size: 11px; padding: 6px 8px; text-decoration: none;
+}
+.plan-actions .admin-btn[hidden] { display: none; }
+
 /* Settings sits with the footer actions, so it needs the nav-link look without
    being inside the list. */
 .nav-settings {

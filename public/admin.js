@@ -90,7 +90,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
     if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
     if (sec === 'bookings') renderBookingsTable();
     if (sec === 'tools') { populateToolDropdowns(); loadShows(); }
-    if (sec === 'settings') { loadArtwork(); nameCurrentShow(); }
+    if (sec === 'settings') loadPlans();
     if (sec === 'leads') loadLeads();
     if (sec === 'analytics') loadAnalytics();
     if (sec === 'sponsors') loadSponsorsAdmin();
@@ -2741,79 +2741,136 @@ function deleteTag(tag, uses) {
   });
 }
 
-// Which event the Settings page is configuring. Worth stating outright: these
-// controls change one event and not the others, and that is not obvious from a
-// page headed "Settings".
-function nameCurrentShow() {
-  const el = document.getElementById('settings-show-name');
-  if (!el) return;
-  const sh = (window.__SHOW && (window.__SHOW.name || window.__SHOW.slug)) || '';
-  el.textContent = sh ? `Configuring ${sh} — these settings apply to this event only.`
-                      : 'These settings apply to this event only.';
-}
+// ── Settings: every event and the plan it is drawn from ─────────────────────
+// Shown side by side rather than one at a time. The point of the page is to
+// answer "which events have artwork and which are still empty" at a glance,
+// which a per-event view cannot do.
+async function loadPlans() {
+  const grid = document.getElementById('plans-grid');
+  if (!grid) return;
 
-// ── Tools: this event's floorplan artwork ────────────────────────────────────
-// Uploading replaces the plan for THIS event only. The serious caveat is that
-// stands are bound to the artwork by geometry, so replacing the plan under a
-// show that already has stands can unplace them — that is warned about here
-// rather than discovered afterwards.
-async function loadArtwork() {
-  const meta = document.getElementById('artwork-meta');
-  const warn = document.getElementById('artwork-warn');
-  const revert = document.getElementById('artwork-revert');
-  if (!meta) return;
+  let rows = [];
+  try { rows = await fetch('/api/floorplans').then(r => r.ok ? r.json() : []); } catch { rows = []; }
 
-  let m = null;
-  try { m = await fetch('/api/floorplan/meta').then(r => r.ok ? r.json() : null); } catch {}
-  if (!m) { meta.textContent = 'Could not read the current artwork.'; return; }
-
-  const kb = m.bytes ? ` · ${(m.bytes / 1024).toFixed(0)} KB` : '';
-  meta.textContent = m.uploaded
-    ? `Uploaded: ${m.filename}${kb}${m.uploadedAt ? ' · ' + new Date(m.uploadedAt).toLocaleString('en-GB') : ''}`
-    : `Using the plan shipped with the app (${m.filename}). Nothing uploaded for this event yet.`;
-
-  if (revert) revert.hidden = !m.uploaded;
-
-  // The warning only matters once there is something to lose.
-  if (warn) {
-    if (m.boothCount > 0) {
-      warn.hidden = false;
-      warn.textContent = `This event has ${m.boothCount} stands, and stands are matched to the artwork by their position on it. `
-        + `Replacing the plan with a differently drawn one can leave stands unplaced — they keep their bookings, but stop appearing on the map until their geometry is re-extracted. `
-        + `Safe for a new event; think twice for a live one.`;
-    } else {
-      warn.hidden = true;
-    }
+  grid.replaceChildren();
+  if (!rows.length) {
+    grid.textContent = 'No events yet. Add one under Tools → Events.';
+    return;
   }
+
+  const here = (window.__SHOW && window.__SHOW.slug) || '';
+  rows.forEach(row => grid.appendChild(planCard(row, row.slug === here)));
 }
 
-(function wireArtwork() {
-  const drop = document.getElementById('artwork-drop');
-  if (!drop) return;
+function planCard(row, isCurrent) {
+  const card = document.createElement('div');
+  card.className = 'plan-card' + (isCurrent ? ' is-current' : '');
 
-  const send = async (file) => {
+  const head = document.createElement('div');
+  head.className = 'plan-head';
+  const name = document.createElement('span');
+  name.className = 'plan-name';
+  name.textContent = row.name || row.showId;
+  head.appendChild(name);
+  if (isCurrent) {
+    const badge = document.createElement('span');
+    badge.className = 'plan-badge';
+    badge.textContent = 'Viewing';
+    head.appendChild(badge);
+  }
+
+  // The preview is an <img>, not inline SVG: an image cannot run anything, so
+  // even an unsanitised plan could not execute here. It is also why the ground
+  // is light — the artwork is drawn for paper.
+  let preview;
+  if (row.uploaded || row.boothCount > 0) {
+    preview = document.createElement('img');
+    preview.className = 'plan-preview';
+    preview.loading = 'lazy';
+    preview.alt = `${row.name || row.showId} floorplan`;
+    preview.src = `/floorplan.svg?show=${encodeURIComponent(row.slug)}&v=${row.uploadedAt || 'shipped'}`;
+    preview.onerror = () => {
+      const ph = document.createElement('div');
+      ph.className = 'plan-preview-empty';
+      ph.textContent = 'Could not load this plan';
+      preview.replaceWith(ph);
+    };
+  } else {
+    preview = document.createElement('div');
+    preview.className = 'plan-preview-empty';
+    preview.textContent = 'No floorplan yet — upload one to get started';
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'plan-meta';
+  const kb = row.bytes ? ` · ${(row.bytes / 1024).toFixed(0)} KB` : '';
+  meta.textContent = row.uploaded
+    ? `${row.filename}${kb} · uploaded ${new Date(row.uploadedAt).toLocaleDateString('en-GB')} · ${row.boothCount} stands`
+    : `Using the plan shipped with the app · ${row.boothCount} stands`;
+
+  const actions = document.createElement('div');
+  actions.className = 'plan-actions';
+
+  const up = document.createElement('button');
+  up.type = 'button';
+  up.className = 'admin-btn';
+  up.textContent = row.uploaded || row.boothCount > 0 ? 'Replace' : 'Upload';
+  up.onclick = () => pickPlan(row);
+
+  const dl = document.createElement('a');
+  dl.className = 'admin-btn';
+  dl.href = `/floorplan.svg?show=${encodeURIComponent(row.slug)}`;
+  dl.setAttribute('download', `${row.slug}-floorplan.svg`);
+  dl.textContent = 'Download';
+
+  const rm = document.createElement('button');
+  rm.type = 'button';
+  rm.className = 'admin-btn danger';
+  rm.textContent = 'Remove';
+  rm.hidden = !row.uploaded;          // nothing uploaded, nothing to remove
+  rm.onclick = () => removePlan(row);
+
+  actions.append(up, dl, rm);
+
+  // Only where there is something to lose.
+  if (row.boothCount > 0) {
+    const warn = document.createElement('div');
+    warn.className = 'plan-warn';
+    warn.textContent = `${row.boothCount} stands are positioned against this plan. Replacing it with differently drawn artwork can leave them off the map until their geometry is re-extracted — bookings are unaffected.`;
+    card.append(head, preview, meta, warn, actions);
+  } else {
+    card.append(head, preview, meta, actions);
+  }
+  return card;
+}
+
+/** Upload or replace ONE event's plan, named explicitly rather than implied. */
+function pickPlan(row) {
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  picker.accept = '.svg,image/svg+xml';
+  picker.onchange = async () => {
+    const file = picker.files?.[0];
     if (!file) return;
     if (!/svg/i.test(file.type) && !/\.svg$/i.test(file.name)) {
       return adminToast('That is not an SVG. The floorplan must be vector artwork.', 'error');
     }
-    const meta = await fetch('/api/floorplan/meta').then(r => r.ok ? r.json() : {}).catch(() => ({}));
-    if (meta.boothCount > 0 &&
-        !confirm(`Replace the artwork for this event?\n\n${meta.boothCount} stands are positioned against the current plan. If the new one is drawn differently they may stop appearing on the map until their geometry is re-extracted. Bookings are not affected.`)) {
+    if (row.boothCount > 0 &&
+        !confirm(`Replace the floorplan for ${row.name || row.showId}?\n\n${row.boothCount} stands are positioned against the current one. If the new plan is drawn differently they may stop appearing on the map until their geometry is re-extracted. Bookings are not affected.`)) {
       return;
     }
-    // Changing the plan an event is drawn from is consequential enough to
-    // re-confirm who is doing it — same gate as the rate and releasing a stand.
-    const password = prompt(`Enter your admin password to ${meta.uploaded ? 'replace' : 'upload'} this event's floorplan.`);
+    const password = prompt(`Enter your admin password to change the floorplan for ${row.name || row.showId}.`);
     if (password === null) return;
-    if (!password) return adminToast('Password required to change the floorplan.', 'error');
+    if (!password) return adminToast('Password required to change a floorplan.', 'error');
 
     try {
-      const svg = await file.text();
       const res = await fetch('/api/floorplan', {
         method: 'POST',
+        // X-Show names the event explicitly: this page can change any of them,
+        // not only the one it happens to be viewing.
         headers: { 'Content-Type': 'image/svg+xml', 'X-Filename': file.name,
-                   'X-Confirm-Password': password },
-        body: svg,
+                   'X-Show': row.slug, 'X-Confirm-Password': password },
+        body: await file.text(),
       });
       if (!res.ok) {
         let msg = 'Could not upload that floorplan.';
@@ -2822,47 +2879,33 @@ async function loadArtwork() {
       }
       const r = await res.json();
       adminToast(r.removed && r.removed.length
-        ? `Floorplan uploaded. Removed for safety: ${r.removed.join(', ')}.`
-        : 'Floorplan uploaded.', 'ok');
-      loadArtwork();
+        ? `${row.name || row.showId}: floorplan uploaded. Removed for safety: ${r.removed.join(', ')}.`
+        : `${row.name || row.showId}: floorplan uploaded.`, 'ok');
+      loadPlans();
     } catch (err) {
       adminToast(err.message || 'Could not read that file.', 'error');
     }
   };
+  picker.click();
+}
 
-  drop.onclick = () => {
-    const picker = document.createElement('input');
-    picker.type = 'file';
-    picker.accept = '.svg,image/svg+xml';
-    picker.onchange = () => send(picker.files?.[0]);
-    picker.click();
-  };
-  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
-    e.preventDefault(); drop.classList.add('dragover');
-  }));
-  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => {
-    e.preventDefault(); drop.classList.remove('dragover');
-  }));
-  drop.addEventListener('drop', (e) => send(e.dataTransfer?.files?.[0]));
+async function removePlan(row) {
+  if (!confirm(`Remove the uploaded floorplan for ${row.name || row.showId} and go back to the one shipped with the app?`)) return;
+  const password = prompt(`Enter your admin password to remove the floorplan for ${row.name || row.showId}.`);
+  if (password === null) return;
+  if (!password) return adminToast('Password required to remove a floorplan.', 'error');
 
-  document.getElementById('artwork-revert')?.addEventListener('click', async () => {
-    if (!confirm('Remove this event\u2019s uploaded floorplan and go back to the one shipped with the app?')) return;
-    const password = prompt('Enter your admin password to remove this event\u2019s floorplan.');
-    if (password === null) return;
-    if (!password) return adminToast('Password required to remove the floorplan.', 'error');
-
-    const res = await fetch('/api/floorplan', {
-      method: 'DELETE', headers: { 'X-Confirm-Password': password },
-    });
-    if (res.ok) adminToast('Reverted to the shipped plan.', 'ok');
-    else {
-      let msg = 'Could not remove the floorplan.';
-      try { msg = (await res.json()).error || msg; } catch {}
-      adminToast(msg, 'error');
-    }
-    loadArtwork();
+  const res = await fetch('/api/floorplan', {
+    method: 'DELETE', headers: { 'X-Show': row.slug, 'X-Confirm-Password': password },
   });
-})();
+  if (res.ok) adminToast(`${row.name || row.showId}: reverted to the shipped plan.`, 'ok');
+  else {
+    let msg = 'Could not remove that floorplan.';
+    try { msg = (await res.json()).error || msg; } catch {}
+    adminToast(msg, 'error');
+  }
+  loadPlans();
+}
 
 // ── The event this console is showing ────────────────────────────────────────
 // Admins see every event, so switching is a navigation, not a permission check:

@@ -11,6 +11,7 @@ const salesTeam = require('../data/sales-team');
 const planAreas = require('../models/plan-areas');
 const showsModel = require('../models/shows');
 const floorplans = require('../models/floorplans');
+const showContext = require('../show-context');
 const boothsModel = require('../models/booths');
 const sockets   = require('../sockets');
 const planAreaData = new Map(require('../data/plan-areas').AREAS.map(a => [a.key, a]));
@@ -50,6 +51,31 @@ async function confirmPassword(req, res, what) {
 // app uses, and there is no reason to encode it at all.
 const rawSvg = express.text({ type: ['image/svg+xml', 'text/plain', 'application/octet-stream'],
                               limit: '8mb' });
+
+/**
+ * Every event's artwork at once, for the Settings page that shows them side by
+ * side. One row per event rather than one request per event, so the page does
+ * not fan out and half-render while the rest arrive.
+ */
+router.get('/floorplans', async (_req, res, next) => {
+  try {
+    const rows = await Promise.all(showsModel.list().map(sh =>
+      showContext.runAs(sh.showId, async () => {
+        const f = await floorplans.get(sh.showId);
+        const boothCount = await boothsModel.col().countDocuments({ showId: sh.showId });
+        return {
+          slug: sh.slug, showId: sh.showId, name: sh.name || sh.showId, active: sh.active !== false,
+          uploaded: !!f,
+          filename: f ? f.filename : config.floorplanSvg,
+          bytes: f ? f.bytes : null,
+          uploadedAt: f ? f.uploadedAt : null,
+          uploadedBy: f ? f.uploadedBy : null,
+          boothCount,
+        };
+      })));
+    res.json(rows);
+  } catch (e) { next(e); }
+});
 
 router.get('/floorplan/meta', async (_req, res, next) => {
   try {

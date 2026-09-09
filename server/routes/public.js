@@ -5,6 +5,7 @@ const sponsors = require('../models/sponsors');
 const partners = require('../models/partners');
 const countries = require('../data/countries');
 const floorplans = require('../models/floorplans');
+const shows = require('../models/shows');
 const config = require('../config');
 
 const router = express.Router();
@@ -65,7 +66,12 @@ router.get('/countries', (_req, res) => {
  */
 router.get('/floorplan.svg', async (req, res, next) => {
   try {
-    const stored = await floorplans.get();
+    // ?show=lna asks for a named event rather than the one this request is
+    // scoped to — that is what lets Settings show every event's plan side by
+    // side. An unknown slug falls back to the current show rather than
+    // erroring: a broken preview should not be a broken page.
+    const named = req.query.show ? shows.bySlug(String(req.query.show)) : null;
+    const stored = await floorplans.get(named ? named.showId : undefined);
     res.type('image/svg+xml');
     if (stored && stored.svg) {
       res.set('ETag', `"${stored.version}"`);
