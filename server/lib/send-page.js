@@ -28,8 +28,14 @@ const cache = {};
 function sendPage(res, file, show = null) {
   if (!cache[file]) {
     const html = fs.readFileSync(path.join(PUBLIC, file), 'utf8');
-    // Local .js/.css only — not external URLs, and not ones already carrying a query.
-    cache[file] = html.replace(/(src|href)="([^"?:]+\.(?:js|css))"/g, `$1="$2?v=${BUILD_ID}"`);
+    // Local .js/.css only — not external URLs, and not ones already carrying a
+    // query. Rewritten to ABSOLUTE paths: a relative "floorplan.css" resolves
+    // against the current URL, so it only works at exactly /floorplan. At
+    // /floorplan/ or /floorplan/lex the browser asks for
+    // /floorplan/floorplan.css, gets the HTML page back, and renders with no
+    // styles and no scripts. Absolute paths work at every URL shape.
+    cache[file] = html.replace(/(src|href)="([^"?:]+\.(?:js|css))"/g,
+      (_m, attr, p) => `${attr}="${p.startsWith('/') ? p : '/' + p}?v=${BUILD_ID}"`);
   }
 
   let html = cache[file];
