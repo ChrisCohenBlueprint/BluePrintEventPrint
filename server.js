@@ -64,6 +64,19 @@ async function start() {
   try { await booths.resetToBlankLayout(); }
   catch (e) { console.error('Blank-layout reset skipped:', e.message); }
 
+  // One-shot: put North America's plan back and rebuild its stands from it.
+  // Its stored plan had the exhibitor names stripped out of it in place, and
+  // the designer's original is the only thing that has them — see
+  // services/seed-artwork.js. Refuses on any event with real bookings.
+  try {
+    const seeded = await require('./server/services/seed-artwork').seedNorthAmerica();
+    if (seeded && seeded.imported) {
+      console.log(`North America seeded: ${seeded.imported} stands ` +
+        `(${seeded.available} available, ${seeded.sold} sold, ${seeded.held} on hold), ` +
+        `${seeded.areasSkipped} areas left as artwork.`);
+    }
+  } catch (e) { console.error('North America seed skipped:', e.message); }
+
   const app    = express();
   const server = http.createServer(app);
 
