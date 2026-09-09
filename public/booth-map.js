@@ -420,11 +420,27 @@
    */
   function fitImage(imgEl, href, box, opts) {
     opts = opts || {};
-    var pad = opts.pad != null ? opts.pad : Math.max(1, Math.min(box.w, box.h) * 0.12);
-    imgEl.setAttribute('x', box.x + pad);
-    imgEl.setAttribute('y', box.y + pad);
-    imgEl.setAttribute('width',  Math.max(1, box.w - pad * 2));
-    imgEl.setAttribute('height', Math.max(1, box.h - pad * 2));
+
+    // The artwork prints its own name across some boxes ("NETWORKING LOUNGE"),
+    // and a logo dropped in the middle lands on top of it. When the caller has
+    // worked out a clear band, draw into that instead of the whole box.
+    var target = (opts.band && opts.band.h > 0) ? opts.band : box;
+
+    var pad = opts.pad != null ? opts.pad : Math.max(1, Math.min(target.w, target.h) * 0.12);
+    var x = target.x + pad, y = target.y + pad;
+    var w = target.w - pad * 2, h = target.h - pad * 2;
+
+    // Clamp to the box it belongs to, whatever the band arithmetic produced: a
+    // logo must never be drawn outside its own stand or area.
+    if (x < box.x) { w -= (box.x - x); x = box.x; }
+    if (y < box.y) { h -= (box.y - y); y = box.y; }
+    w = Math.max(1, Math.min(w, box.x + box.w - x));
+    h = Math.max(1, Math.min(h, box.y + box.h - y));
+
+    imgEl.setAttribute('x', x);
+    imgEl.setAttribute('y', y);
+    imgEl.setAttribute('width',  w);
+    imgEl.setAttribute('height', h);
     // "meet" scales down to fit and never crops — a cropped logo is worse than
     // a small one.
     imgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
@@ -448,6 +464,96 @@
    * Returns how many areas could not be found, so a caller can retry once the
    * plan is actually laid out instead of leaving a sponsor unbranded.
    */
+  /**
+   * The tallest horizontal band inside a box that the artwork has NOT printed
+   * across — where a sponsor's logo can go without landing on the lettering.
+   *
+   * Unioning every glyph in the box does not work: these areas also carry a
+   * stand number in one corner and an m² figure in another, so the union covers
+   * the whole box and leaves nowhere. What matters is how much WIDTH is taken
+   * at a given height — the printed name spans most of the box, a corner number
+   * spans very little. So each row is called blocked only when the glyphs on it
+   * cover a real share of the width, and the tallest run of unblocked rows wins.
+   *
+   * The plan converts its text to outlines, so there is nothing to read and
+   * every glyph has to be measured — ~2000 bboxes. Cached per area: the artwork
+   * does not move between repaints, so this is paid once for the life of the
+   * page.
+   */
+  var bandCache = {};
+  var ROWS = 64;            // ~1.5 units per row on the smallest area — fine enough
+  var BLOCKED_WIDTH = 0.25; // a row is "printed on" once glyphs cover this much of it
+
+  function freeBandIn(svgDoc, box, cacheKey) {
+    if (Object.prototype.hasOwnProperty.call(bandCache, cacheKey)) return bandCache[cacheKey];
+
+    var marks = [];
+    var glyphs = svgDoc.querySelectorAll('path, polygon');
+    for (var i = 0; i < glyphs.length; i++) {
+      var b = visualBox(glyphs[i]);
+      if (!b || !(b.w > 0) || !(b.h > 0)) continue;
+      // Fully inside, with slack for stroke overshoot. Anything merely
+      // overlapping belongs to a neighbour, not to this area.
+      if (b.x < box.x - 1 || b.y < box.y - 1) continue;
+      if (b.x + b.w > box.x + box.w + 1 || b.y + b.h > box.y + box.h + 1) continue;
+      // Skip a shape filling most of the area: that is a backing panel, not
+      // lettering, and counting it would block every row.
+      if (b.w * b.h > box.w * box.h * 0.75) continue;
+      marks.push(b);
+    }
+
+    var band = null;
+    if (marks.length) {
+      var rowH = box.h / ROWS;
+      var blocked = [];
+      for (var r = 0; r < ROWS; r++) {
+        var y = box.y + (r + 0.5) * rowH;
+        // Merge the spans covering this row, so overlapping glyphs are not
+        // double-counted into a false "blocked".
+        var spans = [];
+        for (var m = 0; m < marks.length; m++) {
+          var g = marks[m];
+          if (y >= g.y && y <= g.y + g.h) spans.push([g.x, g.x + g.w]);
+        }
+        spans.sort(function (p, q) { return p[0] - q[0]; });
+        var covered = 0, curS = null, curE = null;
+        for (var k = 0; k < spans.length; k++) {
+          if (curE === null || spans[k][0] > curE) {
+            if (curE !== null) covered += curE - curS;
+            curS = spans[k][0]; curE = spans[k][1];
+          } else if (spans[k][1] > curE) curE = spans[k][1];
+        }
+        if (curE !== null) covered += curE - curS;
+        blocked.push(covered > box.w * BLOCKED_WIDTH);
+      }
+
+      // Every unbroken run of clear rows.
+      var runs = [], runStart = -1;
+      for (var t = 0; t <= ROWS; t++) {
+        var free = t < ROWS && !blocked[t];
+        if (free && runStart === -1) runStart = t;
+        if (!free && runStart !== -1) { runs.push([runStart, t - runStart]); runStart = -1; }
+      }
+
+      // A band too thin to show a logo in is no better than the collision, so
+      // those are discarded and the caller falls back to the whole box.
+      var minRows = Math.max(5, box.h * 0.16) / rowH;
+      var usable = runs.filter(function (r) { return r[1] >= minRows; });
+
+      // Of the usable bands, take the LOWEST: the sponsor's mark belongs under
+      // the area's printed name, reading as "NETWORKING LOUNGE, brought to you
+      // by —". Falling back to the tallest keeps a logo on a box whose only
+      // clear space happens to be above the lettering.
+      if (usable.length) {
+        var pick = usable[usable.length - 1];
+        band = { x: box.x, y: box.y + pick[0] * rowH, w: box.w, h: pick[1] * rowH };
+      }
+    }
+
+    bandCache[cacheKey] = band;
+    return band;
+  }
+
   /** The artwork rectangle an area occupies, or null if the plan has moved. */
   function areaHost(svgDoc, area) {
     var candidates = svgDoc.querySelectorAll('.cls-6, .cls-8');
@@ -491,9 +597,13 @@
         node = document.createElementNS(SVG_NS, 'image');
         node.setAttribute('id', id);
         node.style.pointerEvents = 'none';
-        host.parentNode.appendChild(node);
+        // Immediately after the area's own rectangle, NOT appended at the end:
+        // the printed lettering is drawn later in the document, so this leaves
+        // the logo beneath it. Even where the two touch, the name stays legible
+        // on top rather than being covered by the logo.
+        host.parentNode.insertBefore(node, host.nextSibling);
       }
-      fitImage(node, a.logo, box);
+      fitImage(node, a.logo, box, { band: freeBandIn(svgDoc, box, a.key) });
     });
 
     return missed;
