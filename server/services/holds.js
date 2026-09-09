@@ -1,4 +1,5 @@
 const { getDb } = require('../db');
+const showContext = require('../show-context');
 const config    = require('../config');
 const booths    = require('../models/booths');
 const { track } = require('./tracking');
@@ -134,18 +135,35 @@ async function reconcile() {
   return expired;
 }
 
+/**
+ * Sweep expired holds, for every show this deployment serves.
+ *
+ * The show has to be named EXPLICITLY here. Everything else in the app learns
+ * its show from the request that started it, but this is a timer: it has no
+ * request, so it would inherit the default show and reconcile North America's
+ * holds against Germany — releasing stands on one event because a hold expired
+ * on another, silently, on a live plan. So it loops the shows and enters each
+ * one's context in turn.
+ *
+ * One show's failure must not stop the others, hence the try inside the loop.
+ */
 function startExpiryLoop(onExpired) {
   const tick = async () => {
-    try {
-      const expired = await reconcile();
-      // AWAIT the callback: it does refresh()+broadcast, and if that rejected
-      // (a DB blip right as a hold expires) an un-awaited call would escape this
-      // try/catch as an unhandled rejection and take the process down.
-      if (expired.length && onExpired) await onExpired(expired);
-    } catch (e) {
-      console.error('Hold reconciliation failed:', e.message);
+    for (const show of config.shows) {
+      try {
+        const expired = await showContext.runAs(show.id, () => reconcile());
+        // AWAIT the callback: it does refresh()+broadcast, and if that rejected
+        // (a DB blip right as a hold expires) an un-awaited call would escape
+        // this try/catch as an unhandled rejection and take the process down.
+        if (expired.length && onExpired) {
+          await showContext.runAs(show.id, () => onExpired(expired, show.id));
+        }
+      } catch (e) {
+        console.error(`Hold reconciliation failed for ${show.id}:`, e.message);
+      }
     }
   };
+
   tick();
   const t = setInterval(tick, 60_000);
   if (t.unref) t.unref();

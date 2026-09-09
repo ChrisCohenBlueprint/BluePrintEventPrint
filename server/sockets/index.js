@@ -15,11 +15,31 @@ const { socketAuth, requireAdmin } = require('../auth');
 
 const ADMIN_ROOM = 'admins';
 
-// ─── Booth cache ──────────────────────────────────────────────────────────────
-// 272 documents; refreshed on mutation rather than read per broadcast.
-let cache = [];
-let activeViewers = {};   // socketId → boothNumber
-let connections   = 0;
+// ─── Per-show state ───────────────────────────────────────────────────────────
+// One deployment can serve several events, so every cache below is held per
+// show. They used to be single values, which was correct when there was one
+// event and silently wrong the moment there were three — North America's stands
+// would be served to Germany's viewers.
+//
+// Keyed by showId and created on demand, so a show that nobody has opened costs
+// nothing.
+const shows = new Map();
+
+function showState(showId = config.showId) {
+  let st = shows.get(showId);
+  if (!st) {
+    st = { cache: [], tagCache: [], areaCache: [], refreshSeq: 0, pending: null };
+    shows.set(showId, st);
+  }
+  return st;
+}
+
+let activeViewers = {};   // socketId → { showId, boothNumber }
+
+/** How many sockets are connected to one show. */
+function connectionsFor(showId) {
+  return Object.values(activeViewers).filter(v => v.showId === showId).length;
+}
 
 // Versioned so concurrent refreshes can't leave the cache on an OLDER snapshot:
 // two mutations racing means two in-flight all() queries, and whichever RETURNS
@@ -27,11 +47,22 @@ let connections   = 0;
 // refresh and only accept the result of the most-recently issued one — the one
 // that saw the newest DB state. Otherwise a held/sold stand could show as
 // available to every viewer until the next mutation happened to refresh.
-let refreshSeq = 0;
 async function refresh() {
-  const seq = ++refreshSeq;
+  const st = showState();
+  const seq = ++st.refreshSeq;
   const rows = await booths.all();
-  if (seq === refreshSeq) cache = rows;
+  if (seq === st.refreshSeq) st.cache = rows;
+}
+
+/** Warm every show's caches — used at boot, where there is no request context. */
+async function refreshAll() {
+  for (const show of config.shows) {
+    await showContext.runAs(show.id, async () => {
+      await refresh();
+      await refreshTags();
+      await refreshAreas();
+    });
+  }
 }
 
 // ─── Tag catalogue ────────────────────────────────────────────────────────────
@@ -39,19 +70,19 @@ async function refresh() {
 // changes only when an admin edits the catalogue — so it is cached here and
 // pushed on connect and on every edit, rather than repeated on each of the 272
 // booths in every state broadcast.
-let tagCache = [];
-async function refreshTags() { tagCache = await tags.catalogue(); }
-function broadcastTags(io) { io.to(pubRoom(config.showId)).emit('tags:catalogue', tagCache); }
+async function refreshTags() { showState().tagCache = await tags.catalogue(); }
+function broadcastTags(io) {
+  io.to(pubRoom(config.showId)).emit('tags:catalogue', showState().tagCache);
+}
 
 // ─── Plan areas ───────────────────────────────────────────────────────────────
 // The lounges, theatres and conference rooms the artwork draws in blue, with
 // whatever sponsor logo an admin has put on each. Same caching rationale as the
 // tags above — seven rows that change rarely, needed by every client.
-let areaCache = [];
 async function refreshAreas() {
   const [areas, packages] = await Promise.all([planAreas.all(), sponsors.all()]);
   const by = new Map(packages.map(p => [p.key, p]));
-  areaCache = areas.map(a => {
+  showState().areaCache = areas.map(a => {
     const p = a.sponsorKey ? by.get(a.sponsorKey) : null;
     return {
       ...a,
@@ -62,7 +93,9 @@ async function refreshAreas() {
     };
   });
 }
-function broadcastAreas(io) { io.to(pubRoom(config.showId)).emit('areas:catalogue', areaCache); }
+function broadcastAreas(io) {
+  io.to(pubRoom(config.showId)).emit('areas:catalogue', showState().areaCache);
+}
 
 // The REST side (a sponsorship package marked sold out) has to be able to push
 // the areas it just changed. register() records io for exactly this.
@@ -70,7 +103,7 @@ let ioRef = null;
 async function notifyAreas() {
   await refreshAreas();
   if (ioRef) broadcastAreas(ioRef);
-  return areaCache;
+  return showState().areaCache;
 }
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
@@ -93,20 +126,27 @@ function limiter(perMin) {
 // public projection omits company, negotiated price and internal notes.
 function viewerCounts() {
   const m = {};
-  Object.values(activeViewers).forEach(n => { m[n] = (m[n] || 0) + 1; });
+  const showId = config.showId;
+  Object.values(activeViewers).forEach(v => {
+    if (v.showId !== showId || !v.boothNumber) return;
+    m[v.boothNumber] = (m[v.boothNumber] || 0) + 1;
+  });
   return m;
 }
 
 function decorate() {
   const v = viewerCounts();
-  return cache.map(b => ({ ...b, viewers: v[b.boothNumber] || 0 }));
+  return showState().cache.map(b => ({ ...b, viewers: v[b.boothNumber] || 0 }));
 }
 
-let pending = null;
 function broadcastState(io) {
-  if (pending) return;
-  pending = setTimeout(async () => {
-    pending = null;
+  // Debounced PER SHOW: a burst of edits on one event must not swallow the
+  // broadcast for another, which a single shared timer would do.
+  const showId = config.showId;
+  const st = showState(showId);
+  if (st.pending) return;
+  st.pending = setTimeout(async () => showContext.runAs(showId, async () => {
+    st.pending = null;
     // Anything thrown in here is a bare timer callback, so an unhandled
     // rejection would take the whole process down and drop every socket. A
     // failed broadcast should degrade to a missed update, nothing worse.
@@ -120,11 +160,11 @@ function broadcastState(io) {
         totalBooths: s.totalBooths, availableBooths: s.availableBooths,
         totalSqm: s.totalSqm, availSqm: s.availSqm,
       });
-      io.to(adminRoom(config.showId)).emit('stats:updated', { ...s, connections });
+      io.to(adminRoom(config.showId)).emit('stats:updated', { ...s, connections: connectionsFor(config.showId) });
     } catch (e) {
       console.error('Broadcast failed:', e.message);
     }
-  }, 80);
+  }), 80);
 }
 
 /**
@@ -170,14 +210,15 @@ function register(io) {
 
   // Prime the tag catalogue once at boot. A failure here is not fatal — stands
   // simply render without chips until the next catalogue edit refreshes it.
-  refreshTags().catch(e => console.error('Tag catalogue not loaded:', e.message));
-  refreshAreas().catch(e => console.error('Plan areas not loaded:', e.message));
+  // Warm EVERY show's caches, not just the default one. This runs at boot with
+  // no request context, so without naming each show explicitly the other events
+  // would start empty and stay empty until someone edited them.
+  refreshAll().catch(e => console.error('Show caches not warmed:', e.message));
 
   // slug → id, for resolving a socket's show from its handshake.
   const showBySlug = new Map(config.shows.map(sh => [sh.slug, sh.id]));
 
   io.on('connection', (socket) => {
-    connections++;
     const isAdmin = socket.data.isAdmin;
 
     // Which event this socket is watching. The page passes its slug in the
@@ -189,6 +230,7 @@ function register(io) {
 
     // Two rooms, both scoped to this socket's show, so a broadcast for one
     // event never reaches another's viewers.
+    activeViewers[socket.id] = { showId: socket.data.showId, boothNumber: null };
     socket.join(pubRoom(socket.data.showId));
     if (isAdmin) {
       socket.join(ADMIN_ROOM);                        // kept: some tooling still targets it
@@ -203,7 +245,7 @@ function register(io) {
         : crypto.randomBytes(16).toString('hex');
 
     track({ type: 'session.start', socket, meta: { admin: isAdmin } });
-    console.log(`+ ${isAdmin ? 'ADMIN' : 'visitor'} ${socket.id} (total: ${connections})`);
+    console.log(`+ ${isAdmin ? 'ADMIN' : 'visitor'} ${socket.id} (total: ${connectionsFor(socket.data.showId)})`);
 
     // ── Handlers are bound synchronously, before any await ────────────────────
     // Socket.IO drops inbound events that arrive with no listener attached. If
@@ -227,7 +269,7 @@ function register(io) {
       }
       if (socket.data.viewing === n) return;   // repeat view of the same booth
 
-      activeViewers[socket.id] = n;
+      activeViewers[socket.id] = { showId: socket.data.showId, boothNumber: n };
       socket.data.viewStart = Date.now();
       socket.data.viewing   = n;
       track({ type: 'booth.view', boothNumber: n, socket });
@@ -237,7 +279,7 @@ function register(io) {
     socket.on('booth:click', safe('booth:click', async ({ boothNumber }) => {
       if (!allowClick()) return;
       const n = stand(boothNumber);
-      const b = cache.find(x => x.boothNumber === n);
+      const b = showState().cache.find(x => x.boothNumber === n);
       if (!b) return;
 
       // Dwell time on the previously-open booth, so attention is measured in
@@ -254,7 +296,7 @@ function register(io) {
       // every subsequent click and accumulated far beyond real attention.
       // Also move the live-viewer marker, else the heatmap stayed pinned to the
       // last booth:view and clicks never moved it.
-      activeViewers[socket.id] = n;
+      activeViewers[socket.id] = { showId: socket.data.showId, boothNumber: n };
       socket.data.viewing   = n;
       socket.data.viewStart = Date.now();
 
@@ -599,7 +641,7 @@ function register(io) {
       }
       await refreshTags(); broadcastTags(io);
       log(io, `🏷️ Tag added — ${escapeHtml(r.tag.label)}`, 'admin');
-      return { ok: true, tag: r.tag, catalogue: tagCache };
+      return { ok: true, tag: r.tag, catalogue: showState().tagCache };
     }));
 
     // Rename / recolour. The stored key never changes, so every stand already
@@ -615,7 +657,7 @@ function register(io) {
       }
       await refreshTags(); broadcastTags(io);
       log(io, `🏷️ Tag updated — ${escapeHtml(r.tag.label)}`, 'admin');
-      return { ok: true, tag: r.tag, catalogue: tagCache };
+      return { ok: true, tag: r.tag, catalogue: showState().tagCache };
     }));
 
     // Delete. The tag is pulled off every stand FIRST, so no stand is ever left
@@ -628,7 +670,7 @@ function register(io) {
       await refreshTags(); broadcastTags(io);
       await refresh(); broadcastState(io);
       log(io, `🏷️ Tag deleted — removed from ${cleared} stand${cleared === 1 ? '' : 's'}`, 'admin');
-      return { ok: true, cleared, catalogue: tagCache };
+      return { ok: true, cleared, catalogue: showState().tagCache };
     }));
 
     // Set the tags on one booked stand. Replaces the whole set, so the UI can
@@ -648,7 +690,7 @@ function register(io) {
       if (!r.changed) return { ok: false, error: `Stand ${n} is not booked — tags apply to a booked stand.` };
       track({ type: 'booth.set_tags', boothNumber: n, socket, meta: { tags: r.tags } });
       await refresh(); broadcastState(io);
-      const names = r.tags.map(k => tagCache.find(t => t.key === k)?.label || k);
+      const names = r.tags.map(k => showState().tagCache.find(t => t.key === k)?.label || k);
       log(io, names.length
         ? `🏷️ Stand ${escapeHtml(n)} tagged — ${escapeHtml(names.join(', '))}`
         : `🏷️ Stand ${escapeHtml(n)} tags cleared`, 'admin');
@@ -734,7 +776,7 @@ function register(io) {
         return { ok: false, error: `Could not save the logo — ${why}.` };
       }
       await refreshAreas(); broadcastAreas(io);
-      const name = areaCache.find(a => a.key === r.key)?.label || r.key;
+      const name = showState().showState().areaCache.find(a => a.key === r.key)?.label || r.key;
       log(io, r.logo ? `🖼️ ${escapeHtml(name)} sponsor logo set`
                      : `🖼️ ${escapeHtml(name)} sponsor logo removed`, 'admin');
       return { ok: true, ...r };
@@ -744,7 +786,7 @@ function register(io) {
       const r = await planAreas.setPackage(String(key || ''), sponsorKey, { actor: socket.data.user });
       if (!r.ok) return { ok: false, error: 'That is not an area on this plan.' };
       await refreshAreas(); broadcastAreas(io);
-      const a = areaCache.find(x => x.key === r.key);
+      const a = showState().areaCache.find(x => x.key === r.key);
       log(io, a?.package ? `🔗 ${escapeHtml(a.label)} sells as ${escapeHtml(a.package.name)}`
                          : `🔗 ${escapeHtml(a?.label || r.key)} unlinked from its package`, 'admin');
       return { ok: true, ...r };
@@ -758,7 +800,7 @@ function register(io) {
           : 'That is not an area on this plan.' };
       }
       await refreshAreas(); broadcastAreas(io);
-      const name = areaCache.find(a => a.key === r.key)?.label || r.key;
+      const name = showState().showState().areaCache.find(a => a.key === r.key)?.label || r.key;
       log(io, r.sponsor ? `🏛️ ${escapeHtml(name)} sponsored by <strong>${escapeHtml(r.sponsor)}</strong>`
                         : `🏛️ ${escapeHtml(name)} is available to sponsor`, 'admin');
       return { ok: true, ...r };
@@ -815,14 +857,14 @@ function register(io) {
     // anonymous browser console.
 
     socket.on('disconnect', () => {
-      connections = Math.max(0, connections - 1);
+      
       if (socket.data.viewing && socket.data.viewStart) {
         track({ type: 'booth.dwell', boothNumber: socket.data.viewing, socket,
                 meta: { ms: Date.now() - socket.data.viewStart } });
       }
       delete activeViewers[socket.id];
       broadcastState(io);
-      io.to(pubRoom(config.showId)).emit('viewers:count', connections);
+      io.to(pubRoom(config.showId)).emit('viewers:count', connectionsFor(config.showId));
     });
 
     // ── Initial state, sent only once every handler above is bound ────────────
@@ -836,13 +878,13 @@ function register(io) {
 
         const s = await booths.stats();
         socket.emit('stats:updated', isAdmin
-          ? { ...s, connections }
+          ? { ...s, connections: connectionsFor(config.showId) }
           : { totalBooths: s.totalBooths, availableBooths: s.availableBooths,
               totalSqm: s.totalSqm, availSqm: s.availSqm });
 
         socket.emit('floorplan-sponsor', await sponsors.getFloorplanSponsor());
-        socket.emit('tags:catalogue', tagCache);
-        socket.emit('areas:catalogue', areaCache);
+        socket.emit('tags:catalogue', showState().tagCache);
+        socket.emit('areas:catalogue', showState().areaCache);
 
         // Unit is a harmless display label (public). The €/unit rate is
         // admin-only: public sqm × rate would reveal list prices.
@@ -853,7 +895,7 @@ function register(io) {
           // knows to prompt for it. Admin-only — never advertised to the public.
           recoveryRequired: isAdmin ? config.recoveryEnabled() : undefined });
 
-        io.to(pubRoom(config.showId)).emit('viewers:count', connections);
+        io.to(pubRoom(config.showId)).emit('viewers:count', connectionsFor(config.showId));
         socket.emit('ready');
       } catch (e) {
         console.error('Initial state failed:', e.message);
@@ -873,4 +915,4 @@ function escapeHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-module.exports = { register, refresh, notifyAreas };
+module.exports = { register, refresh, refreshAll, notifyAreas };

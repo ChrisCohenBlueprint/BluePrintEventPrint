@@ -130,7 +130,8 @@ async function start() {
     res.status(500).json({ error: 'Internal error' });
   });
 
-  await sockets.refresh();
+  // Every show's caches, not just the default — see sockets.refreshAll.
+  await sockets.refreshAll();
   sockets.register(io);
 
   server.listen(config.port, () =>
