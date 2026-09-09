@@ -21,6 +21,29 @@ const csv       = require('../lib/csv');
 
 const router = express.Router();
 
+/**
+ * Re-enter your own password to confirm a change.
+ *
+ * The same gate the €/unit rate and releasing a stand already use: an
+ * authenticated session is not enough for something this consequential,
+ * because a session left open on an unattended machine is not the person.
+ *
+ * Sent as a header rather than in the body, because the floorplan upload's body
+ * IS the SVG. The failure path absorbs the attempt against a decoy hash so a
+ * wrong password takes the same time as a right one — a fast rejection tells an
+ * attacker the username was wrong.
+ */
+async function confirmPassword(req, res, what) {
+  const supplied = String(req.get('X-Confirm-Password') || '');
+  const account = await users.findByUsername(req.admin?.user);
+  if (!account || !users.verifyPassword(supplied, account.passwordHash)) {
+    users.absorbPassword(supplied);
+    res.status(403).json({ error: `Password incorrect — ${what}.` });
+    return false;
+  }
+  return true;
+}
+
 // ─── Floorplan artwork ───────────────────────────────────────────────────────
 // One plan per show. Uploaded as a RAW body rather than JSON: a 2 MB SVG
 // base64'd into a JSON string would breach the 3 MB body limit the rest of the
@@ -41,6 +64,7 @@ router.get('/floorplan/meta', async (_req, res, next) => {
 
 router.post('/floorplan', rawSvg, async (req, res, next) => {
   try {
+    if (!await confirmPassword(req, res, 'the floorplan was not changed')) return;
     const r = await floorplans.save(req.body, {
       filename: String(req.get('X-Filename') || 'floorplan.svg'),
       actor: req.admin?.user || null,
@@ -58,8 +82,9 @@ router.post('/floorplan', rawSvg, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.delete('/floorplan', requireOwner, async (req, res, next) => {
+router.delete('/floorplan', async (req, res, next) => {
   try {
+    if (!await confirmPassword(req, res, 'the floorplan was not removed')) return;
     const gone = await floorplans.remove();
     track({ type: 'floorplan.revert', boothNumber: null, actor: req.admin?.user || 'unknown', meta: {} });
     res.json({ ok: true, reverted: gone });

@@ -2801,11 +2801,18 @@ async function loadArtwork() {
         !confirm(`Replace the artwork for this event?\n\n${meta.boothCount} stands are positioned against the current plan. If the new one is drawn differently they may stop appearing on the map until their geometry is re-extracted. Bookings are not affected.`)) {
       return;
     }
+    // Changing the plan an event is drawn from is consequential enough to
+    // re-confirm who is doing it — same gate as the rate and releasing a stand.
+    const password = prompt(`Enter your admin password to ${meta.uploaded ? 'replace' : 'upload'} this event's floorplan.`);
+    if (password === null) return;
+    if (!password) return adminToast('Password required to change the floorplan.', 'error');
+
     try {
       const svg = await file.text();
       const res = await fetch('/api/floorplan', {
         method: 'POST',
-        headers: { 'Content-Type': 'image/svg+xml', 'X-Filename': file.name },
+        headers: { 'Content-Type': 'image/svg+xml', 'X-Filename': file.name,
+                   'X-Confirm-Password': password },
         body: svg,
       });
       if (!res.ok) {
@@ -2839,9 +2846,20 @@ async function loadArtwork() {
   drop.addEventListener('drop', (e) => send(e.dataTransfer?.files?.[0]));
 
   document.getElementById('artwork-revert')?.addEventListener('click', async () => {
-    if (!confirm('Revert this event to the floorplan shipped with the app? The uploaded one is removed.')) return;
-    const res = await fetch('/api/floorplan', { method: 'DELETE' });
-    adminToast(res.ok ? 'Reverted to the shipped plan.' : 'Could not revert.', res.ok ? 'ok' : 'error');
+    if (!confirm('Remove this event\u2019s uploaded floorplan and go back to the one shipped with the app?')) return;
+    const password = prompt('Enter your admin password to remove this event\u2019s floorplan.');
+    if (password === null) return;
+    if (!password) return adminToast('Password required to remove the floorplan.', 'error');
+
+    const res = await fetch('/api/floorplan', {
+      method: 'DELETE', headers: { 'X-Confirm-Password': password },
+    });
+    if (res.ok) adminToast('Reverted to the shipped plan.', 'ok');
+    else {
+      let msg = 'Could not remove the floorplan.';
+      try { msg = (await res.json()).error || msg; } catch {}
+      adminToast(msg, 'error');
+    }
     loadArtwork();
   });
 })();
