@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <rect class="a" x="10" y="10" width="25" height="25"/>
+  <rect class="a" x="35" y="10" width="25" height="25"/>
+  <rect class="b" x="10" y="40" width="50" height="25"/>
+  <rect class="a" x="70" y="10" width="25" height="50" transform="translate(130 -60) rotate(90)"/>
+  <text transform="translate(11 16)"><tspan x="0" y="0">101</tspan></text>
+  <text transform="translate(12 30)"><tspan x="0" y="0">100</tspan><tspan x="6" y="0">ft</tspan></text>
+  <text transform="translate(14 29) scale(.58)"><tspan x="0" y="0">2</tspan></text>
+  <text transform="translate(36 16)"><tspan x="0" y="0">102</tspan></text>
+  <text transform="translate(37 30)"><tspan x="0" y="0">100</tspan><tspan x="6" y="0">ft</tspan></text>
+  <text transform="translate(11 46)"><tspan x="0" y="0">103</tspan></text>
+  <text transform="translate(12 62)"><tspan x="0" y="0">200</tspan><tspan x="6" y="0">ft</tspan></text>
+  <text transform="translate(20 52)"><tspan x="0" y="0">Networking</tspan><tspan x="0" y="6">Lounge</tspan></text>
+  <text transform="translate(71 16)"><tspan x="0" y="0">104</tspan></text>
+  <text transform="translate(72 30)"><tspan x="0" y="0">200</tspan><tspan x="6" y="0">ft</tspan></text>
+  <text transform="translate(72 33)"><tspan x="0" y="0">KlÃ¼ber</tspan></text>
+</svg>
