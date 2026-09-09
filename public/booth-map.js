@@ -426,7 +426,13 @@
     // worked out a clear band, draw into that instead of the whole box.
     var target = (opts.band && opts.band.h > 0) ? opts.band : box;
 
-    var pad = opts.pad != null ? opts.pad : Math.max(1, Math.min(target.w, target.h) * 0.12);
+    // Padding is a share of the space being drawn into — but capped against the
+    // BOX, or a tall band (a conference room with the name lifted off it) would
+    // take 12% of its own height as side padding and squeeze the logo narrower
+    // than a cramped box would.
+    var pad = opts.pad != null ? opts.pad
+            : Math.max(1, Math.min(Math.min(target.w, target.h) * 0.12,
+                                   Math.min(box.w, box.h) * 0.08));
     var x = target.x + pad, y = target.y + pad;
     var w = target.w - pad * 2, h = target.h - pad * 2;
 
@@ -465,93 +471,196 @@
    * plan is actually laid out instead of leaving a sponsor unbranded.
    */
   /**
-   * The tallest horizontal band inside a box that the artwork has NOT printed
-   * across — where a sponsor's logo can go without landing on the lettering.
+   * Which glyphs draw an area's printed name ("NETWORKING LOUNGE"), and the box
+   * they fill at their natural size.
    *
-   * Unioning every glyph in the box does not work: these areas also carry a
-   * stand number in one corner and an m² figure in another, so the union covers
-   * the whole box and leaves nowhere. What matters is how much WIDTH is taken
-   * at a given height — the printed name spans most of the box, a corner number
-   * spans very little. So each row is called blocked only when the glyphs on it
-   * cover a real share of the width, and the tallest run of unblocked rows wins.
+   * Picking them out is not obvious. The plan converts its text to vector
+   * outlines, so there is nothing to read, and taking every glyph inside the
+   * box does not work either — these areas also print a stand number in one
+   * corner and an m² figure in another, so that set spans the whole box.
    *
-   * The plan converts its text to outlines, so there is nothing to read and
-   * every glyph has to be measured — ~2000 bboxes. Cached per area: the artwork
-   * does not move between repaints, so this is paid once for the life of the
-   * page.
+   * Two rules were tried and rejected before this one. Judging each ROW by how
+   * much width is printed on it splits a two-line name: "VIP" is far narrower
+   * than "LOUNGE" though exactly as tall, so one line shrank without the other.
+   * Judging by glyph HEIGHT works on the big boxes but not on a narrow one like
+   * Speaker Prep, where the name is printed as small as the corner number.
+   *
+   * What holds everywhere is that the three pieces of text are vertically
+   * separated, and the name carries far more ink than a stand number. So the
+   * glyphs are clustered by vertical position — lines of the same name merge,
+   * the corner labels stay apart — and the heaviest cluster is the name.
+   *
+   * ~2000 bboxes, so the answer is cached per area: the artwork does not move.
    */
-  var bandCache = {};
-  var ROWS = 64;            // ~1.5 units per row on the smallest area — fine enough
-  var BLOCKED_WIDTH = 0.25; // a row is "printed on" once glyphs cover this much of it
+  var nameCache = {};
 
-  function freeBandIn(svgDoc, box, cacheKey) {
-    if (Object.prototype.hasOwnProperty.call(bandCache, cacheKey)) return bandCache[cacheKey];
+  function printedNameIn(svgDoc, box, cacheKey) {
+    if (Object.prototype.hasOwnProperty.call(nameCache, cacheKey)) return nameCache[cacheKey];
 
-    var marks = [];
+    var marks = [], heights = [];
     var glyphs = svgDoc.querySelectorAll('path, polygon');
     for (var i = 0; i < glyphs.length; i++) {
-      var b = visualBox(glyphs[i]);
+      var el = glyphs[i];
+      // Measure at natural size. The transform is lifted only for the instant
+      // of the measurement and put straight back: this loop walks EVERY glyph
+      // on the plan, so stripping them outright would undo the scaling already
+      // applied to the other areas' names and leave only the last one shrunk.
+      var tf = el.hasAttribute('data-label-scaled') ? el.getAttribute('transform') : null;
+      if (tf) el.removeAttribute('transform');
+      var b = visualBox(el);
+      if (tf) el.setAttribute('transform', tf);
       if (!b || !(b.w > 0) || !(b.h > 0)) continue;
       // Fully inside, with slack for stroke overshoot. Anything merely
       // overlapping belongs to a neighbour, not to this area.
       if (b.x < box.x - 1 || b.y < box.y - 1) continue;
       if (b.x + b.w > box.x + box.w + 1 || b.y + b.h > box.y + box.h + 1) continue;
-      // Skip a shape filling most of the area: that is a backing panel, not
-      // lettering, and counting it would block every row.
+      // Skip a shape filling most of the area: a backing panel, not lettering.
       if (b.w * b.h > box.w * box.h * 0.75) continue;
       marks.push(b);
+      heights.push(b.h);
     }
 
-    var band = null;
+    var out = null;
     if (marks.length) {
-      var rowH = box.h / ROWS;
-      var blocked = [];
-      for (var r = 0; r < ROWS; r++) {
-        var y = box.y + (r + 0.5) * rowH;
-        // Merge the spans covering this row, so overlapping glyphs are not
-        // double-counted into a false "blocked".
-        var spans = [];
-        for (var m = 0; m < marks.length; m++) {
-          var g = marks[m];
-          if (y >= g.y && y <= g.y + g.h) spans.push([g.x, g.x + g.w]);
+      heights.sort(function (a, b2) { return a - b2; });
+      var median = heights[Math.floor(heights.length / 2)] || 1;
+      // Lines of one name sit closer together than a name sits to a corner
+      // label, so a gap of about a line's height is what separates them.
+      var gapLimit = median * 0.9;
+
+      marks.sort(function (a, b2) { return a.y - b2.y; });
+      var clusters = [], cur = null;
+      for (var m = 0; m < marks.length; m++) {
+        var g = marks[m];
+        if (cur && g.y <= cur.bottom + gapLimit) {
+          cur.list.push(g);
+          if (g.y + g.h > cur.bottom) cur.bottom = g.y + g.h;
+          cur.ink += g.w * g.h;
+        } else {
+          cur = { list: [g], bottom: g.y + g.h, ink: g.w * g.h };
+          clusters.push(cur);
         }
-        spans.sort(function (p, q) { return p[0] - q[0]; });
-        var covered = 0, curS = null, curE = null;
-        for (var k = 0; k < spans.length; k++) {
-          if (curE === null || spans[k][0] > curE) {
-            if (curE !== null) covered += curE - curS;
-            curS = spans[k][0]; curE = spans[k][1];
-          } else if (spans[k][1] > curE) curE = spans[k][1];
-        }
-        if (curE !== null) covered += curE - curS;
-        blocked.push(covered > box.w * BLOCKED_WIDTH);
       }
 
-      // Every unbroken run of clear rows.
-      var runs = [], runStart = -1;
-      for (var t = 0; t <= ROWS; t++) {
-        var free = t < ROWS && !blocked[t];
-        if (free && runStart === -1) runStart = t;
-        if (!free && runStart !== -1) { runs.push([runStart, t - runStart]); runStart = -1; }
-      }
+      var best = null;
+      for (var c = 0; c < clusters.length; c++) if (!best || clusters[c].ink > best.ink) best = clusters[c];
 
-      // A band too thin to show a logo in is no better than the collision, so
-      // those are discarded and the caller falls back to the whole box.
-      var minRows = Math.max(5, box.h * 0.16) / rowH;
-      var usable = runs.filter(function (r) { return r[1] >= minRows; });
-
-      // Of the usable bands, take the LOWEST: the sponsor's mark belongs under
-      // the area's printed name, reading as "NETWORKING LOUNGE, brought to you
-      // by —". Falling back to the tallest keeps a logo on a box whose only
-      // clear space happens to be above the lettering.
-      if (usable.length) {
-        var pick = usable[usable.length - 1];
-        band = { x: box.x, y: box.y + pick[0] * rowH, w: box.w, h: pick[1] * rowH };
+      if (best) {
+        var els = [], minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+        for (var k = 0; k < best.list.length; k++) {
+          var q = best.list[k];
+          if (q.x < minx) minx = q.x;
+          if (q.y < miny) miny = q.y;
+          if (q.x + q.w > maxx) maxx = q.x + q.w;
+          if (q.y + q.h > maxy) maxy = q.y + q.h;
+        }
+        // Re-walk to collect the elements, since the boxes were sorted.
+        for (var e = 0; e < glyphs.length; e++) {
+          var eb = visualBox(glyphs[e]);
+          if (!eb || !(eb.w > 0)) continue;
+          if (eb.x >= minx - 0.01 && eb.y >= miny - 0.01 &&
+              eb.x + eb.w <= maxx + 0.01 && eb.y + eb.h <= maxy + 0.01) els.push(glyphs[e]);
+        }
+        // If the name we found spans nearly the whole box the pieces could not
+        // be separated — better to leave the artwork alone than shrink the lot.
+        if (els.length && (maxy - miny) < box.h * 0.9) {
+          // Everything else printed in the box — the stand number, the m²
+          // figure. The name is moved up to free space below it, and it must
+          // not be moved onto these.
+          var others = [];
+          for (var o = 0; o < marks.length; o++) {
+            var ob = marks[o];
+            var isName = ob.x >= minx - 0.01 && ob.y >= miny - 0.01 &&
+                         ob.x + ob.w <= maxx + 0.01 && ob.y + ob.h <= maxy + 0.01;
+            if (!isName) others.push(ob);
+          }
+          out = { els: els, others: others,
+                  box: { x: minx, y: miny, w: maxx - minx, h: maxy - miny } };
+        }
       }
     }
 
-    bandCache[cacheKey] = band;
-    return band;
+    nameCache[cacheKey] = out;
+    return out;
+  }
+
+  /**
+   * Where the printed name sits once it has made room for a logo.
+   *
+   * Shrinking alone is not enough. The name is set centred, so shrinking it in
+   * place leaves half the freed space stranded above it, where a logo would
+   * read as floating over the box rather than belonging to the name. So the
+   * name is also lifted towards the top, which collects the whole remainder
+   * into one band underneath.
+   *
+   * The lift stops below whatever else is printed up there — these areas carry
+   * a stand number in the top corner, and a name pushed to the very top would
+   * land on it.
+   */
+  function nameTarget(box, name, scale) {
+    var h = name.box.h * scale;
+    var w = name.box.w * scale;
+    var cx = name.box.x + name.box.w / 2;
+
+    var clear = box.y + box.h * 0.07;
+    for (var i = 0; i < (name.others || []).length; i++) {
+      var o = name.others[i];
+      // Only things ABOVE the name are in the way of lifting it.
+      if (o.y > name.box.y + name.box.h / 2) continue;
+      var below = o.y + o.h + Math.max(1, box.h * 0.03);
+      if (below > clear) clear = below;
+    }
+    // Never push the name lower than it already sits — this is meant to free
+    // space, not consume more of it.
+    var top = Math.min(clear, name.box.y);
+
+    return { x: cx - w / 2, y: top, w: w, h: h, cx: cx };
+  }
+
+  /**
+   * Scale and lift an area's printed name.
+   *
+   * The name is set at a size that assumes it is the only thing in the box.
+   * Once a sponsor's logo is there too, the two compete for the same space, so
+   * the name gives some back — shrunk and moved, not hidden, and in the
+   * artwork's own typeface rather than re-set in ours. Restored the moment the
+   * logo goes, since there is then nothing to make room for.
+   */
+  function placePrintedName(box, name, scale) {
+    if (!name) return null;
+
+    if (scale === 1) {
+      for (var r = 0; r < name.els.length; r++) {
+        name.els[r].removeAttribute('transform');
+        name.els[r].removeAttribute('data-label-scaled');
+      }
+      return null;
+    }
+
+    var t = nameTarget(box, name, scale);
+    // Map the name's top-centre onto the target's, scaling about that point.
+    var tf = 'translate(' + t.cx + ',' + t.y + ') scale(' + scale + ') ' +
+             'translate(' + (-t.cx) + ',' + (-name.box.y) + ')';
+    for (var i = 0; i < name.els.length; i++) {
+      name.els[i].setAttribute('transform', tf);
+      name.els[i].setAttribute('data-label-scaled', '1');
+    }
+    return t;
+  }
+
+  /**
+   * The band left clear beneath the name — where the logo goes.
+   *
+   * Below by preference: a sponsor's mark reads as belonging to the name above
+   * it. A band too thin to show a logo in is no better than a collision, so it
+   * is rejected and the caller falls back to the whole box.
+   */
+  function bandUnder(box, placed) {
+    if (!placed) return null;
+    var gap = Math.max(1, Math.min(box.w, box.h) * 0.05);
+    var band = { x: box.x, y: placed.y + placed.h + gap, w: box.w,
+                 h: (box.y + box.h) - (placed.y + placed.h + gap) };
+    return band.h >= Math.max(5, box.h * 0.16) ? band : null;
   }
 
   /** The artwork rectangle an area occupies, or null if the plan has moved. */
@@ -563,6 +672,9 @@
     }
     return null;
   }
+
+  // How far an area's printed name shrinks once a sponsor's logo shares its box.
+  var LABEL_SHRINK = 0.62;
 
   function paintAreaLogos(svgDoc, areas, prefix) {
     if (!svgDoc || !areas) return 0;
@@ -588,10 +700,17 @@
       if (!host) { missed++; return; }
       host.setAttribute('data-area', a.key);
 
-      if (!a.logo) { if (node && node.parentNode) node.parentNode.removeChild(node); return; }
-
+      // Measured before the logo test, because restoring a name that has been
+      // un-sponsored needs the box just as much as placing one does.
       var box = visualBox(host);
       if (!box || !(box.w > 0) || !(box.h > 0)) { missed++; return; }
+
+      if (!a.logo) {
+        if (node && node.parentNode) node.parentNode.removeChild(node);
+        // Nothing to make room for any more — put the name back as it was.
+        placePrintedName(box, printedNameIn(svgDoc, box, a.key), 1);
+        return;
+      }
 
       if (!node) {
         node = document.createElementNS(SVG_NS, 'image');
@@ -603,7 +722,11 @@
         // on top rather than being covered by the logo.
         host.parentNode.insertBefore(node, host.nextSibling);
       }
-      fitImage(node, a.logo, box, { band: freeBandIn(svgDoc, box, a.key) });
+      // Shrink the artwork's own name to make room, then drop the logo into
+      // what that frees. Areas with no logo are left untouched at full size.
+      var name = printedNameIn(svgDoc, box, a.key);
+      var placed = placePrintedName(box, name, LABEL_SHRINK);
+      fitImage(node, a.logo, box, { band: bandUnder(box, placed) });
     });
 
     return missed;
