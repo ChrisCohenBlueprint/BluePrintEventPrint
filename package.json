@@ -13,7 +13,7 @@
     "check:browser": "node scripts/browser-check.js",
     "check": "npm run check:security && npm run check:browser",
     "validate:artwork": "node scripts/validate-artwork.js",
-    "test": "node test/pages.test.js && node test/plans-grid.test.js"
+    "test": "node test/pages.test.js && node test/plans-grid.test.js && node test/artwork-per-event.test.js"
   },
   "keywords": [],
   "author": "",

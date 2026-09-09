@@ -73,6 +73,11 @@ router.get('/floorplan.svg', async (req, res, next) => {
     const named = req.query.show ? shows.bySlug(String(req.query.show)) : null;
     const stored = await floorplans.get(named ? named.showId : undefined);
     res.type('image/svg+xml');
+    // The response depends on which event asked. Without this a cache keyed on
+    // the URL alone will serve one event's floorplan to another — which is
+    // exactly what happened. The clients now put the event in the query too, so
+    // this is the belt to that pair of braces.
+    res.set('Vary', 'X-Show');
     if (stored && stored.svg) {
       res.set('ETag', `"${stored.version}"`);
       res.set('Cache-Control', 'public, max-age=300');

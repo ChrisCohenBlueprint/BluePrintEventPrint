@@ -176,7 +176,11 @@ async function load() {
   try {
     // The artwork for THIS show — uploaded per event, falling back to the file
     // shipped with the app. The page's X-Show header decides which comes back.
-    const svgRes = await fetch('/floorplan.svg');
+    // The event is in the URL, not only in a header. Every event used to
+    // request the same /floorplan.svg and rely on X-Show to distinguish them,
+    // which any cache in between is entitled to ignore — and did: one event's
+    // plan was served for another's for the five minutes it stayed cached.
+    const svgRes = await fetch(`/floorplan.svg?show=${encodeURIComponent(SHOW)}`);
     mount.innerHTML = await svgRes.text();
     svgDoc = mount.querySelector('svg');
     svgDoc.setAttribute('width', '100%');
