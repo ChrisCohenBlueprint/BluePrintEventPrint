@@ -1,0 +1,25 @@
+/* ─── How a plan's own text is set — ONE definition, shared by every surface ───
+ *
+ * A plan that arrives with live text names the designer's own typeface, and a
+ * browser does not have it. North America's asks for Neue Haas Grotesk Pro, so
+ * every stand number and room label fell back to the browser's default serif
+ * and the plan read as a different document to Europe's.
+ *
+ * Europe's plan carries no text at all — its numbers were converted to outlines
+ * before it ever reached us — so it always looked right and nothing here
+ * touches it. This rule only has anything to act on where a plan kept its text,
+ * which is what the artwork specification asks for.
+ *
+ * Set in the app's own typeface so a stand number reads the same whether the
+ * plan drew it or we did, and so the two events look like the same product.
+ * The plan's own sizes, weights and letter-spacing are left alone: only the
+ * family is replaced, and each glyph keeps the position the designer gave it.
+ */
+#svg-mount text,       /* the public floorplan   */
+#svg-mount tspan,
+#admin-svg-mount text, /* the admin plan         */
+#admin-svg-mount tspan,
+#plan-mount text,      /* the printed proposal   */
+#plan-mount tspan {
+  font-family: 'Raleway', 'Helvetica Neue', Arial, sans-serif;
+}

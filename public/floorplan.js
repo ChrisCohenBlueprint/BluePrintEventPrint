@@ -947,6 +947,9 @@ const STATUS_FILL = {
   get held()      { return BoothPalette.fillFor('held'); },
 };
 const SVG_NS = 'http://www.w3.org/2000/svg';
+// One stack for everything the export draws, so the plan's own numbers and the
+// footer we add are set in the same face.
+const FONT_STACK = "'Raleway', 'Helvetica Neue', Arial, sans-serif";
 
 async function downloadPlan() {
   if (!svgDoc || !svgDoc.viewBox) return;
@@ -975,6 +978,15 @@ async function downloadPlan() {
       c.classList && c.classList.remove('booth-selected', 'booth-shortlisted');
     });
 
+    // The standalone file carries none of the app's CSS, so a plan that kept
+    // its own live text would fall back to the browser's default serif here
+    // even though it reads correctly on the page. Set the family on the clone
+    // so a downloaded plan matches the one it was downloaded from. Europe's
+    // plan has no text to set — its numbers are outlines.
+    clone.querySelectorAll('text, tspan').forEach((t) => {
+      t.style.setProperty('font-family', FONT_STACK);
+    });
+
     // Grow the canvas downward for the footer band.
     clone.setAttribute('viewBox', `0 0 ${W} ${H + footerH}`);
     clone.setAttribute('width', W);
@@ -988,7 +1000,7 @@ async function downloadPlan() {
       clone.appendChild(e);
       return e;
     };
-    const FONT = 'Raleway, Arial, sans-serif';
+    const FONT = FONT_STACK;
     add('rect', { x: 0, y: H, width: W, height: footerH, fill: '#ffffff' });
     add('line', { x1: 40, y1: H + 1, x2: W - 40, y2: H + 1, stroke: '#e2e8f0', 'stroke-width': 2 });
 
