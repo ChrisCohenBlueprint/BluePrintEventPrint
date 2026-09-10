@@ -18,24 +18,37 @@
  * than either colour.
  */
 (function (global) {
-  var VARS = { available: '--booth-available', sold: '--booth-sold', sponsored: '--booth-sponsored' };
+  // The colours an event's artwork can set. ON HOLD is deliberately absent: a
+  // hold starts and expires in the app, not in the drawing, so it keeps one
+  // meaning everywhere.
+  var FROM_ARTWORK = { available: '--booth-available', sold: '--booth-sold', sponsored: '--booth-sponsored' };
+
+  // Every status that can be asked for. `held` belongs here even though no
+  // artwork sets it — leaving it out made fillFor('held') fall through to the
+  // available colour, and the downloaded plan painted every held stand white.
+  var VARS = {
+    available: FROM_ARTWORK.available, sold: FROM_ARTWORK.sold,
+    sponsored: FROM_ARTWORK.sponsored, held: '--booth-held',
+  };
 
   function applyPalette(palette) {
     var root = document.documentElement;
-    Object.keys(VARS).forEach(function (k) {
+    Object.keys(FROM_ARTWORK).forEach(function (k) {
       var v = palette && palette[k];
       // A missing colour restores the app's own, rather than leaving whatever
       // the previously viewed event happened to set.
-      if (v) root.style.setProperty(VARS[k], v);
-      else root.style.removeProperty(VARS[k]);
+      if (v) root.style.setProperty(FROM_ARTWORK[k], v);
+      else root.style.removeProperty(FROM_ARTWORK[k]);
     });
     return palette || null;
   }
 
   /** The colour a stand of this status is actually painted, palette applied. */
   function fillFor(status) {
-    var v = getComputedStyle(document.documentElement)
-      .getPropertyValue(VARS[status] || '--booth-available');
+    // An unknown status must not quietly become "available" — that is how a
+    // held stand ended up white on a downloaded plan.
+    if (!VARS[status]) return '#ffffff';
+    var v = getComputedStyle(document.documentElement).getPropertyValue(VARS[status]);
     return (v || '').trim() || '#ffffff';
   }
 

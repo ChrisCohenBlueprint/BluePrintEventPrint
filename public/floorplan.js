@@ -993,7 +993,11 @@ async function downloadPlan() {
     add('line', { x1: 40, y1: H + 1, x2: W - 40, y2: H + 1, stroke: '#e2e8f0', 'stroke-width': 2 });
 
     // Centred colour key.
-    const keys = [['#ffffff', 'Available', true], ['#fcdf6d', 'Taken'], ['#f97316', 'On Hold']];
+    // Taken from the live palette, not restated, so the key matches the plan
+    // it sits under — including an event drawn in its own colours.
+    const keys = [[STATUS_FILL.available, 'Available', true],
+                  [STATUS_FILL.sold, 'Taken'],
+                  [STATUS_FILL.held, 'On Hold']];
     if (hasSponsor && Object.values(booths).some(b => b && b.sponsored)) keys.push([sponsorColor, 'Sponsored']);
     const itemW = (label) => 26 + Math.ceil(label.length * 9.5) + 44;
     const total = keys.reduce((s, k) => s + itemW(k[1]), 0);

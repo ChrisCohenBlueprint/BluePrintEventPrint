@@ -45,6 +45,20 @@ const NA = { available: '#fffcf8', sold: '#689abb', sponsored: '#7c1315' };
   check('the app\'s colours return', (await paint('s')).includes('252, 223, 109'), await paint('s'));
   check('rather than the last event\'s lingering', !(await paint('s')).includes('104, 154, 187'));
 
+  console.log('\nEvery status can be asked for, not just the ones artwork sets');
+  // held was missing from the lookup, so fillFor('held') fell through to the
+  // available colour and the DOWNLOADED plan painted every held stand white —
+  // on Europe, which nothing here was supposed to touch.
+  await page.evaluate(() => BoothPalette.apply(null));
+  check('held resolves to the app orange, not white',
+        (await page.evaluate(() => BoothPalette.fillFor('held'))) === '#f97316',
+        await page.evaluate(() => BoothPalette.fillFor('held')));
+  await page.evaluate((p) => BoothPalette.apply(p), NA);
+  check('and stays orange under an event palette',
+        (await page.evaluate(() => BoothPalette.fillFor('held'))) === '#f97316');
+  check('an unknown status does not silently become available',
+        (await page.evaluate(() => BoothPalette.fillFor('nonsense'))) === '#ffffff');
+
   console.log('\nfillFor reports what is actually painted');
   await page.evaluate((p) => BoothPalette.apply(p), NA);
   const reported = await page.evaluate(() => BoothPalette.fillFor('sold'));
