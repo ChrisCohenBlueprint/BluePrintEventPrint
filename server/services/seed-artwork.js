@@ -26,7 +26,7 @@ const booths = require('../models/booths');
 const { getDb } = require('../db');
 const { extractStands, stripExhibitorNames, paletteOf } = require('../lib/extract-stands');
 
-const FLAG = 'seed-artwork-lna-v5';   // v4 left held stands with no hold document
+const FLAG = 'seed-artwork-lna-v6';   // v5 skipped: its check did not look at status counts
 const SLUG = 'lna';
 const FILE = path.join(__dirname, '..', '..', 'public', 'LNA27_Floorplan_Web-Format_24.svg');
 
@@ -60,10 +60,29 @@ async function seedNorthAmerica() {
     // healthy plan and skipped, leaving the stands broken for good.
     const planNeedsRestoring = namesNow < namesShipped;
 
+    // Does the stored inventory match what the plan says? Compared as a whole
+    // rather than by a list of specific symptoms: the first version of this
+    // checked only whether the plan had names, the second only the stand count
+    // and whether ANY carried a company — and each time the defect that was
+    // actually there fell outside the check and the repair skipped itself.
+    // Counting every status catches whatever is wrong, including the four held
+    // stands that kept reverting to empty.
+    const tally = (rows, status, company) => ({
+      total: rows.length,
+      available: rows.filter(status('available')).length,
+      sold: rows.filter(status('sold')).length,
+      held: rows.filter(status('held')).length,
+      named: rows.filter(company).length,
+    });
+    const want = tally(sellable, (st) => (r) => r.status === st, (r) => !!r.exhibitor && r.status !== 'available');
     const have = await booths.all();
-    const standsNeedRebuilding =
-      have.length !== sellable.length ||
-      (namesShipped > 0 && have.filter(b => b.assignment && b.assignment.company).length === 0);
+    const got = tally(have, (st) => (r) => r.status === st, (r) => !!(r.assignment && r.assignment.company));
+
+    const standsNeedRebuilding = Object.keys(want).some(k => want[k] !== got[k]);
+    if (standsNeedRebuilding) {
+      console.log('North America stands differ from the plan —',
+        `plan ${JSON.stringify(want)} vs stored ${JSON.stringify(got)}`);
+    }
 
     if (!planNeedsRestoring && !standsNeedRebuilding) {
       await meta.insertOne({ _id: FLAG, at: new Date(), skipped: 'nothing-to-repair' });

@@ -42,10 +42,15 @@ check('the import\'s own refusal on real bookings is honoured, not bypassed',
 // stands broken with no way back.
 check('the stands are judged separately from the plan',
       /standsNeedRebuilding/.test(src) && /planNeedsRestoring/.test(src));
-check('an event whose stands carry no names is rebuilt even if the plan is fine',
-      /have\.filter\(b => b\.assignment && b\.assignment\.company\)\.length === 0/.test(src));
-check('a wrong number of stands is enough on its own',
-      /have\.length !== sellable\.length/.test(src));
+// Two earlier versions checked for specific symptoms — first whether the plan
+// had names, then the stand count and whether ANY stand carried a company — and
+// each time the defect actually present fell outside the check and the repair
+// skipped itself. Comparing the whole tally catches whatever is wrong.
+check('the stored stands are compared to the plan as a whole tally',
+      /const tally = /.test(src) && /Object\.keys\(want\)\.some\(k => want\[k\] !== got\[k\]\)/.test(src));
+check('and that tally counts every status, not just how many stands there are',
+      /available:.*status\('available'\)/.test(src) && /sold:.*status\('sold'\)/.test(src) &&
+      /held:.*status\('held'\)/.test(src) && /named:/.test(src));
 check('and it stands down only when both are already right',
       /!planNeedsRestoring && !standsNeedRebuilding/.test(src));
 check('the original is stored, and only the served copy loses its names',
