@@ -220,8 +220,10 @@ router.post('/stands/import', async (req, res, next) => {
     // 99 stands with no exhibitors and no way back.
     let namesRemoved = 0;
     try {
-      const names = r.stands.map(s => s.exhibitor).filter(Boolean);
-      const stripped = stripExhibitorNames(f.svg, names);
+      // Every name the plan prints inside a shape, including any on shapes
+      // dropped as duplicates — those have no stand of ours to draw over them,
+      // so if they are left they stay printed for good.
+      const stripped = stripExhibitorNames(f.svg, r.printedNames);
       if (stripped.removed) {
         const saved = await floorplans.setDisplaySvg(stripped.svg);
         if (saved.ok) namesRemoved = stripped.removed;

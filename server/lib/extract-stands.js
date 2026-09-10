@@ -154,6 +154,7 @@ const AREA   = /^([\d,]+)\s*(ft|m|sqm|sqft)$/i;      // "200ft" — the ² is se
  * reader could not account for. It reports; it does not write.
  */
 function extractStands(svg) {
+  const printedNames = [];
   const palette = readPalette(svg);
   const rects = readRects(svg);
   const texts = readTexts(svg);
@@ -164,7 +165,7 @@ function extractStands(svg) {
   const others = texts.filter(t => !NUMBER.test(t.text) && !AREA.test(t.text));
 
   if (!numbers.length) {
-    return { stands: [], unit: null, unitsPerArea: null, rects: rects.length,
+    return { stands: [], unit: null, unitsPerArea: null, printedNames: [], rects: rects.length,
              warnings: ['No stand numbers found as live text. Has the text been converted to outlines?'] };
   }
 
@@ -244,14 +245,22 @@ function extractStands(svg) {
   // import partway through and leave the event half-filled.
   const byNumber = new Map();
   const repeated = [];
+  const dropped = [];
   for (const st of stands.splice(0)) {
     if (byNumber.has(st.number)) {
       const first = byNumber.get(st.number);
       repeated.push(`${st.number} (${first.printedArea ?? '?'} and ${st.printedArea ?? '?'})`);
+      dropped.push(st);
       continue;
     }
     byNumber.set(st.number, st);
     stands.push(st);
+  }
+  if (dropped.length) {
+    // Their names are still printed on the plan. If they are not taken out
+    // they stay there for good, because no stand of ours will ever draw over
+    // them — "Barentz" sat on the plan exactly this way.
+    for (const d of dropped) if (d.exhibitor) printedNames.push(d.exhibitor);
   }
   if (repeated.length) {
     warnings.push(`${repeated.length} stand numbers are printed on two different shapes — ${repeated.join(', ')}. Only the first is kept; the artwork needs correcting before these stands can be sold.`);
@@ -300,8 +309,9 @@ function extractStands(svg) {
   if (noArea) warnings.push(`${noArea} stands print no area; theirs is derived from the drawing.`);
 
   const fills = statusFromColour(stands, warnings);
+  for (const st of stands) if (st.exhibitor) printedNames.push(st.exhibitor);
 
-  return { stands, unit, unitsPerArea, fills,
+  return { stands, unit, unitsPerArea, fills, printedNames,
            rects: rects.length, texts: texts.length, warnings };
 }
 

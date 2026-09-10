@@ -90,7 +90,13 @@ router.get('/floorplan.svg', async (req, res, next) => {
     const artwork = stored && (wantsOriginal ? stored.svg : (stored.displaySvg || stored.svg));
     if (artwork) {
       res.set('ETag', `"${stored.version}"`);
-      res.set('Cache-Control', 'public, max-age=300');
+      // Revalidate every time rather than holding it for five minutes. The
+      // plan changes underneath a viewer — an import takes the printed names
+      // out of it because we start drawing them ourselves — and a stale copy
+      // shows every exhibitor name twice, once from the artwork and once from
+      // us. The ETag keeps that cheap: unchanged artwork answers 304 and no
+      // bytes move.
+      res.set('Cache-Control', 'no-cache');
       if (req.get('If-None-Match') === `"${stored.version}"`) return res.status(304).end();
       return res.send(artwork);
     }

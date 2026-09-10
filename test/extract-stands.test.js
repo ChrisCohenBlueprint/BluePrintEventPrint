@@ -117,6 +117,16 @@ check('and named so the artwork can be corrected',
 check('a plan with no names to strip is returned unchanged',
       stripExhibitorNames(fixture, []).svg === fixture);
 
+console.log('\nA name on a shape that lost its stand still comes off the plan');
+// A shape dropped as a duplicate has no stand of ours to draw over it, so a
+// name left printed on it stays there for good — "Barentz" sat on North
+// America's plan exactly this way.
+const dupe = extractStands(fixture.replace('>102<', '>101<'));
+check('the repeat is not a stand', dupe.stands.length === 3);
+check('but its name is still queued to be taken out of the artwork',
+      dupe.printedNames.length >= dupe.stands.filter(x => x.exhibitor).length,
+      `${dupe.printedNames.length} to strip, ${dupe.stands.filter(x => x.exhibitor).length} on stands`);
+
 console.log('\nIt reports rather than silently averaging');
 check('too little data to calibrate is said out loud',
       r.warnings.some(w => /calibrate/i.test(w)));
