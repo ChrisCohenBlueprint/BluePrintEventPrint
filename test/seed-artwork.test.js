@@ -36,8 +36,18 @@ check('every write happens inside that event\'s context',
 check('the import\'s own refusal on real bookings is honoured, not bypassed',
       /importFromArtwork\(sellable, \{ actor: 'deploy' \}\)/.test(src) &&
       /if \(!out\.ok\)/.test(src) && !/force: true/.test(src));
-check('a stored plan that is not worse is left alone',
-      /namesNow >= namesShipped/.test(src));
+// Restoring the plan and rebuilding the stands are separate repairs, and an
+// earlier run did the first then had the second refused. Deciding on the plan
+// alone then meant every later boot saw a healthy plan and skipped, leaving the
+// stands broken with no way back.
+check('the stands are judged separately from the plan',
+      /standsNeedRebuilding/.test(src) && /planNeedsRestoring/.test(src));
+check('an event whose stands carry no names is rebuilt even if the plan is fine',
+      /have\.filter\(b => b\.assignment && b\.assignment\.company\)\.length === 0/.test(src));
+check('a wrong number of stands is enough on its own',
+      /have\.length !== sellable\.length/.test(src));
+check('and it stands down only when both are already right',
+      /!planNeedsRestoring && !standsNeedRebuilding/.test(src));
 check('the original is stored, and only the served copy loses its names',
       /floorplans\.save\(shipped/.test(src) && /setDisplaySvg/.test(src));
 

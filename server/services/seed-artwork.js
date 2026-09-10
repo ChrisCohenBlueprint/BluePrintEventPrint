@@ -26,7 +26,7 @@ const booths = require('../models/booths');
 const { getDb } = require('../db');
 const { extractStands, stripExhibitorNames, paletteOf } = require('../lib/extract-stands');
 
-const FLAG = 'seed-artwork-lna-v2';   // v1 was refused by the held-stand guard
+const FLAG = 'seed-artwork-lna-v3';   // v1 refused by the held-stand guard; v2 skipped on the restored plan
 const SLUG = 'lna';
 const FILE = path.join(__dirname, '..', '..', 'public', 'LNA27_Floorplan_Web-Format_24.svg');
 
@@ -47,23 +47,35 @@ async function seedNorthAmerica() {
   return showContext.runAs(show.showId, async () => {
     const stored = await floorplans.get();
     const current = stored && stored.svg ? extractStands(stored.svg) : { stands: [] };
-
-    // Only step in if what is stored has genuinely lost something. A plan the
-    // team has since replaced with a better one is left alone.
     const namesNow = current.stands.filter(s => s.exhibitor).length;
     const namesShipped = source.stands.filter(s => s.exhibitor).length;
-    if (namesNow >= namesShipped) {
-      await meta.insertOne({ _id: FLAG, at: new Date(), skipped: 'stored-plan-is-not-worse' });
-      return { skipped: 'stored-plan-is-not-worse', namesNow, namesShipped };
-    }
-
-    const saved = await floorplans.save(shipped, {
-      filename: 'LNA27_Floorplan_Web Format_24.svg', actor: 'deploy',
-    });
-    if (!saved.ok) return { skipped: 'could-not-store', reason: saved.reason };
 
     // Lounges and conference tracks are sponsorable space, not sellable stands.
     const sellable = source.stands.filter(s => !s.sponsored);
+
+    // Two separate things can be wrong, and fixing one is not fixing the other.
+    // An earlier run of this restored the plan and was then refused the import,
+    // so the plan was right while the stands stayed wrong — and because the
+    // decision to act was made on the plan alone, every boot afterwards saw a
+    // healthy plan and skipped, leaving the stands broken for good.
+    const planNeedsRestoring = namesNow < namesShipped;
+
+    const have = await booths.all();
+    const standsNeedRebuilding =
+      have.length !== sellable.length ||
+      (namesShipped > 0 && have.filter(b => b.assignment && b.assignment.company).length === 0);
+
+    if (!planNeedsRestoring && !standsNeedRebuilding) {
+      await meta.insertOne({ _id: FLAG, at: new Date(), skipped: 'nothing-to-repair' });
+      return { skipped: 'nothing-to-repair', stands: have.length, namesNow };
+    }
+
+    if (planNeedsRestoring) {
+      const saved = await floorplans.save(shipped, {
+        filename: 'LNA27_Floorplan_Web Format_24.svg', actor: 'deploy',
+      });
+      if (!saved.ok) return { skipped: 'could-not-store', reason: saved.reason };
+    }
     const out = await booths.importFromArtwork(sellable, { actor: 'deploy' });
     if (!out.ok) {
       // Refused because the event has real bookings — exactly the intent. The
@@ -87,7 +99,8 @@ async function seedNorthAmerica() {
     } catch (e) { console.error('Seed: names not stripped —', e.message); }
 
     await meta.insertOne({ _id: FLAG, at: new Date(), ...out, namesRemoved });
-    return { ...out, namesRemoved, areasSkipped: source.stands.length - sellable.length };
+    return { ...out, namesRemoved, areasSkipped: source.stands.length - sellable.length,
+             planRestored: planNeedsRestoring };
   });
 }
 
