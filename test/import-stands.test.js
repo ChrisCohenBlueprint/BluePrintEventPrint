@@ -14,7 +14,13 @@ const calls = [];
 function fakeDb(state) {
   const docs = { booths: state.booths || [], booths_snapshots: [], holds: [] };
   const col = (name) => ({
-    distinct: async (field, f) => { calls.push(['distinct', name, f]); return state.holds || []; },
+    distinct: async (field, f) => {
+      calls.push(['distinct', name, f]);
+      // The guard asks only for holds a PERSON made; an import's own are
+      // excluded by the filter, so honour that here rather than returning all.
+      if (f && f.source && f.source.$ne) return state.personHolds || [];
+      return state.holds || [];
+    },
     countDocuments: async (f) => {
       calls.push(['count', name, f]);
       // The guard asks two different questions of the same collection: how many
@@ -114,6 +120,19 @@ const STANDS = [
   check('an empty read writes nothing',
         (await showContext.runAs('LNA', () => booths.importFromArtwork([]))).ok === false);
 
+  console.log('\nA stand the plan draws as reserved stays reserved');
+  // Without a hold DOCUMENT the expiry sweep finds a held stand nobody is
+  // holding and releases it — which is how the four North American stands the
+  // plan draws as reserved turned back into empty ones.
+  const holdDocs = calls.filter(c => c[0] === 'insertMany' && c[1] === 'holds').map(c => c[2])[0] || [];
+  check('a hold document is written for it', holdDocs.length === 1, `${holdDocs.length} written`);
+  check('carrying the exhibitor from the plan',
+        holdDocs[0] && holdDocs[0].company === 'Reserved Co');
+  check('with no expiry, so the sweep leaves it alone',
+        holdDocs[0] && holdDocs[0].expiresAt === undefined);
+  check('and marked as the import\'s, not a person\'s',
+        holdDocs[0] && holdDocs[0].source === 'artwork-import' && holdDocs[0].sessionId === null);
+
   console.log('\nStands an import itself created never block the next one');
   // An import stores the stands a plan draws as reserved AS held. Counting
   // those as bookings meant the four held stands an import had just created
@@ -127,7 +146,7 @@ const STANDS = [
         calls.some(c => c[0] === 'distinct' && c[1] === 'holds'));
 
   console.log('\nA stand someone actually reserved does block it');
-  db = fakeDb({ committed: 0, holds: ['101'], booths: [{ showId: 'LNA' }] });
+  db = fakeDb({ committed: 0, personHolds: ['101'], booths: [{ showId: 'LNA' }] });
   const blocked = await showContext.runAs('LNA', () => booths.importFromArtwork(STANDS));
   check('refused on a real hold', blocked.ok === false && blocked.reason === 'has_bookings',
         JSON.stringify(blocked.reason));

@@ -1186,8 +1186,12 @@ function commercialFilter() {
 async function countCommitted(showId = config.showId) {
   const byRecord = await col().countDocuments({ showId, ...commercialFilter() });
 
-  // Any stand someone actually reserved, whatever else is true of it.
-  const held = await getDb().collection('holds').distinct('boothNumber', { showId });
+  // Any stand someone actually reserved, whatever else is true of it. Holds an
+  // import wrote are excluded: counting those would mean an import's own held
+  // stands refused the next import, which is the loop this guard already had
+  // to be dug out of once.
+  const held = await getDb().collection('holds')
+    .distinct('boothNumber', { showId, source: { $ne: IMPORT_SOURCE } });
   const heldByHand = held.length
     ? await col().countDocuments({ showId, boothNumber: { $in: held } })
     : 0;
@@ -1277,6 +1281,23 @@ async function importFromArtwork(stands, { actor = null, force = false } = {}) {
   await col().deleteMany({ showId });
   await db.collection('holds').deleteMany({ showId });
   await col().insertMany(docs);
+
+  // A stand marked held needs a hold DOCUMENT as well as the status, or the
+  // expiry sweep — which re-derives truth from the hold documents — finds a
+  // held stand nobody is holding and releases it. That is what turned the four
+  // stands North America's plan draws as reserved back into empty ones.
+  //
+  // No expiresAt: the sweep treats a hold without one as live, which is right.
+  // The plan says these are reserved, and that stays true until a person says
+  // otherwise — unlike a hold someone takes on the website, which is a
+  // countdown. `source` marks them so they are not later mistaken for
+  // reservations a person made.
+  const heldDocs = docs.filter(d => d.status === 'held').map(d => ({
+    showId, boothNumber: d.boothNumber, company: d.assignment.company,
+    contactId: null, sessionId: null, createdAt: now,
+    createdBy: actor || 'import', source: IMPORT_SOURCE,
+  }));
+  if (heldDocs.length) await db.collection('holds').insertMany(heldDocs);
 
   return {
     ok: true, showId,
