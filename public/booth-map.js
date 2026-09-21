@@ -436,9 +436,16 @@
     splitDecor.forEach(function (el) { if (el.tagName === 'rect') svgDoc.appendChild(el); });
     splitDecor.forEach(function (el) { if (el.tagName !== 'rect') svgDoc.appendChild(el); });
 
-    // Artwork rectangles with no matching booth are hall furniture — catering,
-    // toilets, logo boxes. Make sure they never look interactive.
-    artwork.forEach(function (el) {
+    // Stand-styled rectangles with no matching booth are hall furniture —
+    // catering, toilets, logo boxes. Make sure they never look interactive.
+    //
+    // Only the PRIMARY pool. When the second-chance pool was added this ran
+    // over every rectangle in the plan, and the lounges and theatres are
+    // rectangles too: it switched their pointer events off, so the sponsor
+    // areas stopped answering clicks on both the admin and the public plan
+    // even though each page had wired them. A spare rectangle that did bind a
+    // stand carries data-booth and is left alone either way.
+    primary.forEach(function (el) {
       if (!el.hasAttribute('data-booth')) el.style.pointerEvents = 'none';
     });
 
