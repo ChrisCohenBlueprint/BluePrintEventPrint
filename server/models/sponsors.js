@@ -4,6 +4,17 @@ const { safeLink, safeImage } = require('../lib/safe-url');
 
 const col = () => getDb().collection('sponsors');
 
+/**
+ * One package per key, per show, enforced by the database.
+ *
+ * This index existed only if someone had once run scripts/seed-sponsors.js —
+ * which creates it as a side effect of seeding — so on any database stood up
+ * another way there was nothing at all behind create()'s "already exists"
+ * check, and two packages could take the same key.
+ */
+const ensureIndexes = () =>
+  col().createIndex({ showId: 1, key: 1 }, { unique: true, name: 'show_sponsor_unique' });
+
 const TIERS = ['platinum', 'gold', 'silver'];
 
 const all = () => col().find({ showId: config.showId }).toArray();
@@ -236,7 +247,16 @@ async function create(input = {}) {
     name: { $regex: `^${clean.fields.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } });
   if (nameClash) return { ok: false, error: `"${clean.fields.name}" already exists in the catalogue.` };
   const doc = { showId: config.showId, key, ...clean.fields, createdAt: new Date(), updatedAt: new Date() };
-  await col().insertOne(doc);
+  // The checks above are a read followed by a write, so two admins creating the
+  // same package at once both pass them. The unique index is what actually
+  // decides; a duplicate-key rejection is reported in the same words as the
+  // check, rather than reaching the admin as an internal error.
+  try {
+    await col().insertOne(doc);
+  } catch (e) {
+    if (e && e.code === 11000) return { ok: false, error: `A package with the key "${key}" already exists.` };
+    throw e;
+  }
   return { ok: true, sponsor: doc };
 }
 
@@ -443,6 +463,6 @@ async function setFloorplanSponsor({ name, color } = {}) {
   return value;
 }
 
-module.exports = { col, all, allActive, toPublic, recommend, setFields,
+module.exports = { col, ensureIndexes, all, allActive, toPublic, recommend, setFields,
                    cleanSponsor, create, remove, importRows, toCsvRows, CSV_HEADERS, TIERS,
                    getFloorplanSponsor, setFloorplanSponsor };

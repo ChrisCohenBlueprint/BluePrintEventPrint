@@ -6,8 +6,8 @@ const booths    = require('../models/booths');
 const inquiries = require('../models/inquiries');
 const sponsors  = require('../models/sponsors');
 const users     = require('../models/users');
+const auth      = require('../auth');
 const partners  = require('../models/partners');
-const salesTeam = require('../data/sales-team');
 const planAreas = require('../models/plan-areas');
 const showsModel = require('../models/shows');
 const floorplans = require('../models/floorplans');
@@ -37,15 +37,38 @@ const router = express.Router();
  * attacker the username was wrong.
  */
 async function confirmPassword(req, res, what) {
+  const who = req.admin?.user;
+
+  // Five wrong passwords buy this account a pause. Without it the gate below
+  // could be guessed at full speed by whoever already holds the session — which
+  // is the exact situation it exists to survive — and a wrong attempt reached
+  // no log at all. The throttle is per-account and only gates re-confirmation,
+  // so it can never lock anyone out of signing in.
+  const gate = auth.checkSecretThrottle(who);
+  if (!gate.ok) {
+    res.status(429).json({
+      error: `Too many incorrect passwords — wait ${Math.ceil(gate.retryAfter / 60)} minute(s) and try again. ${cap(what)}.`,
+    });
+    return false;
+  }
+
   const supplied = String(req.get('X-Confirm-Password') || '');
-  const account = await users.findByUsername(req.admin?.user);
-  if (!account || !users.verifyPassword(supplied, account.passwordHash)) {
-    users.absorbPassword(supplied);
+  const account = await users.findByUsername(who);
+  // AWAITED. verifyPassword hashes on a worker now, so it returns a promise —
+  // and an un-awaited promise is truthy, which makes `!verifyPassword(…)`
+  // always false. Every password, right or wrong, would have been accepted here.
+  if (!account || !await users.verifyPassword(supplied, account.passwordHash)) {
+    await users.absorbPassword(supplied);      // constant-time on the failure path
+    auth.registerSecretFailure(who, { what });
     res.status(403).json({ error: `Password incorrect — ${what}.` });
     return false;
   }
+  auth.clearSecretFailures(who);
   return true;
 }
+
+/** Sentence-case a clause like "the floorplan was not changed". */
+const cap = (s) => (s ? String(s)[0].toUpperCase() + String(s).slice(1) : '');
 
 // ─── Floorplan artwork ───────────────────────────────────────────────────────
 // One plan per show. Uploaded as a RAW body rather than JSON: a 2 MB SVG
@@ -648,8 +671,71 @@ router.delete('/partners/:id', async (req, res, next) => {
 });
 
 // ─── Forwarding an enquiry to the sales team ──────────────────────────────────
-router.get('/sales-team', (_req, res) => {
-  res.json({ team: salesTeam.TEAM, manager: salesTeam.MANAGER });
+/**
+ * Who a lead can be forwarded to.
+ *
+ * This used to be a nine-name array in server/data/sales-team.js, every one of
+ * them carrying the SAME email address, and nothing in the Team tab could reach
+ * it. So a rep created as a real `sales` account never appeared in "Send to" —
+ * they could not be assigned a lead at all — while every forward that did go out
+ * landed in one inbox regardless of whose name was picked. The roster is now the
+ * accounts themselves, which is the only list that can be both complete and
+ * current.
+ *
+ * Admins and the owner are included alongside the reps: leads were being
+ * forwarded to admins by name long before the sales tier existed, and an admin
+ * still takes one. An account with no email is LISTED but cannot be sent to —
+ * saying so is better than hiding the person, which is how the original bug
+ * felt from the outside.
+ */
+const ROSTER_ROLES = ['sales', 'admin', 'owner'];
+
+const memberName = (u) => (u.displayName || '').trim() || u.username;
+
+const toMember = (u) => ({
+  name: memberName(u),
+  email: (u.email || '').trim(),
+  username: u.username,
+  role: u.role || 'admin',
+});
+
+async function rosterMembers() {
+  const rows = await users.list();
+  return rows
+    .filter(u => ROSTER_ROLES.includes(u.role || 'admin'))
+    // Reps first — they are who a lead should normally go to — then by name.
+    .sort((a, b) =>
+      ((a.role === 'sales' ? 0 : 1) - (b.role === 'sales' ? 0 : 1)) ||
+      memberName(a).localeCompare(memberName(b)))
+    .map(toMember);
+}
+
+/**
+ * The person copied on every forward, so a lead is never lost if the assigned
+ * person misses it. The owner account — the one tier there is exactly one of —
+ * rather than a name written into the source.
+ */
+async function rosterManager() {
+  const rows = await users.list();
+  const owner = rows.find(u => u.role === 'owner' && (u.email || '').trim());
+  return owner ? toMember(owner) : null;
+}
+
+/** Resolve a picked name back to a member. Username matches too, so renaming
+ *  a rep's display name doesn't orphan the leads already assigned to them. */
+async function findMember(name) {
+  const want = String(name || '').toLowerCase().trim();
+  if (!want) return null;
+  const team = await rosterMembers();
+  return team.find(m => m.name.toLowerCase() === want) ||
+         team.find(m => m.username.toLowerCase() === want) || null;
+}
+
+router.get('/sales-team', async (_req, res, next) => {
+  try {
+    const [team, manager] = await Promise.all([rosterMembers(), rosterManager()]);
+    res.json({ team, manager });
+  } catch (e) { next(e); }
 });
 
 router.post('/inquiries/:id/assign', async (req, res, next) => {
@@ -657,7 +743,7 @@ router.post('/inquiries/:id/assign', async (req, res, next) => {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
     const name = req.body?.name;
     // An empty name clears the assignment.
-    const member = name ? salesTeam.findMember(name) : null;
+    const member = name ? await findMember(name) : null;
     if (name && !member) return res.status(400).json({ error: 'Unknown team member.' });
     const ok = await inquiries.assign(new ObjectId(req.params.id), member);
     res.status(ok ? 200 : 404).json(ok ? { ok: true, assignedTo: member } : { error: 'Lead not found.' });
@@ -676,8 +762,15 @@ router.post('/inquiries/:id/send', async (req, res, next) => {
     const lead = await inquiries.col().findOne({ _id: new ObjectId(req.params.id) });
     if (!lead) return res.status(404).json({ error: 'Lead not found.' });
 
-    const member = salesTeam.findMember(req.body?.name) || lead.assignedTo;
+    const member = (await findMember(req.body?.name)) || lead.assignedTo;
     if (!member) return res.status(400).json({ error: 'Assign this enquiry to someone first.' });
+    // An account with no email cannot be forwarded to. Refusing by name says
+    // what to fix; composing a mailto: to an empty address does not.
+    if (!member.email) {
+      return res.status(400).json({
+        error: `${member.name} has no email address on their account — add one under Team, then send again.`,
+      });
+    }
 
     const c = lead.contact || {};
     const stands = (lead.boothsOfInterest || []).join(', ') || 'none specified';
@@ -714,7 +807,10 @@ router.post('/inquiries/:id/send', async (req, res, next) => {
     ].join('\n');
 
     const to = member.email;
-    const cc = salesTeam.MANAGER.email;
+    // No owner account with an email means nobody to copy — send to the
+    // assignee alone rather than to the literal string "undefined".
+    const manager = await rosterManager();
+    const cc = manager ? manager.email : '';
 
     // Fire the webhook if configured — this is where real automation plugs in.
     if (config.notifyWebhook) {
@@ -818,14 +914,229 @@ router.get('/analytics/funnel', async (req, res, next) => {
 });
 
 // ─── Audit trail ──────────────────────────────────────────────────────────────
+/**
+ * What has actually happened on this event.
+ *
+ * The admin's Activity Log was a socket feed and nothing else: it started empty
+ * on every refresh, which is precisely the moment an operator reloads to find
+ * out what just happened. This is the history behind it.
+ *
+ * Every type that changes a stand or the plan is included — the old list left
+ * out splits, merges, moves, renumbers and artwork uploads, so the three
+ * operations most likely to be asked about after the fact were the three the
+ * log could not answer for. Browsing events (booth.view, plan.zoom, …) stay out:
+ * they are analytics, and they would bury the operational lines by a hundred
+ * to one.
+ */
+const AUDIT_TYPES = [
+  'booth.status_change', 'deal.update', 'hold.create', 'hold.release', 'hold.expire',
+  'hold.extend', 'booth.restore', 'booth.consolidate', 'booth.split', 'booth.reset',
+  'booth.move', 'booth.set_number', 'booth.set_tags', 'booth.set_country', 'booth.set_logo',
+  'unmerge', 'unsplit', 'floorplan.upload', 'floorplan.revert', 'stands.import',
+  'sponsor.create', 'sponsor.delete', 'sponsor.import', 'enquiry.forward',
+  'lead.admin', 'admin.team', 'security.denied', 'security.secret_failed',
+];
+
 router.get('/audit', async (req, res, next) => {
   try {
+    const q = { showId: config.showId };
+
+    // A caller-supplied type is intersected with the allow-list rather than
+    // trusted, so this endpoint can never be turned into a reader of the raw
+    // behavioural stream by passing ?type=session.start.
+    const wanted = String(req.query.type || '').split(',').map(t => t.trim()).filter(Boolean);
+    const types = wanted.length ? wanted.filter(t => AUDIT_TYPES.includes(t)) : AUDIT_TYPES;
+    if (!types.length) return res.json([]);
+    q.type = { $in: types };
+
+    if (req.query.booth) q.boothNumber = String(req.query.booth);
+    if (req.query.actor) q['actor.userId'] = String(req.query.actor);
+
+    // Free text over the company names the event carried. Escaped — a lead's
+    // company name is visitor input, and an unescaped '(' would make this throw
+    // rather than simply match nothing.
+    const text = String(req.query.q || '').trim();
+    if (text) {
+      const rx = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      q.$or = [
+        { boothNumber: rx },
+        { 'meta.company': rx },
+        { 'meta.to': rx },
+        { 'actor.userId': rx },
+      ];
+    }
+
     const rows = await getDb().collection('activity')
-      .find({ showId: config.showId,
-              type: { $in: ['booth.status_change', 'deal.update', 'hold.create',
-                            'hold.release', 'hold.expire', 'security.denied'] } })
+      .find(q)
       .sort({ ts: -1 }).limit(Math.max(1, Math.min(Number(req.query.limit) || 200, 1000))).toArray();
     res.json(rows);
+  } catch (e) { next(e); }
+});
+
+/** The distinct actors seen in the audit window, for the log's filter. */
+router.get('/audit/actors', async (_req, res, next) => {
+  try {
+    const rows = await getDb().collection('activity')
+      .distinct('actor.userId', { showId: config.showId, type: { $in: AUDIT_TYPES } });
+    res.json(rows.filter(Boolean).sort());
+  } catch (e) { next(e); }
+});
+
+// ─── Holds: extending one, and undoing a release ──────────────────────────────
+
+/**
+ * The gate that un-booking a stand goes through.
+ *
+ * Exactly the one Release itself uses in the socket layer: the recovery key
+ * when RECOVERY_KEY is set (so a stolen admin session still cannot touch a
+ * booking), and the admin's own login password when it is not. Shares the
+ * confirmation throttle with confirmPassword above, because it is the same
+ * secret being guessed either way.
+ */
+async function confirmDestructive(req, res, what) {
+  const who = req.admin?.user;
+  const supplied = String(req.get('X-Confirm-Password') || '');
+
+  const gate = auth.checkSecretThrottle(who);
+  if (!gate.ok) {
+    res.status(429).json({
+      error: `Too many incorrect attempts — wait ${Math.ceil(gate.retryAfter / 60)} minute(s) and try again. ${cap(what)}.`,
+    });
+    return false;
+  }
+
+  if (config.recoveryEnabled()) {
+    if (!config.recoveryOk(supplied)) {
+      auth.registerSecretFailure(who, { what });
+      res.status(403).json({ error: `Recovery key incorrect — ${what}.` });
+      return false;
+    }
+  } else {
+    const account = await users.findByUsername(who);
+    // Awaited — see confirmPassword. An un-awaited promise is truthy.
+    if (!account || !await users.verifyPassword(supplied, account.passwordHash)) {
+      await users.absorbPassword(supplied);
+      auth.registerSecretFailure(who, { what });
+      res.status(403).json({ error: `Password incorrect — ${what}.` });
+      return false;
+    }
+  }
+  auth.clearSecretFailures(who);
+  return true;
+}
+
+/**
+ * Give a hold more time.
+ *
+ * A hold silently expires after 24 hours and the stand goes back on sale with
+ * no warning to anyone. The admin can now see the clock (GET /holds) — this is
+ * the other half: the button that stops it running out.
+ *
+ * The new expiry is measured from whichever is LATER, now or the current
+ * expiry, so extending a hold with 20 hours left genuinely adds 24 rather than
+ * shortening it to 24 from this moment.
+ */
+router.post('/holds/:boothNumber/extend', async (req, res, next) => {
+  try {
+    const n = String(req.params.boothNumber);
+    const hours = Math.max(1, Math.min(Number(req.body?.hours) || 24, 24 * 30));
+
+    const booth = await booths.get(n);
+    if (!booth) return res.status(404).json({ error: `Stand ${n} not found.` });
+    if (booth.status !== 'held') {
+      return res.status(409).json({ error: `Stand ${n} is not on hold — nothing to extend.` });
+    }
+
+    const current = (await holds.active()).find(h => h.boothNumber === n);
+    const now = Date.now();
+    const from = current && current.expiresAt ? Math.max(now, new Date(current.expiresAt).getTime()) : now;
+    const durationMs = (from + hours * 3600_000) - now;
+
+    const r = await holds.forceHold(n, {
+      company: booth.assignment?.company || 'Pending',
+      durationMs,
+      actor: req.admin?.user || null,
+    });
+    track({ type: 'hold.extend', boothNumber: n, actor: req.admin?.user || 'unknown',
+            meta: { hours, expiresAt: r.expiresAt, company: booth.assignment?.company || null } });
+
+    // Nothing on the booth document changed, but every other admin's clock is
+    // now wrong. A stands broadcast is what their pages already listen for.
+    try { await sockets.notifyStands(); } catch (e) { console.error('Hold extend broadcast failed:', e.message); }
+
+    res.json({ ok: true, boothNumber: n, expiresAt: r.expiresAt });
+  } catch (e) { next(e); }
+});
+
+/**
+ * Put a released booking back.
+ *
+ * Release destroys a booking outright — the company, the negotiated price, the
+ * notes, the tags — and the only recovery was to retype all of it from memory.
+ * This restores the snapshot the console held immediately before the release.
+ *
+ * Two things make it safe. It is gated exactly as Release is, so it is no
+ * easier to perform than the thing it reverses. And it REFUSES unless the stand
+ * is still available: if someone has taken it in the meantime, restoring would
+ * quietly overwrite their booking, which is a worse outcome than the one being
+ * undone.
+ *
+ * The snapshot travelling from the client grants no authority an admin does not
+ * already have — booth:book already lets them assign any stand to any company —
+ * but it is stamped into the audit trail either way, so a restore is never an
+ * unattributed change of company.
+ */
+router.post('/booths/:boothNumber/restore', async (req, res, next) => {
+  try {
+    const n = String(req.params.boothNumber);
+    const snap = req.body?.assignment || {};
+    const status = req.body?.status === 'held' ? 'held' : 'sold';
+    const company = String(snap.company || '').trim();
+    if (!company) return res.status(400).json({ error: 'Nothing to restore — the snapshot has no company.' });
+
+    const booth = await booths.get(n);
+    if (!booth) return res.status(404).json({ error: `Stand ${n} not found.` });
+    if (booth.status !== 'available') {
+      return res.status(409).json({
+        error: `Stand ${n} is ${booth.status} again${booth.assignment?.company ? ` (${booth.assignment.company})` : ''} — it was not restored, so whoever took it keeps it.`,
+      });
+    }
+
+    if (!await confirmDestructive(req, res, `stand ${n} was not restored`)) return;
+
+    // expect:['available'] closes the gap between the check above and this
+    // write: a booking landing in between makes the write simply not match.
+    const r = await booths.setStatus(n, status, { company, actor: req.admin?.user || null, expect: ['available'] });
+    if (!r) return res.status(404).json({ error: `Stand ${n} not found.` });
+    if (!r.changed) return res.status(409).json({ error: `Stand ${n} was taken while restoring — it was left as it is.` });
+
+    // A hold has to have a hold document or the expiry sweep reclaims the stand
+    // within the minute — the same trap admin:setStatus fell into.
+    if (status === 'held') {
+      await holds.forceHold(n, { company, actor: req.admin?.user || null });
+    }
+
+    // The rest of the deal, each through the model's own guarded write.
+    if (snap.actualPrice !== undefined || snap.notes !== undefined) {
+      await booths.updateDeal(n, {
+        actualPrice: snap.actualPrice === undefined ? undefined : snap.actualPrice,
+        notes: snap.notes === undefined ? undefined : String(snap.notes || ''),
+        actor: req.admin?.user || null,
+      });
+    }
+    if (Array.isArray(snap.tags) && snap.tags.length) {
+      await booths.setTags(n, snap.tags, { actor: req.admin?.user || null });
+    }
+    if (snap.country) {
+      await booths.setCountry(n, snap.country, { actor: req.admin?.user || null });
+    }
+
+    track({ type: 'booth.restore', boothNumber: n, actor: req.admin?.user || 'unknown',
+            meta: { company, status, restoredPrice: snap.actualPrice ?? null } });
+
+    try { await sockets.notifyStands(); } catch (e) { console.error('Restore broadcast failed:', e.message); }
+
+    res.json({ ok: true, boothNumber: n, status, company });
   } catch (e) { next(e); }
 });
 

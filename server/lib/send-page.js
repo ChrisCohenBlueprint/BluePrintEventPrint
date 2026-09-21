@@ -39,9 +39,21 @@ function sendPage(res, file, show = null) {
   }
 
   let html = cache[file];
+  // The Content-Security-Policy allows an inline <script> only if it carries
+  // this request's nonce (see server.js). Every page served through here has at
+  // least one — the boot block below, and `lucide.createIcons()` at the foot of
+  // admin/floorplan/sales — so the nonce is stamped onto each inline script as
+  // the page goes out. Scripts with a src= are already allowed by 'self' and are
+  // deliberately left alone.
+  const nonce = res.locals && res.locals.cspNonce;
   if (show) {
     const boot = `<script>
-window.__SHOW = ${JSON.stringify(show)};
+// This JSON is embedded in HTML, so every "<" goes out as \\u003c — otherwise
+// a show name containing a closing script tag ends this block early and the
+// rest of its own value is parsed as markup. Note that the same rule applies
+// to THIS comment: an HTML parser does not read JavaScript comments, so the
+// characters must not be written out literally anywhere in here either.
+window.__SHOW = ${JSON.stringify(show).replace(/</g, '\\u003c')};
 (function () {
   var native = window.fetch;
   window.fetch = function (input, init) {
@@ -60,6 +72,14 @@ window.__SHOW = ${JSON.stringify(show)};
 })();
 </script>`;
     html = html.replace('</head>', boot + '</head>');
+  }
+
+  // Opening tags only: "</script>" does not match, and a src= or an existing
+  // nonce= is left alone. The boot block above is already part of `html` here,
+  // which is how its own inline <script> is stamped.
+  if (nonce) {
+    html = html.replace(/<script(?![^>]*\ssrc=)(?![^>]*\snonce=)([^>]*)>/gi,
+                        `<script nonce="${nonce}"$1>`);
   }
 
   res.set('Cache-Control', 'no-cache');

@@ -2,19 +2,48 @@
 // Browse and enquire. Booking and holding are administrator actions and are no
 // longer reachable from this page.
 
+// ─── Storage ──────────────────────────────────────────────────────────────────
+//
+// Every read and write goes through here. `localStorage` is not a property you
+// can simply touch: Safari with cookies blocked, and any browser with
+// third-party storage restricted, THROW on the property access itself — not on
+// the get. This page is iframed into the marketing site, so that is the normal
+// case, not the edge case. The first line of this file used to be a bare
+// localStorage.getItem(); the exception it threw was uncaught, so nothing after
+// it ran and the visitor sat on "Loading floorplan…" forever.
+//
+// Falls back to an in-memory map: consent and the session id then last for the
+// tab rather than for the visitor, which is the right trade — a browser that
+// refuses storage is a browser asking not to be remembered.
+const memStore = new Map();
+const store = {
+  get(k) {
+    try { const v = window.localStorage.getItem(k); return v == null ? (memStore.has(k) ? memStore.get(k) : null) : v; }
+    catch { return memStore.has(k) ? memStore.get(k) : null; }
+  },
+  set(k, v) {
+    memStore.set(k, v);
+    try { window.localStorage.setItem(k, v); } catch { /* memory copy already holds it */ }
+  },
+  remove(k) {
+    memStore.delete(k);
+    try { window.localStorage.removeItem(k); } catch { /* nothing to remove */ }
+  },
+};
+
 // ─── Consent ──────────────────────────────────────────────────────────────────
 // Behavioural events are not sent until the visitor accepts. Stand views still
 // work; they simply are not recorded.
 const CONSENT_KEY = 'bp_consent';
-let consent = localStorage.getItem(CONSENT_KEY);          // 'granted' | 'denied' | null
+let consent = store.get(CONSENT_KEY);                     // 'granted' | 'denied' | null
 
 const SESSION_KEY = 'bp_session';
 function sessionId() {
   if (consent !== 'granted') return null;
-  let s = localStorage.getItem(SESSION_KEY);
+  let s = store.get(SESSION_KEY);
   if (!s) {
     s = (crypto.randomUUID?.() || Math.random().toString(16).slice(2).repeat(2)).replace(/-/g, '').slice(0, 32);
-    localStorage.setItem(SESSION_KEY, s);
+    store.set(SESSION_KEY, s);
   }
   return s;
 }
@@ -23,7 +52,23 @@ function sessionId() {
 // in the handshake so the socket joins the right event's rooms — without it a
 // booking on one plan would appear on another's.
 const SHOW = (window.__SHOW && window.__SHOW.slug) || '';
-const socket = io({ auth: { sessionId: sessionId() }, query: { show: SHOW } });
+// What this event is CALLED. The page markup used to say "LEX 2026" in the
+// title, the description, the header and the download filename, so North
+// America's plan announced itself as Europe's and downloaded as
+// "LEX-2026-Floorplan-….png". The show data is injected per request; use it.
+const SHOW_NAME = (window.__SHOW && window.__SHOW.name) || 'Interactive Expo Floorplan';
+// A filename-safe token for the download. The event id (LEX / LNA / LME) is
+// already short and stable; the year comes from the clock, not from a literal
+// that goes stale in January.
+const SHOW_CODE = String((window.__SHOW && window.__SHOW.showId) || 'Floorplan').replace(/[^A-Za-z0-9-]+/g, '');
+// `auth` is a FUNCTION, not an object. An object is evaluated once, at socket
+// construction — before consent can have been given — and socket.io then
+// replays that same frozen value on every reconnect. So a visitor who accepted
+// consent and then moved from wifi to mobile data reconnected with
+// sessionId:null, the server minted a fresh anonymous id, and one person became
+// three unrelated sessions in the sales history. A function is called on every
+// connection attempt, so the id in force right now is the one that is sent.
+const socket = io({ auth: (cb) => cb({ sessionId: sessionId() }), query: { show: SHOW } });
 
 /** Emit a tracking-only event, suppressed when consent has not been given. */
 function emitTracked(event, payload) {
@@ -31,17 +76,63 @@ function emitTracked(event, payload) {
   socket.emit(event, payload);
 }
 
+/**
+ * Consent, including the case this page is actually deployed in.
+ *
+ * ── Host-page protocol (for whoever maintains the marketing site) ────────────
+ * This page is embedded with ?embed=1, and in embed mode our own consent bar is
+ * hidden so two cookie banners don't stack. That left `consent` null forever,
+ * emitTracked() never fired, and booth:view / booth:click / plan:zoom were never
+ * sent from the only place the plan is really used — so the sales heatmap was
+ * empty for every real visitor. The host's banner has to tell us what the
+ * visitor chose. Two equivalent ways, use either:
+ *
+ *   1. Query parameter, when the host already knows at iframe-build time:
+ *        <iframe src="https://…/floorplan?embed=1&consent=granted">
+ *      Accepted values: granted | denied (declined is taken as denied).
+ *
+ *   2. postMessage, for a choice made or changed after the frame is loaded:
+ *        iframe.contentWindow.postMessage(
+ *          { type: 'bp-consent', value: 'granted' }, 'https://<our-origin>');
+ *      Send it again with 'declined' if the visitor withdraws consent; we stop
+ *      sending behavioural events immediately and drop the stored session id.
+ *      Safe to send before we have finished loading — post it on the iframe's
+ *      load event, or simply post it on every banner change.
+ *
+ * Nothing else is accepted from the host: the message is ignored unless it is
+ * that exact shape, so an unrelated postMessage on the page cannot turn
+ * tracking on.
+ */
 function initConsent() {
   const bar = document.getElementById('consent-bar');
-  if (!consent) bar.classList.remove('hidden');
 
   const decide = (value) => {
     consent = value;
-    localStorage.setItem(CONSENT_KEY, value);
+    store.set(CONSENT_KEY, value);
     bar.classList.add('hidden');
     if (value === 'granted') socket.emit('session:adopt', { sessionId: sessionId() });
-    else localStorage.removeItem(SESSION_KEY);
+    else store.remove(SESSION_KEY);
   };
+
+  // The host's answer, however it arrived. Normalised because a cookie banner's
+  // own vocabulary ('declined', 'denied') should not decide whether we listen.
+  const adopt = (raw) => {
+    const v = String(raw || '').toLowerCase();
+    if (v !== 'granted' && v !== 'denied' && v !== 'declined') return false;
+    decide(v === 'granted' ? 'granted' : 'denied');
+    return true;
+  };
+
+  const fromQuery = new URLSearchParams(location.search).get('consent');
+  const answered = adopt(fromQuery) || !!consent;
+  if (!answered) bar.classList.remove('hidden');
+
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (!d || typeof d !== 'object' || d.type !== 'bp-consent') return;
+    adopt(d.value);
+  });
+
   document.getElementById('consent-accept').onclick  = () => decide('granted');
   document.getElementById('consent-decline').onclick = () => decide('denied');
 }
@@ -147,6 +238,69 @@ function initPanZoom() {
   if (dl) dl.onclick = downloadPlan;
 }
 
+/**
+ * Bring a stand into view by PANNING THE MAP.
+ *
+ * This replaces el.scrollIntoView(), which was wrong in three separate ways on
+ * an SVG rect inside a panzoom frame:
+ *   • .fp-map-frame is overflow:hidden, so the browser scrolled it anyway and
+ *     left a scrollTop/scrollLeft that panzoom knows nothing about — the plan
+ *     ended up offset from its own transform, and "Reset View" (which only
+ *     resets the transform) could never put it back.
+ *   • scrollIntoView walks EVERY scrollable ancestor. Inside the marketing
+ *     site's iframe that includes the host page, so a ?booth=412 link made the
+ *     customer's own website jump.
+ *   • It ignores zoom, so on a whole-hall view it "arrived" at a 4-pixel stand.
+ *
+ * Panning is done as a delta from the element's measured screen box, which is
+ * the one reading that is already correct whatever the viewBox,
+ * preserveAspectRatio letterboxing and current transform are doing. The zoom
+ * target is worked out from BoothMap.visualBox — the stand's real footprint in
+ * SVG units, post-rotation — so a 9 m² stand and a 200 m² one both end up a
+ * sensible size on screen.
+ */
+function panToBooth(n) {
+  if (!pz || !svgDoc) return;
+  const el = standEl(n);
+  if (!el) return;
+  const fr = frame.getBoundingClientRect();
+  if (!fr.width || !fr.height) return;
+
+  // Everything is worked out from ONE measurement and then applied, rather than
+  // zooming and re-measuring: panzoom writes its transform on the next animation
+  // frame, so a getBoundingClientRect() taken straight after a zoom still
+  // describes where the stand WAS — which panned the hall clean off the screen.
+  const er = el.getBoundingClientRect();
+  if (!er.width && !er.height) return;
+  const t = pz.getTransform();
+  // The stand's centre in the map's own untransformed coordinates.
+  const localX = ((er.left + er.width / 2) - fr.left - t.x) / t.scale;
+  const localY = ((er.top + er.height / 2) - fr.top - t.y) / t.scale;
+
+  // Zoom IN when the stand is too small to read — never out. A visitor who has
+  // zoomed into one aisle should not be thrown back to the whole hall because a
+  // search matched. The stand's real footprint comes from BoothMap.visualBox,
+  // which is post-rotation: most stands on this artwork are rotated, and the
+  // untransformed box would give a target size for the wrong dimension.
+  let scale = t.scale;
+  const box = BoothMap.visualBox(el);
+  const vb = svgDoc.viewBox && svgDoc.viewBox.baseVal;
+  if (box && box.w > 0 && box.h > 0 && vb && vb.width > 0) {
+    const sr = svgDoc.getBoundingClientRect();
+    // preserveAspectRatio "meet" letterboxes, so the live scale is the SMALLER
+    // of the two ratios, not whichever axis we happened to pick.
+    const pxPerUnit = Math.min(sr.width / vb.width, sr.height / vb.height);
+    if (pxPerUnit > 0) {
+      const want = Math.min(fr.width, fr.height) * 0.3 / Math.max(box.w, box.h);
+      const target = Math.max(t.scale, Math.min(8, t.scale * (want / pxPerUnit)));
+      if (target > t.scale * 1.05) { scale = target; pz.zoomAbs(0, 0, scale); }
+    }
+  }
+
+  // Put that point in the middle of the frame at whatever scale we settled on.
+  pz.smoothMoveTo(fr.width / 2 - localX * scale, fr.height / 2 - localY * scale);
+}
+
 // Wire the collapse chevrons on the sponsorship + enquiry boxes. Each folds its
 // body away (client-side only, per visitor) and rotates its chevron; the height
 // cap between the two columns is re-evaluated so the layout stays tidy.
@@ -170,9 +324,72 @@ function wireCollapsers() {
 }
 
 // ─── Load ─────────────────────────────────────────────────────────────────────
-async function load() {
-  wireCollapsers();
+
+/**
+ * The "this did not work" state, with a way out.
+ *
+ * The old handler caught only a thrown fetch. A 500 does not throw, so an error
+ * page was injected as markup, querySelector('svg') returned null, and the next
+ * line threw on a null — leaving the visitor an unstyled red line, no plan, and
+ * no way forward but guessing at a reload. Built from DOM nodes rather than
+ * markup so a server error body can never become page content.
+ */
+function showLoadError(detail) {
   const mount = document.getElementById('svg-mount');
+  mount.replaceChildren();
+  const box = document.createElement('div');
+  box.className = 'load-error';
+  box.setAttribute('role', 'alert');
+  const h = document.createElement('h3');
+  h.textContent = 'The floorplan could not be loaded';
+  const p = document.createElement('p');
+  p.textContent = 'This is usually a connection blip. Try again — nothing you have selected is lost.';
+  const small = document.createElement('p');
+  small.className = 'load-error-detail';
+  small.textContent = detail || '';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'load-retry';
+  btn.textContent = 'Try again';
+  btn.onclick = () => { btn.disabled = true; load(); };
+  box.append(h, p, btn);
+  if (detail) box.append(small);
+  mount.appendChild(box);
+}
+
+// The socket can connect and then say nothing — an authentication problem, a
+// show with no stands, a broadcast that never fires. The plan renders, no stand
+// is clickable, and the three stats sit on "—" with nothing to explain it. Say
+// so rather than leaving the visitor clicking a dead map.
+let stateWatchdog = null;
+function armStateWatchdog() {
+  clearTimeout(stateWatchdog);
+  stateWatchdog = setTimeout(() => {
+    if (stateReady) return;
+    setBanner('The stands have not loaded yet, so nothing on the plan is clickable. Still trying…', 'warn');
+  }, 8000);
+}
+
+/** The one-line strip under the toolbar used for connection + load trouble. */
+function setBanner(text, kind) {
+  const el = document.getElementById('fp-banner');
+  if (!el) return;
+  if (!text) { el.hidden = true; el.textContent = ''; return; }
+  el.textContent = text;
+  el.className = 'fp-banner' + (kind ? ' fp-banner-' + kind : '');
+  el.hidden = false;
+}
+
+let collapsersWired = false;
+async function load() {
+  if (!collapsersWired) { collapsersWired = true; wireCollapsers(); }
+  const mount = document.getElementById('svg-mount');
+  mount.replaceChildren();
+  const loading = document.createElement('div');
+  loading.className = 'loading-state';
+  loading.textContent = 'Loading floorplan…';
+  mount.appendChild(loading);
+  armStateWatchdog();
   try {
     // The artwork for THIS show — uploaded per event, falling back to the file
     // shipped with the app. The page's X-Show header decides which comes back.
@@ -181,17 +398,30 @@ async function load() {
     // which any cache in between is entitled to ignore — and did: one event's
     // plan was served for another's for the five minutes it stayed cached.
     const svgRes = await fetch(`/floorplan.svg?show=${encodeURIComponent(SHOW)}`);
-    mount.innerHTML = await svgRes.text();
+    // A 4xx/5xx does not throw. Checked BEFORE the body is used, or an error
+    // page is injected as markup and every failure after it is a null-deref
+    // with a misleading message.
+    if (!svgRes.ok) throw new Error(`The plan could not be fetched (${svgRes.status}).`);
+    const text = await svgRes.text();
+    mount.innerHTML = text;
     svgDoc = mount.querySelector('svg');
+    if (!svgDoc) throw new Error('The plan came back without any artwork in it.');
     svgDoc.setAttribute('width', '100%');
     svgDoc.setAttribute('height', '100%');
     svgReady = true;
+    // A retry after a structural failure must rebuild the bindings, not skip
+    // them because a previous attempt set the flag.
+    tagged = false;
     tagBooths();
 
     lucide.createIcons();
+    // A retry re-creates the plan under the old panzoom instance; dispose it
+    // first or the page ends up with two sets of pointer handlers fighting.
+    if (pz) { try { pz.dispose(); } catch { /* already gone */ } pz = null; }
     initPanZoom();
   } catch (e) {
-    mount.innerHTML = '<p style="color:#dc2626;padding:20px">Floorplan could not be loaded. Please refresh.</p>';
+    svgReady = false;
+    showLoadError(e && e.message ? e.message : '');
   }
 }
 
@@ -221,6 +451,7 @@ function addTapListener(el, callback) {
 function tagBooths() {
   if (!svgReady || !stateReady || tagged) return;
   tagged = true;
+  dropElementCache();      // attach() is about to build brand-new elements
 
   const list = Object.values(booths).filter(b => b.geometry);
   const res = BoothMap.attach(svgDoc, list, {
@@ -230,6 +461,23 @@ function tagBooths() {
       el.addEventListener('mousemove',  e => moveTooltip(e));
       el.addEventListener('mouseleave', hideTooltip);
       addTapListener(el, () => { hideTooltip(); selectBooth(n); });
+
+      // Keyboard and screen readers. Until this, the ONLY way to open a stand
+      // without a mouse was to type a search term that matched exactly one
+      // stand and press Enter — and a screen reader was told nothing at all,
+      // because a bare <rect> has no role and no name. A stand is a button:
+      // say so, give it a name, and let Enter and Space press it.
+      el.setAttribute('tabindex', '0');
+      el.setAttribute('role', 'button');
+      el.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+        e.preventDefault();          // Space would otherwise scroll the page
+        selectBooth(n);
+      });
+      // Focusing a stand with the keyboard has to bring it into view, the same
+      // as clicking one does — by panning, never by scrolling (see panToBooth).
+      el.addEventListener('focus', () => panToBooth(n));
+      labelStand(el, n);
     },
   });
 
@@ -252,6 +500,31 @@ function tagBooths() {
   openDeepLink();
 }
 
+// The unit spoken rather than printed. "36 m²" is read as "36 m 2" by most
+// screen readers, which is not a size.
+const SPOKEN_UNIT = () => (UNIT === 'ft²' ? 'square feet' : 'square metres');
+
+/**
+ * The accessible name of a stand — what a screen reader announces, and what the
+ * A–Z directory lists it under. Everything a sighted visitor gets from the
+ * tooltip: which stand, whether it can be had, how big it is, and who is on it
+ * when that is public.
+ */
+function standLabel(n) {
+  const b = booths[n] || {};
+  const bits = [`Stand ${shownN(n)}`, (STATUS_LABEL[b.status] || cap(b.status) || 'unknown').toLowerCase()];
+  // Only a SOLD stand names its exhibitor — the same rule the panel and the
+  // search follow, so a hold is never announced as a booking.
+  if (b.status === 'sold' && b.company) bits.push(`taken by ${b.company}`);
+  if (b.sqm) bits.push(`${b.sqm} ${SPOKEN_UNIT()}`);
+  return bits.join(', ');
+}
+
+function labelStand(el, n) {
+  const label = standLabel(n);
+  if (el.getAttribute('aria-label') !== label) el.setAttribute('aria-label', label);
+}
+
 // ─── Deep link: /floorplan?booth=412 ──────────────────────────────────────────
 // Lets sales send a customer straight to a stand, and gives campaign traffic a
 // trackable entry point.
@@ -262,8 +535,10 @@ function openDeepLink() {
   if (!n || !booths[n]) return;
   deepLinkDone = true;
   selectBooth(n);
-  const el = svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`);
-  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Panned, never scrolled: scrollIntoView on a rect inside the overflow:hidden
+  // panzoom frame also scrolls the HOST page this plan is iframed into, so a
+  // ?booth=412 link in a sales email made the customer's own website jump.
+  panToBooth(n);
 }
 
 // ─── Tooltip ──────────────────────────────────────────────────────────────────
@@ -277,8 +552,17 @@ function showTooltip(e, n) {
   tooltip.classList.remove('hidden');
   moveTooltip(e);
 }
+// The frame's position on screen, cached. getBoundingClientRect() forces a
+// layout, and this ran on EVERY mousemove across a 6000-node plan. The frame
+// only moves when the window or the side panel does, so recompute then instead.
+let frameRect = null;
+const frameBox = () => (frameRect || (frameRect = frame.getBoundingClientRect()));
+const dropFrameBox = () => { frameRect = null; };
+window.addEventListener('resize', dropFrameBox);
+window.addEventListener('scroll', dropFrameBox, true);
+
 function moveTooltip(e) {
-  const r = frame.getBoundingClientRect();
+  const r = frameBox();
   tooltip.style.left = (e.clientX - r.left + 14) + 'px';
   tooltip.style.top  = (e.clientY - r.top - 10) + 'px';
 }
@@ -304,7 +588,10 @@ function selectBooth(n) {
   renderPanel(n);
 
   if (window.matchMedia('(pointer: coarse)').matches) {
-    setTimeout(() => document.getElementById('booth-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    // block:'nearest' — 'start' scrolls every ancestor to put the panel at the
+    // top, which inside the marketing site's iframe means scrolling the host
+    // page. 'nearest' moves things only as far as it has to.
+    setTimeout(() => document.getElementById('booth-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
   }
 }
 
@@ -325,6 +612,11 @@ function toggleShortlist(n) {
   const i = shortlist.indexOf(n);
   if (i > -1) shortlist.splice(i, 1);
   else if (shortlist.length < 25) shortlist.push(n);
+  // Repaint the stand NOW. The green shortlist fill used to appear only when
+  // the next state:full happened to arrive, so on a quiet plan adding a stand
+  // changed nothing visible on the map at all — and now that broadcasts skip
+  // unchanged stands it would never have appeared.
+  applyVisual(n);
   renderShortlist();
   syncSponsorPanel();          // reveal / re-rank / hide sponsorship on commitment
   renderPanel(selectedId);
@@ -557,7 +849,9 @@ function renderSponsors(list) {
       // next one feel scarce. It just can't be added to an enquiry.
       const gone = document.createElement('div');
       gone.className = 'sc-soldout-note';
-      gone.textContent = 'Sold out for 2026 — register interest for next year';
+      // Not a literal year: this page serves three events and is still up
+      // the January after. The show's own name, and next year from the clock.
+      gone.textContent = `Sold out at ${SHOW_NAME} — register interest for ${new Date().getFullYear() + 1}`;
       body.appendChild(gone);
     } else {
       const add = document.createElement('button');
@@ -615,11 +909,138 @@ function exhibitorHTML(b, status) {
 }
 
 // ─── Detail panel ─────────────────────────────────────────────────────────────
-function renderPanel(n) {
-  if (!n) return;
-  const b     = booths[n] || { status: 'sold' };
+
+/**
+ * Rebuild the panel's markup without throwing away the keyboard.
+ *
+ * innerHTML replaces every node, so whatever the visitor had focused — very
+ * often "Add to enquiry", because that is the button they were on their way to
+ * pressing — was destroyed. The panel re-rendered on every broadcast, so ANY
+ * other visitor's action moved a keyboard user's focus back to the top of the
+ * document mid-task. Focus is restored by element id, which survives a rebuild
+ * because the ids are stable.
+ */
+function rebuildPanel(html, wire) {
   const panel = document.getElementById('booth-panel');
+  const active = document.activeElement;
+  const keepId = active && panel.contains(active) ? active.id : null;
+  // A text field also loses its caret and its half-typed value, so carry those.
+  const keepValue = keepId && 'value' in active ? active.value : null;
+  const keepStart = keepId && active.selectionStart != null ? active.selectionStart : null;
+
+  panel.innerHTML = html;
+  if (wire) wire();
+  lucide.createIcons();
+
+  if (!keepId) return;
+  const back = document.getElementById(keepId);
+  if (!back) return;
+  if (keepValue != null && 'value' in back) back.value = keepValue;
+  back.focus();
+  if (keepStart != null && back.setSelectionRange) {
+    try { back.setSelectionRange(keepStart, keepStart); } catch { /* not a text input */ }
+  }
+}
+
+/**
+ * Everything the panel's MARKUP depends on.
+ *
+ * Deliberately excludes `viewers` and `interest`: those change constantly as
+ * other people browse, and rebuilding the panel for them is exactly what was
+ * stealing focus. They are written into their own spans in place instead — see
+ * updateLiveStats().
+ */
+function panelSig(n) {
+  const b = booths[n] || {};
+  return [n, b.status, b.company || '', b.sqm || '', b.displayNumber || '',
+          b.sponsored ? 1 : 0, shortlist.includes(n) ? 1 : 0, UNIT,
+          (b.tags || []).join('+'), b.country || '', waitlisted.includes(n) ? 1 : 0,
+          // The alternatives listed on a taken stand are drawn from what is
+          // available elsewhere on the plan, so they are part of this panel.
+          b.status === 'available' ? '' : alternativeKey(n)].join('|');
+}
+let shownPanelSig = '';
+
+/**
+ * Available stands near a taken one, ranked.
+ *
+ * The taken-stand panel has promised "select an available stand and we'll
+ * suggest alternatives" since it was written, and nothing ever suggested any.
+ * Ranking is distance first — a customer who wanted 412 wants the aisle 412 is
+ * on — with size similarity as a multiplier rather than a second sort key, so a
+ * 9 m² shell two metres away does not beat a 100 m² stand one aisle over when
+ * the stand they asked about was 100 m².
+ */
+function centreOf(g) { return { x: g.x + g.w / 2, y: g.y + g.h / 2 }; }
+
+function alternativesFor(n, limit = 4) {
+  const b = booths[n];
+  if (!b || !b.geometry) return [];
+  const c = centreOf(b.geometry);
+  const want = b.sqm || 0;
+
+  return Object.entries(booths)
+    .filter(([k, x]) => k !== n && x && x.status === 'available' && x.geometry)
+    .map(([k, x]) => {
+      const d = Math.hypot(centreOf(x.geometry).x - c.x, centreOf(x.geometry).y - c.y);
+      // 0 when the size matches, 1 when it is double or half, capped at 2 so a
+      // wildly wrong size is penalised but never ranked below the whole hall.
+      const gap = want ? Math.min(2, Math.abs((x.sqm || 0) - want) / want) : 0;
+      return { n: k, sqm: x.sqm || 0, d, score: d * (1 + gap) };
+    })
+    .sort((p, q) => p.score - q.score)
+    .slice(0, limit);
+}
+
+// Part of the panel signature: which alternatives would be listed. It is what
+// stops the chips going stale when the stand one points at is sold.
+function alternativeKey(n) {
+  return alternativesFor(n).map(a => a.n).join(',');
+}
+
+/**
+ * "Tell me if this becomes available" — the waiting list on a held or taken
+ * stand.
+ *
+ * Sent down the EXISTING inquiry:submit pipeline rather than adding a server
+ * surface: it is a lead like any other, and it lands in the same admin list
+ * with the stand attached. See submitWaitlist() for the one thing the server
+ * still needs.
+ */
+function waitlistHTML(n) {
+  if (waitlisted.includes(n)) {
+    return `<div class="wl-done" role="status"><i data-lucide="check-circle"></i>
+      We'll email you if Stand ${esc(shownN(n))} becomes available.</div>`;
+  }
+  return `
+    <div class="wl-box">
+      <label class="wl-lbl" for="wl-email">Tell me if this becomes available</label>
+      <div class="wl-row">
+        <input type="email" id="wl-email" class="wl-input" placeholder="you@company.com"
+               autocomplete="email" aria-describedby="wl-note">
+        <button type="button" class="wl-btn" id="wl-submit">Notify me</button>
+      </div>
+      <div class="wl-err hidden" id="wl-err" role="alert"></div>
+      <p class="wl-note" id="wl-note">Your email, nothing else. We'll only use it for this stand.</p>
+    </div>`;
+}
+
+function renderPanel(n, opts) {
+  if (!n) return;
+  const force = !!(opts && opts.force);
+  const panel = document.getElementById('booth-panel');
+  const sig = panelSig(n);
+  // A broadcast that changed nothing about THIS stand must not rebuild the
+  // panel — see rebuildPanel() for what a rebuild costs a keyboard user.
+  if (!force && sig === shownPanelSig && panel.dataset.booth === n) {
+    updateLiveStats(n);
+    return;
+  }
+  shownPanelSig = sig;
+
+  const b = booths[n] || { status: 'sold' };
   panel.classList.remove('hidden');
+  panel.dataset.booth = n;
 
   const status = b.status || 'sold';
   const inList = shortlist.includes(n);
@@ -632,13 +1053,26 @@ function renderPanel(n) {
   syncSponsorPanel();
 
   if (status !== 'available') {
-    panel.innerHTML = `
+    const alts = alternativesFor(n);
+    const altHTML = alts.length ? `
+      <div class="stand-alts">
+        <div class="stand-alts-lbl">Available nearby</div>
+        <div class="stand-alt-chips">${alts.map(a => `
+          <button type="button" class="alt-chip" data-alt="${esc(a.n)}"
+                  aria-label="Open stand ${esc(shownN(a.n))}, ${esc(a.sqm || 0)} ${esc(SPOKEN_UNIT())}">
+            <span class="alt-n">${esc(shownN(a.n))}</span>
+            <span class="alt-sqm">${a.sqm ? esc(a.sqm) + ' ' + esc(UNIT) : ''}</span>
+          </button>`).join('')}</div>
+      </div>`
+      : '<p class="stand-alt">Nothing is available close by right now — try the search, or add another stand to your enquiry.</p>';
+
+    rebuildPanel(`
       <div class="stand-header">
         <div class="stand-id">Stand ${esc(shownN(n))}</div>
         <div class="stand-badge badge-${esc(status)}">${esc(STATUS_LABEL[status] || cap(status))}</div>
       </div>
       <div class="stand-stats">
-        <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' ' + UNIT : '—'}</span></div>
+        <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' ' + esc(UNIT) : '—'}</span></div>
         <div class="stand-stat"><span class="stand-stat-lbl">Status</span><span class="stand-stat-val">${esc(STATUS_LABEL[status] || cap(status))}</span></div>
       </div>
       ${exhibitorHTML(b, status)}
@@ -646,37 +1080,171 @@ function renderPanel(n) {
         <i data-lucide="lock" style="width:14px;height:14px"></i>
         ${status === 'held' ? 'This stand is currently on hold.' : 'This stand has been taken.'}
       </div>
-      <p class="stand-alt">Interested in something nearby? Select an available stand and we'll suggest alternatives.</p>`;
-    lucide.createIcons();
+      ${altHTML}
+      ${waitlistHTML(n)}`, () => {
+      document.querySelectorAll('#booth-panel [data-alt]').forEach(btn => {
+        btn.onclick = () => {
+          const k = btn.getAttribute('data-alt');
+          selectBooth(k);
+          panToBooth(k);
+        };
+      });
+      const wl = document.getElementById('wl-submit');
+      if (wl) wl.onclick = () => submitWaitlist(n);
+      const wlIn = document.getElementById('wl-email');
+      if (wlIn) wlIn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submitWaitlist(n); }
+      });
+    });
     return;
   }
 
-  panel.innerHTML = `
+  rebuildPanel(`
     <div class="stand-header">
       <div class="stand-id">Stand ${esc(shownN(n))}</div>
       <div class="stand-badge badge-available">Available</div>
     </div>
     <div class="stand-stats">
-      <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' ' + UNIT : '—'}</span></div>
-      <div class="stand-stat"><span class="stand-stat-lbl">Viewing now</span><span class="stand-stat-val">${esc(b.viewers || 0)}</span></div>
-      <div class="stand-stat"><span class="stand-stat-lbl">Interest</span><span class="stand-stat-val" style="color:var(--orange)">${esc(b.interest || 0)}</span></div>
+      <div class="stand-stat"><span class="stand-stat-lbl">Size</span><span class="stand-stat-val">${b.sqm ? esc(b.sqm) + ' ' + esc(UNIT) : '—'}</span></div>
+      <div class="stand-stat"><span class="stand-stat-lbl">Viewing now</span><span class="stand-stat-val" id="stand-viewers">${esc(b.viewers || 0)}</span></div>
+      <div class="stand-stat"><span class="stand-stat-lbl">Interest</span><span class="stand-stat-val" id="stand-interest" style="color:var(--orange)">${esc(b.interest || 0)}</span></div>
     </div>
     <button type="button" class="btn-shortlist ${inList ? 'in-list' : ''}" id="shortlist-btn">
       <i data-lucide="${inList ? 'check' : 'plus'}"></i>
       ${inList ? 'Added to enquiry' : 'Add to enquiry'}
     </button>
-    <p class="stand-hint">Add the stands you're interested in, then send us one enquiry.</p>`;
+    <p class="stand-hint">Add the stands you're interested in, then send us one enquiry.</p>`, () => {
+    document.getElementById('shortlist-btn').onclick = () => toggleShortlist(n);
+  });
+}
 
-  document.getElementById('shortlist-btn').onclick = () => toggleShortlist(n);
-  lucide.createIcons();
+/**
+ * The two numbers that change as other people browse, written straight into
+ * their spans. No rebuild, so nobody's focus or half-typed email is lost when a
+ * stranger opens the same stand.
+ */
+function updateLiveStats(n) {
+  if (document.getElementById('booth-panel').dataset.booth !== n) return;
+  const b = booths[n] || {};
+  const v = document.getElementById('stand-viewers');
+  if (v) v.textContent = b.viewers || 0;
+  const i = document.getElementById('stand-interest');
+  if (i) i.textContent = b.interest || 0;
+}
+
+// Stands this visitor has asked to be told about, so the panel can say so
+// rather than offering the form again.
+const waitlisted = [];
+
+/**
+ * Send a waiting-list request as an ordinary enquiry.
+ *
+ * SERVER NOTE — what this needs that it does not have:
+ *   inquiries.create() requires a contact NAME as well as an email, so a
+ *   genuinely email-only request cannot be stored as-is. Until that changes we
+ *   send the email's local part as the name and say plainly in the message that
+ *   no name was given, so nobody in sales reads "j.smith" as a person's name.
+ *   The clean fix is one of:
+ *     • allow create() with a valid email and no name when a new
+ *       `kind: 'waitlist'` flag is set, or
+ *     • accept `source: 'waitlist'` and skip the name check for it.
+ *   Either is a few lines in server/models/inquiries.js — owned by another
+ *   agent, so it is reported rather than edited here.
+ */
+function submitWaitlist(n) {
+  const input = document.getElementById('wl-email');
+  const err   = document.getElementById('wl-err');
+  const btn   = document.getElementById('wl-submit');
+  if (!input || !btn) return;
+
+  const email = input.value.trim();
+  const fail = (msg) => {
+    if (err) { err.textContent = msg; err.classList.remove('hidden'); }
+    input.focus();
+  };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return fail('Please enter a valid email address.');
+  if (err) err.classList.add('hidden');
+
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+
+  emitWithTimeout('inquiry:submit', {
+    firstName: email.split('@')[0],
+    lastName: '',
+    email,
+    boothNumbers: [n],
+    message: `Waiting list: tell me if Stand ${shownN(n)} becomes available. `
+           + 'Submitted from the public floorplan with an email address only — no name was given.',
+  }, (res) => {
+    btn.disabled = false;
+    btn.textContent = 'Notify me';
+    if (res && res.ok) {
+      waitlisted.push(n);
+      renderPanel(n, { force: true });
+      return;
+    }
+    fail((res && res.errors && res.errors[0]) || 'That could not be sent. Please try again.');
+  });
 }
 
 // ─── Enquiry submission ───────────────────────────────────────────────────────
+
+/**
+ * Emit with an acknowledgement DEADLINE.
+ *
+ * A socket.io ack that never arrives never arrives: there is no built-in
+ * timeout on this code path, so if the server dies mid-request, or the
+ * connection drops between the emit and the reply, the callback is simply never
+ * called. The Send button sat on "Sending…", disabled, forever — the visitor's
+ * enquiry looked like it was in flight when nothing was listening. Now the
+ * callback always runs exactly once, with the server's verdict or with ours.
+ */
+function emitWithTimeout(event, payload, cb, ms = 12000) {
+  let done = false;
+  const finish = (res) => { if (done) return; done = true; clearTimeout(timer); cb(res); };
+  const timer = setTimeout(() => finish({
+    ok: false,
+    errors: ['We did not hear back from the server. Check your connection and try again.'],
+  }), ms);
+  // An emit while offline is buffered by socket.io and may go nowhere; say so
+  // rather than letting it sit in the queue behind a disabled button.
+  if (!socket.connected) return finish({ ok: false, errors: ['You appear to be offline. Reconnect and try again.'] });
+  socket.emit(event, payload, finish);
+}
+
 function initForm() {
   const form    = document.getElementById('enquiry-form');
   const errBox  = document.getElementById('eq-errors');
   const success = document.getElementById('eq-success');
   const submit  = document.getElementById('eq-submit');
+
+  // Start again after a successful enquiry.
+  //
+  // The card was hidden permanently on success, but "Add to enquiry" carried on
+  // toggling the shortlist underneath it with nothing to show for it — a
+  // visitor who sent one enquiry and then found two more stands was clicking a
+  // button that did nothing visible. Resetting is the honest answer.
+  const again = document.getElementById('eq-again');
+  if (again) {
+    again.onclick = () => {
+      submitted = false;
+      shortlist.length = 0;
+      sponsorShortlist.length = 0;
+      areaShortlist.length = 0;
+      // Only the selection is cleared — the visitor's own name, email and
+      // company stay, because the second enquiry is from the same person.
+      document.getElementById('eq-message').value = '';
+      success.classList.add('hidden');
+      form.classList.remove('hidden');
+      document.getElementById('eq-shortlist').classList.remove('hidden');
+      errBox.classList.add('hidden');
+      if (svgDoc) svgDoc.querySelectorAll('.booth-shortlisted').forEach(el => el.classList.remove('booth-shortlisted'));
+      renderShortlist();
+      syncSponsorPanel();
+      if (selectedId) renderPanel(selectedId, { force: true });
+      document.getElementById('eq-first').focus();
+    };
+  }
 
   form.onsubmit = (e) => {
     e.preventDefault();
@@ -701,11 +1269,13 @@ function initForm() {
     submit.disabled = true;
     submit.textContent = 'Sending…';
 
-    // The server is authoritative on validation; this ack carries its verdict.
-    socket.emit('inquiry:submit', payload, (res) => {
+    // The server is authoritative on validation; this ack carries its verdict —
+    // or, if none comes back in time, ours.
+    emitWithTimeout('inquiry:submit', payload, (res) => {
       submit.disabled = false;
       submit.innerHTML = '<i data-lucide="send"></i> Send enquiry';
       lucide.createIcons();
+      syncSendButton();       // still disabled if the reason was being offline
 
       if (res && res.ok) {
         submitted = true;
@@ -723,28 +1293,113 @@ function initForm() {
   };
 }
 
+// ─── Connection state ─────────────────────────────────────────────────────────
+//
+// Nothing used to notice a dropped socket. The "live viewers" badge kept its
+// green dot and its last count while the page was talking to nobody, and Send
+// stayed enabled so an enquiry could be typed out and fired into a closed
+// connection. Both are now driven by the real connection state.
+let everConnected = false;
+
+function syncSendButton() {
+  const submit = document.getElementById('eq-submit');
+  if (!submit) return;
+  const offline = !socket.connected;
+  // Never re-enable a button that is mid-send; that is owned by the submit path.
+  if (offline) {
+    submit.disabled = true;
+    submit.title = 'Reconnecting — your enquiry will be sendable again in a moment.';
+  } else if (submit.title) {
+    submit.disabled = false;
+    submit.title = '';
+  }
+  const wl = document.getElementById('wl-submit');
+  if (wl && !wl.textContent.includes('Sending')) wl.disabled = offline;
+}
+
+function setConnectionState(online) {
+  const badge = document.getElementById('live-badge');
+  if (badge) {
+    badge.classList.toggle('offline', !online);
+    badge.title = online ? '' : 'Disconnected — reconnecting';
+    const label = document.getElementById('live-label');
+    if (label) label.textContent = online ? 'live viewers' : 'reconnecting…';
+  }
+  syncSendButton();
+}
+
+socket.on('connect', () => {
+  everConnected = true;
+  setConnectionState(true);
+  setBanner('');
+  // The server mints a fresh session id on every new connection, so a granted
+  // consent has to be re-asserted or this visitor's events after a reconnect
+  // are filed under a stranger. The handshake `auth` function already carries
+  // it; this covers a server that was restarted and has no memory of the id.
+  if (consent === 'granted') socket.emit('session:adopt', { sessionId: sessionId() });
+  armStateWatchdog();
+});
+
+socket.on('disconnect', (reason) => {
+  setConnectionState(false);
+  setBanner('Connection lost — the plan may be out of date. Reconnecting…', 'warn');
+  if (reason === 'io server disconnect') socket.connect?.();   // not retried automatically
+});
+
+socket.on('connect_error', () => {
+  setConnectionState(false);
+  setBanner(everConnected
+    ? 'Connection lost — the plan may be out of date. Reconnecting…'
+    : 'Cannot reach the live plan. Stand availability may be out of date.', 'warn');
+});
+
 // ─── Socket events ────────────────────────────────────────────────────────────
 let lastMapSig = '';
+
+// What a stand LOOKS like. applyVisual() does three whole-tree querySelectors
+// and, for a sold stand, a BoothMap.fitLabel() that measures the name at up to
+// 18 font sizes — each measurement a forced synchronous layout of a 6000-node
+// SVG. Running that for all ~250 stands on every broadcast is what made one
+// visitor's hover freeze every other visitor's plan. The server now only
+// broadcasts on real mutations; this makes sure that even then we repaint only
+// the stands whose appearance actually changed.
+const visualSig = (b) => [b.status, b.company || '', b.sponsored ? 1 : 0,
+                          b.sponsorLogo || '', b.displayNumber || ''].join('|');
+const lastVisual = {};
+
 socket.on('state:full', (rows) => {
   const incoming = new Set(rows.map(b => b.boothNumber));
+  // Which stands actually changed appearance, worked out BEFORE the merge while
+  // the previous values are still readable.
+  const dirty = [];
   rows.forEach(b => {
     const n = b.boothNumber;
+    const sig = visualSig(b);
+    if (lastVisual[n] !== sig) { lastVisual[n] = sig; dirty.push(n); }
     booths[n] = { ...(booths[n] || {}), ...b };
   });
   // Reconcile: drop booths the server no longer has (a merged secondary, a
   // reset cell). Left in place they'd keep rendering, stay clickable, and be
   // counted in the availability totals until a full reload.
-  Object.keys(booths).forEach(n => { if (!incoming.has(n)) delete booths[n]; });
+  Object.keys(booths).forEach(n => {
+    if (incoming.has(n)) return;
+    delete booths[n];
+    delete lastVisual[n];
+  });
   if (selectedId && !booths[selectedId]) { selectedId = null; hideSelection(); }
   stateReady = true;
+  clearTimeout(stateWatchdog);
+  setBanner('');
 
   // A stand booked, released or re-tagged while the page is open changes both
   // what the filter dropdowns can offer and what the current filter matches.
   // Ahead of everything below: the first broadcast returns early once it has
   // tagged the map, and applyVisual paints the highlight from these matches.
   refreshFilterOptions();
-  filterMatches = computeMatches();
+  // applyFilter() recomputes the matches itself — computing them here as well
+  // ran the whole booth scan twice on every single broadcast.
   applyFilter();
+  renderDirectory();
 
   // First broadcast may arrive before the plan has finished downloading.
   if (!tagged) { tagBooths(); lastMapSig = BoothMap.signature(rows); return; }
@@ -752,20 +1407,33 @@ socket.on('state:full', (rows) => {
   // A split/merge/reset changes the STRUCTURE (booths added/removed, geometry
   // moved), which one-shot tagging would never reflect without a reload. Detect
   // it via a structural fingerprint and re-tag the whole map; otherwise just
-  // repaint statuses.
+  // repaint the stands that changed.
   const sig = BoothMap.signature(rows);
   if (sig !== lastMapSig) { lastMapSig = sig; retagMap(); }
-  else rows.forEach(b => applyVisual(b.boothNumber));
+  else dirty.forEach(applyVisual);
 
   if (selectedId) renderPanel(selectedId);
   updateStatsStrip();
   renderSponsorLegend();   // a stand may have just been (un)flagged sponsored
 });
 
+// Presence only — how many people are looking at each stand right now.
+//
+// This used to ride along inside state:full, so every hover by every visitor
+// re-ran the whole repaint above for everyone. It is now its own event, and it
+// touches nothing but the numbers: no label re-fit, no panel rebuild, no filter
+// recompute. See the SHARED SOCKET CONTRACT in server/sockets/index.js.
+socket.on('viewers:map', (map) => {
+  if (!map || typeof map !== 'object') return;
+  Object.keys(booths).forEach(n => { booths[n].viewers = map[n] || 0; });
+  if (selectedId) updateLiveStats(selectedId);
+});
+
 // Re-run the SVG↔booth mapping from a clean slate after a structural change.
 function retagMap() {
   if (!svgDoc) return;
   BoothMap.clear(svgDoc);
+  dropElementCache();      // clear() replaced every tagged node
   tagged = false;
   tagBooths();   // re-attaches overlays/handlers and repaints every booth
 }
@@ -793,6 +1461,11 @@ socket.on('settings', (s) => {
   UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
   document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
   if (selectedId) renderPanel(selectedId);
+  // The unit is spoken in every stand's accessible name and printed in the
+  // directory, so both follow it.
+  if (svgDoc) svgDoc.querySelectorAll('[data-booth]').forEach(el => labelStand(el, el.getAttribute('data-booth')));
+  directorySig = '';
+  renderDirectory();
   updateStatsStrip();
 });
 
@@ -978,11 +1651,19 @@ async function downloadPlan() {
       c.classList && c.classList.remove('booth-selected', 'booth-shortlisted');
     });
 
-    // The standalone file carries none of the app's CSS, so a plan that kept
-    // its own live text would fall back to the browser's default serif here
-    // even though it reads correctly on the page. Set the family on the clone
-    // so a downloaded plan matches the one it was downloaded from. Europe's
-    // plan has no text to set — its numbers are outlines.
+    // Set the family on the clone so the export does not fall back to the
+    // browser's default SERIF, which is what a standalone SVG with no CSS gets.
+    //
+    // Be clear about what this does and does not achieve. An SVG rasterised
+    // through an <img> cannot fetch anything external — that is the same rule
+    // that keeps the canvas untainted — so Raleway is NOT available here, and
+    // the comment that used to sit at this line claiming the plan "matches the
+    // one it was downloaded from" was wrong. What it actually gets is the first
+    // LOCAL family in the stack, i.e. Helvetica Neue or Arial. That is an
+    // accepted fallback, not an accident: embedding a base64 Raleway subset
+    // would add ~40 KB of font to every export for a difference nobody reading
+    // a stand number would notice. Europe's plan has no text to set at all —
+    // its numbers were converted to outlines before it reached us.
     clone.querySelectorAll('text, tspan').forEach((t) => {
       t.style.setProperty('font-family', FONT_STACK);
     });
@@ -1055,19 +1736,60 @@ async function downloadPlan() {
       canvas.toBlob(b => b ? res(b) : rej(new Error('encode failed')), 'image/png'));
     const d = new Date();
     const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `LEX-2026-Floorplan-${stamp}.png`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    // Named after the event this page is actually for. It used to be the
+    // literal "LEX-2026", so North America's plan downloaded as Europe's.
+    deliverPNG(blob, `${SHOW_CODE}-Floorplan-${stamp}.png`);
   } catch (e) {
     console.error('Floorplan download failed:', e);
-    alert('Sorry — the floorplan download could not be generated. Please try again.');
+    // Never alert(): this page runs inside the marketing site's iframe, and a
+    // sandboxed frame without allow-modals silently discards alert() — so the
+    // visitor got no message at all, only a button that appeared to do nothing.
+    setBanner('The floorplan download could not be generated. Please try again.', 'warn');
+    setTimeout(() => setBanner(''), 8000);
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+/**
+ * Hand the visitor the PNG.
+ *
+ * A programmatic <a download>.click() is inert in a sandboxed iframe without
+ * allow-downloads — which is how this page is embedded — so the button
+ * "worked", nothing was saved, and there was no error to see. So: try the
+ * download, and if we are in a frame (where it may quietly fail) also offer a
+ * real link the visitor can click themselves, which the browser treats as a
+ * user gesture and a top-level navigation.
+ */
+function deliverPNG(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  const framed = window.self !== window.top;
+  if (framed) {
+    const box = document.getElementById('fp-banner');
+    if (box) {
+      box.replaceChildren();
+      box.append('If the download did not start, ');
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'open the floorplan image';
+      box.append(link, '.');
+      box.className = 'fp-banner';
+      box.hidden = false;
+      // Long enough to click, and the object URL outlives it by a margin.
+      setTimeout(() => { if (box.contains(link)) setBanner(''); }, 30000);
+    }
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 // ─── Smart search ─────────────────────────────────────────────────────────────
@@ -1327,6 +2049,10 @@ function renderSuggestions() {
     row.type = 'button';
     row.className = 'fps-sg' + (i === suggestIndex ? ' active' : '');
     row.setAttribute('role', 'option');
+    // An option a combobox can point AT. Without an id there is nothing for
+    // aria-activedescendant to name, which is why arrow-key highlighting
+    // announced nothing at all.
+    row.id = `fps-opt-${i}`;
     row.setAttribute('aria-selected', i === suggestIndex ? 'true' : 'false');
 
     const kind = document.createElement('span');
@@ -1350,7 +2076,13 @@ function renderSuggestions() {
   });
 
   box.classList.remove('hidden');
-  if (input) input.setAttribute('aria-expanded', 'true');
+  if (input) {
+    input.setAttribute('aria-expanded', 'true');
+    // Focus stays in the text box; this is what tells a screen reader which
+    // option the arrow keys have moved to.
+    if (suggestIndex >= 0) input.setAttribute('aria-activedescendant', `fps-opt-${suggestIndex}`);
+    else input.removeAttribute('aria-activedescendant');
+  }
 }
 
 function hideSuggestions() {
@@ -1359,7 +2091,10 @@ function hideSuggestions() {
   suggestions = [];
   suggestIndex = -1;
   if (box) { box.classList.add('hidden'); box.replaceChildren(); }
-  if (input) input.setAttribute('aria-expanded', 'false');
+  if (input) {
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');   // it names a node that no longer exists
+  }
 }
 
 function pickSuggestion(i) {
@@ -1375,7 +2110,7 @@ function pickSuggestion(i) {
     hideSuggestions();
     applyFilter();
     selectBooth(sg.value);
-    svgDoc?.querySelector(`[data-booth="${CSS.escape(sg.value)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    panToBooth(sg.value);
     return;
   }
 
@@ -1424,7 +2159,7 @@ function pickSuggestion(i) {
       if (filterMatches && filterMatches.size === 1) {
         const n = [...filterMatches][0];
         selectBooth(n);
-        svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        panToBooth(n);
       }
       return;
     }
@@ -1494,17 +2229,49 @@ window.addEventListener('pageshow', repaintLabels);          // restored from th
 // (verified in both Chrome and Edge), so the guard it was used for never once
 // fired. A name measured against the fallback and then rendered in Raleway is
 // fitted to the wrong metrics, so one forced pass here is the fix.
-if (document.fonts) document.fonts.ready.then(() => { labelsDeferred = true; repaintLabels(); });
+if (document.fonts) document.fonts.ready.then(() => {
+  // The layouts cached during the fallback pass were fitted to the WRONG
+  // metrics, so they have to go before the refit — a cache that outlived the
+  // font would quietly reintroduce the very bug this pass exists to fix.
+  BoothMap.clearLabelCache();
+  labelsDeferred = true;
+  repaintLabels();
+});
 // Fires once on observe and again on every resize, so a frame going from
 // zero-sized to laid out is caught without polling. When nothing was deferred
 // this is a no-op, so an ordinary window resize costs nothing.
 if (window.ResizeObserver && frame) new ResizeObserver(repaintLabels).observe(frame);
 
+/**
+ * Stand element lookup, memoised.
+ *
+ * Three querySelector() calls over the whole 6000-node plan, per stand, on
+ * every repaint — the stand, its name node and its logo node. The elements only
+ * change when attach()/clear() rebuilds them, so the cache is dropped there
+ * (dropElementCache) rather than paid for on every pass.
+ */
+const elCache = new Map();
+function standEl(n) {
+  if (elCache.has(n)) {
+    const hit = elCache.get(n);
+    // A cached node that is no longer in the document is a re-tag we missed;
+    // fall through and look it up again rather than painting a detached node.
+    if (hit && hit.isConnected) return hit;
+  }
+  const el = svgDoc ? svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`) : null;
+  elCache.set(n, el);
+  return el;
+}
+function dropElementCache() { elCache.clear(); }
+
 function applyVisual(n) {
-  const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
+  const el = standEl(n);
   if (!el) return;
 
   const status = booths[n]?.status || 'sold';
+  // What a screen reader announces has to follow what the stand shows; a stand
+  // that sells while the page is open must not keep saying "available".
+  labelStand(el, n);
   el.classList.remove('booth-available', 'booth-sold', 'booth-held', 'booth-sponsored');
   el.classList.add(`booth-${status}`);
 
@@ -1527,8 +2294,8 @@ function applyVisual(n) {
 
   // Exhibitor name painted onto the stand, as before. textContent, never
   // innerHTML — the value reaches here from the public enquiry form.
-  let textNode = svgDoc.querySelector(`#text-booth-${CSS.escape(n)}`);
-  let logoNode = svgDoc.querySelector(`#logo-booth-${CSS.escape(n)}`);
+  let textNode = svgDoc.getElementById(`text-booth-${n}`);
+  let logoNode = svgDoc.getElementById(`logo-booth-${n}`);
   const company = booths[n]?.company;
   // A sponsor's logo, sent only for a stand flagged as sponsored. It REPLACES
   // the exhibitor name rather than sitting beside it: on a 9 m² stand there is
@@ -1629,6 +2396,147 @@ async function loadSponsors() {
     /* strip simply stays hidden */
   }
 }
+
+// ─── Exhibitor directory / A–Z stand list ────────────────────────────────────
+//
+// Two jobs in one list, which is why it is one list.
+//
+//  1. Sales asked for a "who's exhibiting" page. It is the same data the plan
+//     already holds, so a separate page would only be a second thing to keep in
+//     step with the first.
+//  2. It is the KEYBOARD and SCREEN-READER route to the hall. Every stand on
+//     the plan now takes focus and answers Enter, but tabbing through 250
+//     stands in artwork order is a route, not a usable one. This is a real
+//     list, in the order a person would look something up in: exhibitors A–Z,
+//     then the remaining stands by number.
+//
+// PUBLISHING RULE, unchanged: a stand that is only ON HOLD is never published.
+// A hold is a provisional deal, so its company is not sent to this client at
+// all (booths.toPublic withholds it) and even if it were, listing it here would
+// announce a booking nobody has agreed to. Held stands appear in the stand list
+// by number and status, with no name.
+
+let directoryOpen = false;
+
+function directoryRows() {
+  const named = [];
+  const unnamed = [];
+  Object.entries(booths).forEach(([n, b]) => {
+    if (!b) return;
+    // Sold only — see the publishing rule above.
+    if (b.status === 'sold' && b.company) {
+      const c = countryOf(b.country);
+      named.push({
+        n,
+        company: b.company,
+        country: c ? `${c.flag} ${c.name}` : '',
+        activity: (b.tags || []).map(k => tagByKey(k)?.label).filter(Boolean).join(', '),
+        sqm: b.sqm || 0,
+        status: b.status,
+      });
+    } else {
+      unnamed.push({ n, company: '', country: '', activity: '', sqm: b.sqm || 0, status: b.status });
+    }
+  });
+
+  named.sort((a, b) => a.company.localeCompare(b.company, 'en'));
+  // Stand numbers are alphanumeric ("A12", "412"), so a numeric-aware collator
+  // is what puts 9 before 10 instead of after 1.
+  unnamed.sort((a, b) => String(shownN(a.n)).localeCompare(String(shownN(b.n)), 'en', { numeric: true }));
+  return { named, unnamed };
+}
+
+// Rebuilt on every broadcast, but only the parts that changed: this list is
+// ~250 rows and lives inside the same document as the plan.
+let directorySig = '';
+
+function renderDirectory() {
+  const box = document.getElementById('directory-list');
+  if (!box) return;
+  const { named, unnamed } = directoryRows();
+
+  const sig = named.map(r => `${r.n}|${r.company}|${r.country}|${r.activity}`).join(';')
+            + '#' + unnamed.map(r => `${r.n}|${r.status}`).join(';');
+  if (sig === directorySig) return;
+  directorySig = sig;
+
+  const countEl = document.getElementById('directory-count');
+  if (countEl) {
+    countEl.textContent = named.length
+      ? `${named.length} exhibitor${named.length === 1 ? '' : 's'} announced`
+      : 'No exhibitors announced yet';
+  }
+
+  const row = (r, withDetail) => `
+    <li>
+      <button type="button" class="dir-row" data-dir="${esc(r.n)}">
+        <span class="dir-name">${esc(withDetail ? r.company : 'Stand ' + shownN(r.n))}</span>
+        <span class="dir-meta">${esc(withDetail
+          ? `Stand ${shownN(r.n)}${r.country ? ' · ' + r.country : ''}${r.activity ? ' · ' + r.activity : ''}`
+          : `${STATUS_LABEL[r.status] || cap(r.status)}${r.sqm ? ' · ' + r.sqm + ' ' + UNIT : ''}`)}</span>
+      </button>
+    </li>`;
+
+  box.innerHTML = `
+    ${named.length ? `<h3 class="dir-head" id="dir-head-ex">Exhibitors A–Z</h3>
+      <ul class="dir-ul" aria-labelledby="dir-head-ex">${named.map(r => row(r, true)).join('')}</ul>` : ''}
+    <h3 class="dir-head" id="dir-head-st">All stands</h3>
+    <ul class="dir-ul" aria-labelledby="dir-head-st">${unnamed.map(r => row(r, false)).join('')}</ul>`;
+
+  box.querySelectorAll('[data-dir]').forEach(btn => {
+    btn.onclick = () => {
+      const n = btn.getAttribute('data-dir');
+      selectBooth(n);
+      panToBooth(n);
+    };
+  });
+}
+
+function toggleDirectory(open) {
+  const panel = document.getElementById('fp-directory');
+  const btn = document.getElementById('directory-toggle');
+  if (!panel || !btn) return;
+  directoryOpen = open == null ? !directoryOpen : !!open;
+  panel.hidden = !directoryOpen;
+  btn.setAttribute('aria-expanded', String(directoryOpen));
+  if (directoryOpen) {
+    renderDirectory();
+    document.getElementById('directory-list')?.querySelector('button')?.focus();
+  } else {
+    btn.focus();
+  }
+}
+
+(function initDirectory() {
+  const btn = document.getElementById('directory-toggle');
+  if (btn) btn.onclick = () => toggleDirectory();
+  const close = document.getElementById('directory-close');
+  if (close) close.onclick = () => toggleDirectory(false);
+  // The first thing in the tab order: a keyboard user reaches the list without
+  // passing through the toolbar, and a screen reader is offered it immediately.
+  const skip = document.getElementById('skip-to-list');
+  if (skip) skip.onclick = () => toggleDirectory(true);
+  // Escape closes it, the same as the search suggestions — a panel that can
+  // only be dismissed with a mouse is not a keyboard route.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && directoryOpen) toggleDirectory(false);
+  });
+})();
+
+// ─── The event this page is for ──────────────────────────────────────────────
+// The markup used to say "LEX 2026" in the title, the description and the
+// header, so North America's plan introduced itself as Europe's. The show is
+// injected per request; the page takes its identity from that.
+(function applyShowIdentity() {
+  document.title = `${SHOW_NAME} Floorplan | Interactive Expo Map`;
+  const sub = document.getElementById('show-name');
+  if (sub) sub.textContent = `${SHOW_NAME} — Interactive Expo Floorplan`;
+  const desc = document.querySelector('meta[name="description"]');
+  if (desc) {
+    desc.setAttribute('content',
+      `Browse available exhibition stands at ${SHOW_NAME}. Select any white space to view size and make an enquiry.`);
+  }
+})();
 
 initConsent();
 initForm();

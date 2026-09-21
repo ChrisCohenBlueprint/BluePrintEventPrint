@@ -8,6 +8,29 @@ const { track } = require('./tracking');
 const col = () => getDb().collection('holds');
 
 /**
+ * One live hold per stand.
+ *
+ * Nothing structural stopped two hold documents existing for the same stand, so
+ * a forced hold racing an ordinary one left both, and releasing the stand only
+ * cleared what the caller happened to know about. Partial, so it constrains the
+ * holds that exist without saying anything about stands that have none.
+ *
+ * db.js already creates a NON-unique index on the same keys at connect time; if
+ * it is still there this call is refused as a conflicting definition, which is
+ * reported rather than thrown so it can never take a boot down. Dropping the
+ * old one is a migration, not a startup task.
+ */
+async function ensureIndexes() {
+  try {
+    return { ok: true, index: await col().createIndex(
+      { showId: 1, boothNumber: 1 },
+      { unique: true, name: 'hold_one_per_booth' }) };
+  } catch (e) {
+    return { ok: false, name: 'hold_one_per_booth', error: e.message };
+  }
+}
+
+/**
  * Place a hold with a real expiry.
  *
  * Two mechanisms work together:
@@ -33,7 +56,12 @@ async function create({ boothNumber, company, contactId = null, sessionId = null
   // same moment as a booking (booth:book) would unconditionally flip the just-
   // sold stand back to 'held' and overwrite the exhibitor, silently erasing the
   // sale (the same race booth:book itself is already guarded against).
-  const r = await booths.setStatus(boothNumber, 'held', { company, actor, expect: ['available'] });
+  //
+  // The expiry goes on the BOOTH in this same write, not only into the hold
+  // document. That is what makes the sweep's release a single conditional
+  // write it can lose cleanly — see reconcile().
+  const r = await booths.setStatus(boothNumber, 'held',
+    { company, actor, expect: ['available'], holdExpiresAt: expiresAt });
   if (!r || !r.changed) return { ok: false, reason: 'not_available' };
 
   // Only write the hold document once the status flip has actually claimed the
@@ -58,9 +86,19 @@ const drop = (boothNumber) => col().deleteMany({ showId: config.showId, boothNum
  * minute. This always leaves a matching document behind.
  */
 async function forceHold(boothNumber, { company = 'Pending', durationMs = config.defaultHoldMs, actor = null } = {}) {
-  await drop(boothNumber);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + durationMs);
+  // The booth's own expiry is pushed into the future BEFORE anything else.
+  // A sweep already mid-flight has read its candidates and is about to write;
+  // its release is conditional on the booth's expiry still being past, so this
+  // one write is what makes it miss. The old order — drop, insert, then let the
+  // caller set the status — left a gap in which the sweep flipped the stand
+  // back to available and abandoned the hold document that had just been
+  // written for it.
+  await booths.col().updateOne(
+    { showId: config.showId, boothNumber },
+    { $set: { holdExpiresAt: expiresAt } });
+  await drop(boothNumber);
   await col().insertOne({ showId: config.showId, boothNumber, company, contactId: null,
                           sessionId: null, createdAt: now, expiresAt, createdBy: actor });
   track({ type: 'hold.create', boothNumber, meta: { company, expiresAt, forced: true }, actor });
@@ -79,59 +117,93 @@ async function release(boothNumber, { actor = null } = {}) {
 const active = () => col().find({ showId: config.showId }).sort({ expiresAt: 1 }).toArray();
 
 /**
- * Release any booth marked 'held' that no longer has a live hold document.
- * Returns the booth numbers that were freed so callers can broadcast.
+ * Release any booth whose hold has run out, or that is marked 'held' with no
+ * live hold document behind it. Returns the booth numbers that were freed so
+ * callers can broadcast.
+ *
+ * THE RACE THIS IS SHAPED AROUND. The sweep reads, decides, then writes, and an
+ * admin can force a hold onto a stand in between. The old release was
+ * conditional on nothing more than `status: 'held'` — which a stand someone had
+ * just re-held still is — so the sweep flipped a live, forced hold to available
+ * and left its brand-new hold document behind with nothing holding it.
+ *
+ * The fix is to make the condition say what the sweep actually decided: this
+ * stand's hold had expired WHEN I LOOKED. The expiry is therefore denormalised
+ * onto the booth, and create()/forceHold() write it there atomically with the
+ * claim, so a hold placed in the gap moves the booth's expiry into the future
+ * and the conditional write simply does not match. Three states, deliberately:
+ *
+ *   a date  — a countdown hold; expired once it is past
+ *   null    — held with no expiry (the plan itself says so); never swept
+ *   absent  — a stand held before this field existed, or by a path that did not
+ *             set it; decided from the hold documents, as it always was
+ *
+ * The hold documents are then deleted BY THE _id VALUES READ AT THE TOP, never
+ * by a time window: a document written after the read has an id we never saw,
+ * so it cannot be caught by the deletion of the ones we did.
  */
 async function reconcile() {
+  const showId = config.showId;
+  const now = new Date();
+
   const held = await booths.col()
-    .find({ showId: config.showId, status: 'held' })
-    .project({ boothNumber: 1 })
+    .find({ showId, status: 'held' })
+    .project({ boothNumber: 1, holdExpiresAt: 1 })
     .toArray();
   if (!held.length) return [];
 
-  // expiresAt MUST be projected: the filter below decides liveness from it, and
-  // projecting it away left every value undefined — so an expired-but-unreaped
-  // hold read as live and the booth stayed held until Mongo's TTL reaper
-  // happened to delete the document.
-  const live = await col()
-    .find({ showId: config.showId, boothNumber: { $in: held.map(b => b.boothNumber) } })
-    .project({ boothNumber: 1, expiresAt: 1 })
+  // expiresAt MUST be projected: liveness is decided from it, and projecting it
+  // away left every value undefined — so an expired-but-unreaped hold read as
+  // live and the booth stayed held until Mongo's TTL reaper happened to delete
+  // the document. _id is what the deletion below is keyed on.
+  const docs = await col()
+    .find({ showId, boothNumber: { $in: held.map(b => b.boothNumber) } })
+    .project({ _id: 1, boothNumber: 1, expiresAt: 1 })
     .toArray();
 
-  // A hold document that is past its expiry counts as gone even if Mongo's TTL
-  // reaper has not removed it yet. Treating it as live would leave the booth
-  // held and unsellable for as long as the reaper lagged.
-  const now = new Date();
-  const liveSet = new Set(live.filter(h => !h.expiresAt || h.expiresAt > now).map(h => h.boothNumber));
-  const candidates = held.filter(b => !liveSet.has(b.boothNumber)).map(b => b.boothNumber);
+  // A hold document past its expiry counts as gone even if Mongo's TTL reaper
+  // has not removed it yet. Treating it as live would leave the booth held and
+  // unsellable for as long as the reaper lagged.
+  const liveSet = new Set(docs.filter(h => !h.expiresAt || h.expiresAt > now).map(h => h.boothNumber));
+  const idsFor = (n) => docs.filter(h => h.boothNumber === n).map(h => h._id);
 
   const expired = [];
-  for (const boothNumber of candidates) {
-    // Conditional write: only release if the booth is STILL held. Between this
-    // sweep reading the booth list and writing, an admin may have booked it —
-    // an unconditional write would silently erase that sale.
-    const res = await booths.col().updateOne(
-      { showId: config.showId, boothNumber, status: 'held' },
-      { $set: {
-          status: 'available',
-          'assignment.company': null,
-          updatedAt: new Date(),
-          updatedBy: 'system:expiry',
-      } }
-    );
-    if (!res.matchedCount) continue;   // status changed under us; leave it alone
+  for (const b of held) {
+    // A hold the plan itself declares, with no expiry: never ours to reclaim.
+    if (b.holdExpiresAt === null) continue;
 
-    // Delete only the EXPIRED hold documents, not every doc for this booth.
-    // Between the status flip above and this delete, an admin's create() can
-    // free-then-re-hold the stand and insert a fresh, future-dated hold doc; an
-    // unbounded deleteMany(boothNumber) would erase that new hold, leaving the
-    // booth 'held' with no document for the next tick to reclaim. `now` is from
-    // the top of this sweep, so a hold placed in the gap (expiresAt in the
-    // future) is not matched.
-    await col().deleteMany({ showId: config.showId, boothNumber, expiresAt: { $lte: now } });
-    expired.push(boothNumber);
-    track({ type: 'hold.expire', boothNumber, meta: {}, actor: 'system:expiry' });
-    console.log(`⏱  Hold expired — stand ${boothNumber} released`);
+    // The filter is the sweep's own finding, written down. Whichever branch we
+    // are in, a hold placed between the read above and the write below has
+    // changed the booth out from under it and the update matches nothing.
+    const filter = { showId, boothNumber: b.boothNumber, status: 'held' };
+    if (b.holdExpiresAt instanceof Date) {
+      if (b.holdExpiresAt > now) continue;               // still running
+      filter.holdExpiresAt = { $lte: now };
+    } else {
+      if (liveSet.has(b.boothNumber)) continue;          // a live document holds it
+      filter.holdExpiresAt = { $exists: false };
+    }
+
+    const res = await booths.col().updateOne(filter, {
+      $set: {
+        status: 'available',
+        'assignment.company': null,
+        updatedAt: new Date(),
+        updatedBy: 'system:expiry',
+      },
+      $unset: { holdExpiresAt: '' },
+    });
+    if (!res.matchedCount) continue;   // re-held or booked under us; leave it alone
+
+    // Only the documents this sweep READ. An admin's create() in the gap
+    // inserts a fresh document with an id that was never in this list, so it
+    // survives — where the old `expiresAt: {$lte: now}` deletion could still
+    // reach a document whose expiry had not yet been set.
+    const ids = idsFor(b.boothNumber);
+    if (ids.length) await col().deleteMany({ _id: { $in: ids } });
+    expired.push(b.boothNumber);
+    track({ type: 'hold.expire', boothNumber: b.boothNumber, meta: {}, actor: 'system:expiry' });
+    console.log(`⏱  Hold expired — stand ${b.boothNumber} released`);
   }
   return expired;
 }
@@ -171,4 +243,4 @@ function startExpiryLoop(onExpired) {
   return t;
 }
 
-module.exports = { create, release, drop, forceHold, active, reconcile, startExpiryLoop };
+module.exports = { create, release, drop, forceHold, active, reconcile, startExpiryLoop, ensureIndexes };

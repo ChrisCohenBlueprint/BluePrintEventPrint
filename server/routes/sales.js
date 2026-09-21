@@ -7,7 +7,9 @@ const sponsors = require('../models/sponsors');
 const settings = require('../models/settings');
 const users    = require('../models/users');
 const menus    = require('../models/menus');
+const shows    = require('../models/shows');
 const { sendPage } = require('../lib/send-page');
+const { showForRequest } = require('../show-middleware');
 const { track } = require('../services/tracking');
 
 /**
@@ -39,11 +41,52 @@ function auditMenu(req, type, meta = {}) {
 }
 
 // ─── Pages ────────────────────────────────────────────────────────────────────
-router.get('/sales', (_req, res) => sendPage(res, 'sales.html'));
+/**
+ * Which event this page is for.
+ *
+ * Both sendPage calls used to pass NO show at all, so the sales pages were the
+ * only ones in the app served without `window.__SHOW` and without the X-Show
+ * header that send-page.js attaches to every fetch. Every request the dashboard
+ * made therefore resolved to the default event: a rep working on North America
+ * was shown Europe's remaining stands, and the floorplan drawn into their
+ * client's proposal was Europe's hall. The show middleware already anticipated
+ * a /sales/:show route — it was simply never added.
+ *
+ * Falls back to showForRequest, which always returns a USABLE slug: injecting
+ * `slug: undefined` is what previously sent "X-Show: undefined" on every
+ * request and had each one rejected.
+ */
+function showFor(req) {
+  const slug = String(req.params?.show || '').toLowerCase();
+  const named = slug ? shows.bySlug(slug) : null;
+  if (named && named.active !== false) {
+    return { slug: named.slug, id: named.showId, name: named.name };
+  }
+  return showForRequest(req);
+}
+
+router.get('/sales', (req, res) => sendPage(res, 'sales.html', showFor(req)));
+
+// The events a rep may switch between. /api/shows is behind the admin guard, so
+// a rep cannot read it — this is the same list, scoped to what is on the air.
+router.get('/api/sales/shows', (_req, res, next) => {
+  try {
+    res.json(shows.list()
+      .filter(sh => sh.active !== false)
+      .map(sh => ({ slug: sh.slug, showId: sh.showId, name: sh.name || sh.showId })));
+  } catch (e) { next(e); }
+});
 
 // The printable proposal. Behind the same auth as the rest — the client is sent
 // the PDF the rep produces here, never a link to this page.
-router.get('/sales/menu/:id/print', (_req, res) => sendPage(res, 'menu-print.html'));
+//
+// Registered BEFORE the /sales/:show forms: "/sales/menu/x/print" would
+// otherwise be matched by "/sales/:show/menu/:id/print" with show="menu".
+router.get('/sales/menu/:id/print', (req, res) => sendPage(res, 'menu-print.html', showFor(req)));
+router.get('/sales/:show/menu/:id/print', (req, res) => sendPage(res, 'menu-print.html', showFor(req)));
+
+// Registered last, because ":show" matches any single segment.
+router.get('/sales/:show', (req, res) => sendPage(res, 'sales.html', showFor(req)));
 
 // ─── Who am I ─────────────────────────────────────────────────────────────────
 router.get('/api/sales/me', async (req, res, next) => {

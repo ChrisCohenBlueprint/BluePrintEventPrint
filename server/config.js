@@ -22,17 +22,50 @@ const SHOWS = (process.env.SHOWS || '')
 // always did — reachable at its own slug as well as the unprefixed paths.
 if (!SHOWS.length) SHOWS.push({ slug: DEFAULT_SHOW.toLowerCase(), id: DEFAULT_SHOW });
 
-const isProd = process.env.NODE_ENV === 'production';
+// ─── Is this production? Do not take NODE_ENV's word for it ──────────────────
+// Everything defensive in this app hung off one environment variable that is
+// trivially absent — Render's dashboard makes it easy to forget, and a shell
+// that runs `node server.js` by hand never sets it. Without NODE_ENV the cookie
+// lost its Secure flag, the socket CORS opened to any origin with credentials,
+// the checks below were skipped and the admin password quietly became
+// "password". So the deployment is read from evidence as well as from the flag.
+//
+// RENDER is set by Render on every instance, and it only ever hosts the live
+// site — that is production regardless of what NODE_ENV says.
+const onRender = !!process.env.RENDER;
 
-// ─── Fail fast on missing secrets in production ───────────────────────────────
+// A MONGO_URI pointing anywhere but this machine means real data: an Atlas
+// cluster, or a database on another host. That is NOT enough to turn on Secure
+// cookies (a developer may legitimately point a laptop at a staging cluster over
+// plain http://localhost, and Secure cookies would break their login) — but it
+// IS enough to insist the secrets are properly set before anything starts.
+function isLocalMongo(uri) {
+  const raw = String(uri || '');
+  if (!raw) return true;                                    // unset → the local default
+  if (/^mongodb\+srv:/i.test(raw)) return false;            // SRV is always a hosted cluster
+  const hosts = raw.replace(/^mongodb:\/\//i, '').split('/')[0].split('@').pop();
+  return hosts.split(',').every(h =>
+    /^(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)(:\d+)?$/i.test(h.trim()));
+}
+
+const isProd = process.env.NODE_ENV === 'production' || onRender;
+
+// Where the secrets are non-negotiable: production, or anything that is plainly
+// pointed at real data.
+const handlingRealData = isProd || !isLocalMongo(process.env.MONGO_URI);
+
+// ─── Fail fast on missing secrets ─────────────────────────────────────────────
 // Previously these silently defaulted to admin/password, which meant an
 // unconfigured deploy shipped with guessable credentials.
 const required = ['ADMIN_USER', 'ADMIN_PASS', 'SESSION_SECRET'];
 const missing  = required.filter(k => !process.env[k]);
 
-if (missing.length && isProd) {
+if (missing.length && handlingRealData) {
   console.error(`FATAL: missing required environment variables: ${missing.join(', ')}`);
-  console.error('Refusing to start in production without them.');
+  console.error(isProd
+    ? '   Refusing to start in production without them.'
+    : `   MONGO_URI points at a remote database, so this is not a throwaway local run.
+   Refusing to start with development fallbacks against real data.`);
   process.exit(1);
 }
 if (missing.length) {
@@ -42,14 +75,30 @@ if (missing.length) {
 
 // The session cookie is a bare HMAC over its payload, so a short/guessable
 // SESSION_SECRET lets an attacker brute-force the key offline and then forge a
-// cookie for any user — including {role:'owner'}. Require real entropy in prod.
-if (isProd && (process.env.SESSION_SECRET || '').length < 32) {
-  console.error('FATAL: SESSION_SECRET must be at least 32 characters in production.');
+// cookie for any user — including {role:'owner'}. Require real entropy wherever
+// the data is real.
+if (handlingRealData && (process.env.SESSION_SECRET || '').length < 32) {
+  console.error('FATAL: SESSION_SECRET must be at least 32 characters outside local development.');
   process.exit(1);
 }
 
+// Origins allowed to embed the public floorplan in an <iframe> — the marketing
+// site does exactly that. Comma-separated, e.g.
+// "https://www.blueprinteventcompany.com,https://blueprinteventcompany.com".
+// Unset, only this site may frame its own pages. Every OTHER page (/admin,
+// /sales, /login) is frame-ancestors 'none' no matter what is set here.
+const EMBED_ORIGINS = (process.env.EMBED_ORIGINS || '')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean)
+  // Origins only: a scheme and a host, no path, no wildcard. A malformed entry
+  // is dropped rather than turned into a policy nobody can predict.
+  .filter(o => /^https?:\/\/[^\s/]+$/i.test(o));
+
 module.exports = {
   isProd,
+  handlingRealData,
+  embedOrigins: EMBED_ORIGINS,
   port:      process.env.PORT || 3000,
   mongoUri:  process.env.MONGO_URI || 'mongodb://127.0.0.1:27017',
   dbName:    process.env.MONGO_DB  || 'blueprint',
@@ -92,7 +141,11 @@ module.exports = {
 
   // How long raw behavioural events are retained. Drives a TTL index, and is
   // the number that needs to match your privacy policy.
-  activityRetentionDays: Number(process.env.ACTIVITY_RETENTION_DAYS || 730),
+  // Clamped, because this number drives a TTL index that DELETES data: a typo
+  // ("7ee") must not become NaN and a "0" must not mean "erase the audit trail
+  // on write". Anything unusable falls back to the documented default.
+  activityRetentionDays: (Number(process.env.ACTIVITY_RETENTION_DAYS) > 0
+    ? Number(process.env.ACTIVITY_RETENTION_DAYS) : 730),
 
   trackingFlushMs: 3000,
 

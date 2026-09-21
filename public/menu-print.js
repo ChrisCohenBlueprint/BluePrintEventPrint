@@ -119,7 +119,7 @@
    * A failure here must never cost the rep their proposal: the figure is hidden
    * and the rest of the document prints as before.
    */
-  async function renderPlan(plan) {
+  async function renderPlan(plan, show) {
     // Nothing to point at — every stand in the proposal has gone since drafting,
     // or none was resolvable. A plan with no marks would just puzzle the client;
     // the stands table already says which are no longer available. Checked before
@@ -130,7 +130,21 @@
     const mount = $('plan-mount');
     let svgDoc;
     try {
-      const res = await fetch(plan.svg, { headers: { Accept: 'image/svg+xml' } });
+      // The artwork for the event THIS PROPOSAL IS FOR.
+      //
+      // It used to fetch plan.svg ("/floorplan.svg") bare. This page is served
+      // from /sales/menu/:id/print with no show injected, so no X-Show header
+      // goes with the request and the route fell back to the DEFAULT event —
+      // a North America proposal printed Europe's hall, with the client's
+      // stands marked on a floorplan that is not theirs.
+      //
+      // The event goes in the URL, where no cache can ignore it. The slug is
+      // preferred; the showId is accepted by the route as well (see
+      // server/routes/public.js), so a payload carrying only showId still
+      // resolves correctly.
+      const sep = plan.svg.includes('?') ? '&' : '?';
+      const url = show ? `${plan.svg}${sep}show=${encodeURIComponent(show)}` : plan.svg;
+      const res = await fetch(url, { headers: { Accept: 'image/svg+xml' } });
       if (!res.ok) throw new Error(`artwork ${res.status}`);
       mount.innerHTML = await res.text();
       svgDoc = mount.querySelector('svg');
@@ -295,7 +309,9 @@
     // numbers would size themselves against a zero-width box. Awaited so the
     // figure is complete before a rep can reach the print dialog.
     if (d.plan) {
-      try { await renderPlan(d.plan); }
+      // The event is passed in: this page is served with no show injected, so
+      // the request has to name it or the default event's plan comes back.
+      try { await renderPlan(d.plan, d.plan.show || d.showSlug || d.showId || ''); }
       catch (e) { console.warn('Floorplan figure failed:', e); }
     }
   }

@@ -139,8 +139,12 @@ async function attributeSession(sessionId, contactId) {
   // recorded while that final write was committing. Bounded so a busy stream of
   // unrelated events can't hold the enquiry response open.
   for (let pass = 0; pass < 5 && (buffer.length || inFlight); pass++) await flush();
+  // Scoped to the show as well as the session. A session id is a browser, and
+  // one browser can visit two of this deployment's events — so attributing by
+  // session alone spliced a visitor's browsing of ANOTHER event onto this
+  // event's lead, and handed it to sales as that lead's history.
   const res = await getDb().collection('activity').updateMany(
-    { sessionId, 'actor.contactId': { $exists: false } },
+    { showId: config.showId, sessionId, 'actor.contactId': { $exists: false } },
     { $set: { 'actor.contactId': contactId } }
   );
   return res.modifiedCount;

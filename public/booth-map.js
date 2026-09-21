@@ -306,6 +306,29 @@
    * @param box    { x, y, w, h } of the stand, in SVG user units.
    * @param opts   { maxFont, minFont, family, weight, pad }.
    */
+  /**
+   * Layouts already worked out, keyed on everything that decides one.
+   *
+   * fitLabel walks up to 18 font sizes and calls getComputedTextLength() for
+   * every word on every line at each of them. Each of those is a FORCED
+   * SYNCHRONOUS LAYOUT of a 6000-node SVG. Running it for every sold stand on
+   * every repaint is what made the public plan freeze whenever anybody hovered
+   * anywhere — thousands of layouts per broadcast for an answer that had not
+   * changed. The same name in the same box at the same cap always produces the
+   * same lines, so it is worked out once.
+   */
+  var labelCache = {};
+
+  /**
+   * Throw the layouts away.
+   *
+   * Must be called when the FONT changes under us: a name measured against the
+   * fallback face and then rendered in Raleway is fitted to the wrong metrics,
+   * which is the exact bug document.fonts.ready exists to fix on this page. A
+   * cache that outlived the font would have quietly reintroduced it.
+   */
+  function clearLabelCache() { labelCache = {}; }
+
   function fitLabel(textEl, str, box, opts) {
     opts = opts || {};
     var maxFont = opts.maxFont || 14;
@@ -325,6 +348,14 @@
     textEl.setAttribute('font-family', family);
     textEl.setAttribute('font-weight', weight);
     textEl.removeAttribute('dominant-baseline');
+
+    // The box is rounded to a tenth of a unit: a stand's measured box wobbles
+    // in the last decimal between layouts, and a key that changed with it would
+    // never hit.
+    var key = String(str) + '\u0000' + Math.round(box.w * 10) + 'x' + Math.round(box.h * 10) +
+              '\u0000' + maxFont + '|' + minFont + '|' + family + '|' + weight + '|' + pad;
+    var cached = labelCache[key];
+    if (cached) { paintLines(textEl, cached.lines, cached.font, box, lineRatio); return; }
 
     // Measure a candidate string at the element's current font size.
     var meas = document.createElementNS(SVG_NS, 'text');
@@ -411,18 +442,29 @@
     }
     if (!chosen) chosen = [String(str)];
 
-    // Render the lines, vertically centred in the box.
+    labelCache[key] = { lines: chosen, font: chosenFont };
+    paintLines(textEl, chosen, chosenFont, box, lineRatio);
+  }
+
+  /**
+   * Draw the chosen lines, vertically centred in the box.
+   *
+   * Split out of fitLabel so a cached layout can be painted without going
+   * anywhere near the measuring code. Position depends on the box, which is why
+   * the cache stores lines and a font size rather than finished tspans.
+   */
+  function paintLines(textEl, lines, font, box, lineRatio) {
     while (textEl.firstChild) textEl.removeChild(textEl.firstChild);
-    textEl.setAttribute('font-size', chosenFont);
+    textEl.setAttribute('font-size', font);
     var cx = box.x + box.w / 2;
-    var lineH = chosenFont * lineRatio;
-    var blockH = chosen.length * lineH;
-    var firstBaseline = box.y + box.h / 2 - blockH / 2 + chosenFont * 0.82;
-    for (var i = 0; i < chosen.length; i++) {
+    var lineH = font * lineRatio;
+    var blockH = lines.length * lineH;
+    var firstBaseline = box.y + box.h / 2 - blockH / 2 + font * 0.82;
+    for (var i = 0; i < lines.length; i++) {
       var tspan = document.createElementNS(SVG_NS, 'tspan');
       tspan.setAttribute('x', cx);
       tspan.setAttribute('y', firstBaseline + i * lineH);
-      tspan.textContent = chosen[i];
+      tspan.textContent = lines[i];
       textEl.appendChild(tspan);
     }
   }
@@ -516,10 +558,22 @@
    */
   var nameCache = {};
 
-  function printedNameIn(svgDoc, box, cacheKey) {
-    if (Object.prototype.hasOwnProperty.call(nameCache, cacheKey)) return nameCache[cacheKey];
+  /**
+   * Every glyph box on the plan, measured once.
+   *
+   * printedNameIn() used to walk all ~6000 <path>/<polygon> nodes and getBBox()
+   * each of them SEPARATELY FOR EVERY AREA — so a plan with eight named areas
+   * paid for ~48,000 forced layouts on first paint, for a set of boxes that is
+   * identical every time. The artwork does not move, so the sweep happens once
+   * and each area filters the result.
+   *
+   * Dropped by clear(), because a re-tag can rebuild nodes underneath it.
+   */
+  var glyphBoxCache = null;
 
-    var marks = [], heights = [];
+  function allGlyphBoxes(svgDoc) {
+    if (glyphBoxCache) return glyphBoxCache;
+    var out = [];
     var glyphs = svgDoc.querySelectorAll('path, polygon');
     for (var i = 0; i < glyphs.length; i++) {
       var el = glyphs[i];
@@ -532,6 +586,20 @@
       var b = visualBox(el);
       if (tf) el.setAttribute('transform', tf);
       if (!b || !(b.w > 0) || !(b.h > 0)) continue;
+      b.el = el;
+      out.push(b);
+    }
+    glyphBoxCache = out;
+    return out;
+  }
+
+  function printedNameIn(svgDoc, box, cacheKey) {
+    if (Object.prototype.hasOwnProperty.call(nameCache, cacheKey)) return nameCache[cacheKey];
+
+    var marks = [], heights = [];
+    var boxes = allGlyphBoxes(svgDoc);
+    for (var i = 0; i < boxes.length; i++) {
+      var b = boxes[i];
       // Fully inside, with slack for stroke overshoot. Anything merely
       // overlapping belongs to a neighbour, not to this area.
       if (b.x < box.x - 1 || b.y < box.y - 1) continue;
@@ -576,12 +644,14 @@
           if (q.x + q.w > maxx) maxx = q.x + q.w;
           if (q.y + q.h > maxy) maxy = q.y + q.h;
         }
-        // Re-walk to collect the elements, since the boxes were sorted.
-        for (var e = 0; e < glyphs.length; e++) {
-          var eb = visualBox(glyphs[e]);
-          if (!eb || !(eb.w > 0)) continue;
+        // Re-walk to collect the elements, since the boxes were sorted. The
+        // boxes already carry the element they were measured from, so this is a
+        // filter over the measurements taken once — it used to call
+        // visualBox() on all ~6000 glyphs a SECOND time, per area.
+        for (var e = 0; e < boxes.length; e++) {
+          var eb = boxes[e];
           if (eb.x >= minx - 0.01 && eb.y >= miny - 0.01 &&
-              eb.x + eb.w <= maxx + 0.01 && eb.y + eb.h <= maxy + 0.01) els.push(glyphs[e]);
+              eb.x + eb.w <= maxx + 0.01 && eb.y + eb.h <= maxy + 0.01) els.push(eb.el);
         }
         // If the name we found spans nearly the whole box the pieces could not
         // be separated — better to leave the artwork alone than shrink the lot.
@@ -755,6 +825,9 @@
   }
 
   function clear(svgDoc) {
+    // Both measurement caches describe nodes this is about to replace.
+    glyphBoxCache = null;
+    nameCache = {};
     var added = '[data-overlay],[data-split-box],[data-split-label],[data-split-size]';
     Array.prototype.forEach.call(svgDoc.querySelectorAll(added), function (n) {
       if (n.parentNode) n.parentNode.removeChild(n);
@@ -807,5 +880,5 @@
       .sort().join('|');
   }
 
-  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, fitImage: fitImage, paintAreaLogos: paintAreaLogos, areaHost: areaHost, visualBox: visualBox };
+  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, clearLabelCache: clearLabelCache, fitImage: fitImage, paintAreaLogos: paintAreaLogos, areaHost: areaHost, visualBox: visualBox };
 })(window);

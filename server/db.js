@@ -50,11 +50,11 @@ async function ensureIndexes() {
   // collection cannot grow without bound and the privacy commitment is
   // structurally guaranteed rather than a policy someone has to remember.
   await db.collection('activity').createIndexes([
-    { key: { ts: 1 }, expireAfterSeconds: config.activityRetentionDays * 86400, name: 'activity_ttl' },
     { key: { showId: 1, type: 1, ts: -1 },      name: 'show_type_time' },
     { key: { showId: 1, boothNumber: 1, ts: -1 }, name: 'booth_time' },
     { key: { sessionId: 1, ts: -1 },            name: 'session_time' },
   ]);
+  await ensureTtl('activity', 'activity_ttl', { ts: 1 }, config.activityRetentionDays * 86400);
 
   // ── accessCodes ─────────────────────────────────────────────────────────────
   await db.collection('accessCodes').createIndexes([
@@ -62,7 +62,56 @@ async function ensureIndexes() {
     { key: { expiresAt: 1 }, expireAfterSeconds: 0, name: 'code_ttl' },
   ]);
 
+  // ── revokedTokens ───────────────────────────────────────────────────────────
+  // Session ids retired by signing out (server/auth.js). Each row carries the
+  // token's own expiry and the TTL index drops it then, so the list only ever
+  // holds sessions that would otherwise still be accepted.
+  await db.collection('revokedTokens').createIndexes([
+    { key: { jti: 1 }, unique: true, name: 'jti_unique' },
+    { key: { exp: 1 }, expireAfterSeconds: 0, name: 'revoked_ttl' },
+  ]);
+
   console.log('✅ Indexes ensured');
+}
+
+/**
+ * Create or UPDATE a TTL index.
+ *
+ * createIndex is only idempotent while the options match. Re-running it with the
+ * same name and a different expireAfterSeconds raises IndexOptionsConflict (85),
+ * which rejected connect() and took the process down on boot — so changing
+ * ACTIVITY_RETENTION_DAYS, the one number the privacy policy is supposed to
+ * drive, made the server refuse to start and the only way back was to know to go
+ * and drop the index by hand in Atlas. The lifetime of an existing index is
+ * changed with collMod instead, and a collMod that cannot do it (an older server,
+ * or an index whose KEY changed rather than its expiry) falls back to dropping
+ * and recreating. An empty retention would delete everything immediately, so a
+ * nonsensical value is refused rather than acted on.
+ */
+async function ensureTtl(collection, name, key, seconds, fallbackSeconds = 730 * 86400) {
+  const wanted = Number(seconds);
+  // A garbled ACTIVITY_RETENTION_DAYS must never become a SHORT retention: that
+  // would quietly delete the audit trail. Anything under an hour, or not a
+  // number at all, falls back to the documented default and says so.
+  const expireAfterSeconds = Number.isFinite(wanted) && wanted >= 3600
+    ? Math.floor(wanted) : fallbackSeconds;
+  if (expireAfterSeconds !== wanted) {
+    console.warn(`⚠  ${collection}.${name}: retention "${seconds}" is not usable — keeping ${expireAfterSeconds}s`);
+  }
+  try {
+    await db.collection(collection).createIndex(key, { name, expireAfterSeconds });
+    return;
+  } catch (e) {
+    if (e?.code !== 85) throw e;                    // IndexOptionsConflict, nothing else
+  }
+  try {
+    await db.command({ collMod: collection, index: { name, expireAfterSeconds } });
+    console.log(`✅ ${collection}.${name} retention updated to ${expireAfterSeconds}s`);
+  } catch (e) {
+    console.warn(`⚠  collMod on ${collection}.${name} failed (${e.message}) — recreating the index`);
+    await db.collection(collection).dropIndex(name).catch(() => {});
+    await db.collection(collection).createIndex(key, { name, expireAfterSeconds });
+  }
 }
 
 const getDb = () => {

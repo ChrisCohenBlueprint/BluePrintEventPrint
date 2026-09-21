@@ -93,16 +93,29 @@ const recent = (limit = 100, { archived = false } = {}) =>
   col().find({ showId: config.showId, archived: archived ? true : { $ne: true } })
        .sort({ createdAt: -1 }).limit(limit).toArray();
 
+/**
+ * Every write below is scoped to the show as well as the `_id`.
+ *
+ * An ObjectId is unique, so filtering on it alone did find the right document —
+ * but one deployment serves several events, and a lead belongs to one of them.
+ * Filtering on `_id` only meant a sales rep working Europe could archive,
+ * re-assign, re-status or DELETE a North American lead if an id reached the
+ * wrong console, with nothing in the query to stop it. Adding the show makes
+ * the scoping a property of the data access rather than of the caller being
+ * careful, which is how every other model here works.
+ */
+const scoped = (id) => ({ _id: id, showId: config.showId });
+
 /** An enquiry plus the browsing history that led to it — the sales view. */
 async function withHistory(id) {
-  const inquiry = await col().findOne({ _id: id });
+  const inquiry = await col().findOne(scoped(id));
   if (!inquiry) return null;
   // A lead with no session has no browsing trail. Querying activity by a null
   // sessionId would match EVERY anonymous/migration-imported event that also
   // has sessionId:null, splicing unrelated history onto this one lead.
   if (!inquiry.sessionId) return { ...inquiry, history: [] };
   const history = await getDb().collection('activity')
-    .find({ sessionId: inquiry.sessionId })
+    .find({ showId: config.showId, sessionId: inquiry.sessionId })
     .sort({ ts: 1 }).limit(500).toArray();
   return { ...inquiry, history };
 }
@@ -112,13 +125,13 @@ const STATUSES = ['new', 'contacted', 'won', 'lost'];
 /** Move a lead through the sales pipeline. */
 async function setStatus(id, status) {
   if (!STATUSES.includes(status)) return { ok: false, error: 'Invalid status.' };
-  const res = await col().updateOne({ _id: id }, { $set: { status, updatedAt: new Date() } });
+  const res = await col().updateOne(scoped(id), { $set: { status, updatedAt: new Date() } });
   return res.matchedCount ? { ok: true, status } : { ok: false, error: 'Lead not found.' };
 }
 
 /** Assign a lead to a member of the sales team (or clear the assignment). */
 async function assign(id, member) {
-  const res = await col().updateOne({ _id: id }, {
+  const res = await col().updateOne(scoped(id), {
     $set: { assignedTo: member ? { name: member.name, email: member.email } : null, updatedAt: new Date() },
   });
   return res.matchedCount === 1;
@@ -126,19 +139,19 @@ async function assign(id, member) {
 
 /** Shelve a lead (or restore it) without deleting anything. Reversible. */
 async function setArchived(id, archived) {
-  const res = await col().updateOne({ _id: id }, { $set: { archived: !!archived, updatedAt: new Date() } });
+  const res = await col().updateOne(scoped(id), { $set: { archived: !!archived, updatedAt: new Date() } });
   return res.matchedCount === 1;
 }
 
 /** Permanently delete a lead. */
 async function remove(id) {
-  const res = await col().deleteOne({ _id: id });
+  const res = await col().deleteOne(scoped(id));
   return res.deletedCount === 1;
 }
 
 /** Record that the lead was forwarded, so repeat sends are visible. */
 async function recordSend(id, { to, cc, by }) {
-  const res = await col().updateOne({ _id: id }, {
+  const res = await col().updateOne(scoped(id), {
     $set: { lastSentAt: new Date(), lastSentTo: to, lastSentBy: by || null },
     $inc: { sendCount: 1 },
     // Keep only the most recent 50 sends so repeated forwards can't grow the

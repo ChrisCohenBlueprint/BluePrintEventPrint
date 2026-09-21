@@ -4,12 +4,63 @@
 const SHOW = (window.__SHOW && window.__SHOW.slug) || '';
 const socket = io({ query: { show: SHOW } });
 
+// Shared helpers — one copy, in public/lib/ui.js, loaded before this file.
+// They used to exist here AND in sales.js, and the copies had drifted: sales.js
+// knew a 401 meant "your session ended", this file did not and rendered an
+// empty dashboard instead; sales.js had a working money(), this file called one
+// that was never defined anywhere.
+const { esc, cap, money, api, emitAck, withPending, askSecret, confirmDialog } = window.UI;
+
 // Show who is signed in. currentRole gates team management — only the owner may
 // add/remove members or reset a colleague's password/2FA (the server enforces
 // this too; hiding the controls just avoids showing buttons that would 403).
 let currentUser = null;
 let currentRole = null;
-fetch('/api/me').then(r=>r.ok?r.json():null).then(u=>{if(u){currentUser=u.user;currentRole=u.role;document.getElementById('nav-username').textContent=u.user;if(document.getElementById('section-team')?.classList.contains('active'))loadTeam();}}).catch(()=>{});
+
+/**
+ * Confirm the session is still ours, and act on it if it is not.
+ *
+ * There was no 401 handling anywhere on this page. An expired 12h cookie
+ * rendered "No enquiries yet", an empty team table and "No events yet" — an
+ * expired session presented as a genuinely empty event, which is about the most
+ * misleading thing the console could have said. Worse, after a socket reconnect
+ * the server downgrades an unauthenticated socket to the PUBLIC projection, so
+ * companies, prices and notes quietly disappeared from a page that still looked
+ * signed in, and every action toasted "Administrator access required" with no
+ * way out of it.
+ *
+ * api() turns the 401 into the redirect. A rep who has somehow landed here is
+ * sent to their own dashboard instead — bouncing them to /login would loop,
+ * because they ARE signed in.
+ */
+async function checkSession({ quiet = false } = {}) {
+  try {
+    const u = await api('/api/me');          // 401 → api() redirects to /login
+    currentUser = u.user;
+    currentRole = u.role;
+    document.getElementById('nav-username').textContent = u.user;
+    if (u.home && u.home !== '/admin') { location.href = u.home; return false; }
+    return true;
+  } catch (e) {
+    // api() has already navigated away on a 401; anything else is a genuine
+    // network problem, and saying so beats a blank dashboard.
+    if (!quiet) adminToast(`Could not confirm your sign-in: ${e.message}`, 'error');
+    return false;
+  }
+}
+
+checkSession({ quiet: true }).then(ok => {
+  if (ok && document.getElementById('section-team')?.classList.contains('active')) loadTeam();
+});
+
+// A reconnect is the moment the session is re-checked by the server, so it is
+// the moment to find out whether we still have one. Without this the page went
+// on drawing an admin console over public data.
+let wasConnected = false;
+socket.on('connect', () => {
+  if (wasConnected) checkSession();          // a genuine re-connect, not the first
+  wasConnected = true;
+});
 
 // Sign out via POST — a GET logout can be triggered cross-site to force an
 // admin out. Falls back to the (now inert) /logout link if the POST fails.
@@ -21,11 +72,17 @@ document.getElementById('nav-signout')?.addEventListener('click', (e) => {
 // Prime the sponsor catalogue so lead detail can name sponsorship interests
 // without waiting for the Sponsors tab to be opened.
 let sponsorAdminCache = [];
-fetch('/api/sponsors').then(r=>r.ok?r.json():[]).then(list=>{sponsorAdminCache=list||[];}).catch(()=>{});
+api('/api/sponsors').then(list => { sponsorAdminCache = list || []; }).catch(() => {});
 
-// The sales team an enquiry can be forwarded to, plus the manager who is copied.
+// Who an enquiry can be forwarded to, plus the manager who is copied. Built
+// from the real accounts now, so a rep created in the Team tab appears here.
 let salesTeamCache = { team: [], manager: null };
-fetch('/api/sales-team').then(r=>r.ok?r.json():null).then(d=>{if(d)salesTeamCache=d;}).catch(()=>{});
+function loadSalesTeam() {
+  return api('/api/sales-team')
+    .then(d => { if (d) salesTeamCache = d; })
+    .catch(() => { /* the Send-to list simply stays as it was */ });
+}
+loadSalesTeam();
 
 /**
  * Forward a lead. The server records the send and fires the notification
@@ -37,22 +94,23 @@ async function sendLead(id, name, btn) {
   const original = btn.innerHTML;
   btn.disabled = true; btn.textContent = 'Sending…';
   try {
-    const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}/send`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    const d = await api(`/api/inquiries/${encodeURIComponent(id)}/send`, {
+      method: 'POST', body: JSON.stringify({ name }),
     });
-    const d = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(d.error || 'send failed');
 
-    // Open a pre-addressed email so it can be sent immediately.
+    // Open a pre-addressed email so it can be sent immediately. cc may be empty
+    // when no owner account carries an email — send to the assignee alone
+    // rather than addressing a copy to nobody.
     const mailto = `mailto:${encodeURIComponent(d.to)}`
-      + `?cc=${encodeURIComponent(d.cc)}`
-      + `&subject=${encodeURIComponent(d.subject)}`
+      + (d.cc ? `?cc=${encodeURIComponent(d.cc)}&` : '?')
+      + `subject=${encodeURIComponent(d.subject)}`
       + `&body=${encodeURIComponent(d.body)}`;
     window.location.href = mailto;
 
+    const copied = d.cc && salesTeamCache.manager?.name ? ` (copying ${salesTeamCache.manager.name})` : '';
     adminToast(d.webhook
-      ? `Sent to ${name} (and copied to ${salesTeamCache.manager?.name}). Your email client has also opened a copy.`
-      : `Email to ${name} opened, copying ${salesTeamCache.manager?.name}. Send it from your mail client.`, 'ok');
+      ? `Sent to ${name}${copied}. Your email client has also opened a copy.`
+      : `Email to ${name} opened${copied}. Send it from your mail client.`, 'ok');
     loadLeads();
   } catch (e) {
     adminToast(e.message || 'Could not send.', 'error');
@@ -75,26 +133,42 @@ const sectionTitles = {
   sponsors: 'Sponsors',
   tools: 'Tools',
   team: 'Team',
-  log: 'Activity Log'
+  log: 'Activity Log',
+  // Settings lives outside the <ul>, and its key was simply never added here —
+  // so opening it put the literal word "undefined" in the page heading.
+  settings: 'Settings',
 };
 
-document.querySelectorAll('.nav-link').forEach(link => {
-  link.addEventListener('click', () => {
-    const sec = link.dataset.section;
-    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-    document.querySelectorAll('.admin-section').forEach(s => s.classList.remove('active'));
-    link.classList.add('active');
-    document.getElementById(`section-${sec}`).classList.add('active');
-    document.getElementById('section-title').textContent = sectionTitles[sec];
+function showAdminSection(sec) {
+  document.querySelectorAll('.nav-link').forEach(l => {
+    const on = l.dataset.section === sec;
+    l.classList.toggle('active', on);
+    l.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('.admin-section').forEach(s => s.classList.remove('active'));
+  document.getElementById(`section-${sec}`)?.classList.add('active');
+  // cap() as the fallback, so a section added to the markup without a title
+  // here reads as its own name rather than "undefined" — which is what
+  // Settings did for as long as it has existed.
+  document.getElementById('section-title').textContent = sectionTitles[sec] || cap(sec);
 
-    if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
-    if (sec === 'bookings') renderBookingsTable();
-    if (sec === 'tools') { populateToolDropdowns(); loadShows(); }
-    if (sec === 'settings') loadPlans();
-    if (sec === 'leads') loadLeads();
-    if (sec === 'analytics') loadAnalytics();
-    if (sec === 'sponsors') loadSponsorsAdmin();
-    if (sec === 'team') { loadTeam(); fillRoster(); syncRoleFields(); }
+  if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
+  if (sec === 'bookings') renderBookingsTable();
+  if (sec === 'tools') { populateToolDropdowns(); loadShows(); }
+  if (sec === 'settings') loadPlans();
+  if (sec === 'leads') loadLeads();
+  if (sec === 'analytics') loadAnalytics();
+  if (sec === 'sponsors') loadSponsorsAdmin();
+  if (sec === 'team') { loadTeam(); fillRoster(); syncRoleFields(); }
+  if (sec === 'log') loadAuditLog();
+}
+
+document.querySelectorAll('.nav-link').forEach(link => {
+  link.addEventListener('click', () => showAdminSection(link.dataset.section));
+  // Click alone made the whole console mouse-only: these are <li> and <div>,
+  // which take neither focus nor Enter on their own.
+  link.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showAdminSection(link.dataset.section); }
   });
 });
 
@@ -147,20 +221,44 @@ function wireMultiBar() {
   document.getElementById('multi-consolidate')?.addEventListener('click', consolidateMultiSelect);
 }
 
-function consolidateMultiSelect() {
+async function consolidateMultiSelect() {
   const ids = [...multiSel];
   if (ids.length < 2) return;
   const btn = document.getElementById('multi-consolidate');
+  // Merging reshapes the plan and destroys the other stands' identities, and it
+  // was doing so the instant the button was pressed with nothing asked.
+  const area = ids.reduce((a, n) => a + (booths[n]?.sqm || 0), 0);
+  if (!await confirmDialog(
+    `Merge ${ids.map(n => shownN(n)).join(', ')} into one stand of about ${area} ${UNIT}?\n\n` +
+    'The other stand numbers disappear from the plan, the table and every dropdown. ' +
+    'Tools → Reset undoes it.',
+    { title: `Merge ${ids.length} stands`, confirmLabel: 'Merge them' })) return;
   if (btn) btn.disabled = true;
   socket.emit('booth:consolidate-many', { boothNumbers: ids }, (res) => {
     if (btn) btn.disabled = false;
     if (res && res.ok) {
       adminToast(`${ids.length} stands merged into ${res.primary}.`, 'ok');
       clearMultiSelect();
-      if (res.primary) selectAdminBooth(res.primary);
+      if (res.primary) { selectAdminBooth(res.primary); nameMergedStand(res.primary); }
     } else {
       adminToast((res && res.error) || 'Could not consolidate those stands.', 'error');
     }
+  });
+}
+
+// A merged block keeps the top-left stand's number, which is rarely what the
+// admin wants it called — so the name is asked for as the last step of the
+// merge rather than left to a separate trip through the Shown Number tool.
+// Leaving it as offered (or cancelling) keeps the number it already has.
+function nameMergedStand(primary) {
+  const current = shownN(primary);
+  const name = prompt(`Merged into stand ${current}. Number to show for the merged stand:`, current);
+  if (name === null) return;
+  const displayNumber = name.trim();
+  if (!displayNumber || displayNumber === current) return;
+  socket.emit('booth:set-number', { boothNumber: primary, displayNumber }, (res) => {
+    if (res && res.ok) adminToast(`Merged stand now shown as ${displayNumber}.`, 'ok');
+    else adminToast((res && res.error) || 'Could not rename the merged stand.', 'error');
   });
 }
 
@@ -246,8 +344,17 @@ async function loadAdminSVG() {
     // which any cache in between is entitled to ignore — and did: one event's
     // plan was served for another's for the five minutes it stayed cached.
     const svgRes = await fetch(`/floorplan.svg?show=${encodeURIComponent(SHOW)}`);
+    // The response was used unconditionally. A 401 hands back the login page's
+    // HTML, which has no <svg> in it, so the next line threw and the whole tab
+    // read "Failed to load" — the one message that rules out the actual cause.
+    if (svgRes.status === 401) {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+      return;
+    }
+    if (!svgRes.ok) throw new Error(`the server answered ${svgRes.status}`);
     mount.innerHTML = await svgRes.text();
     svgDoc = mount.querySelector('svg');
+    if (!svgDoc) throw new Error('that response was not an SVG');
     svgDoc.setAttribute('width', '100%');
     svgDoc.setAttribute('height', '100%');
     adminSvgReady = true;
@@ -255,7 +362,10 @@ async function loadAdminSVG() {
     lucide.createIcons();
     initAdminPanZoom();
   } catch (e) {
-    mount.innerHTML = '<p style="color:#f87171;padding:20px">Failed to load.</p>';
+    mount.replaceChildren(Object.assign(document.createElement('p'), {
+      style: 'color:#f87171;padding:20px',
+      textContent: `Could not load this event's floorplan — ${e.message}.`,
+    }));
   }
 }
 
@@ -397,9 +507,8 @@ let sponsorCacheLoad = null;
 function ensureSponsorCache() {
   if (sponsorAdminCache.length) return Promise.resolve();
   if (!sponsorCacheLoad) {
-    sponsorCacheLoad = fetch('/api/sponsors')
-      .then(r => r.ok ? r.json() : [])
-      .then(rows => { if (!sponsorAdminCache.length) sponsorAdminCache = rows; })
+    sponsorCacheLoad = api('/api/sponsors')
+      .then(rows => { if (!sponsorAdminCache.length) sponsorAdminCache = rows || []; })
       .catch(() => { /* the dropdown just shows "not linked" */ });
   }
   return sponsorCacheLoad;
@@ -500,6 +609,7 @@ function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 // ─── Admin Select Booth ───────────────────────────────────────────────────────
 function selectAdminBooth(id) {
   clearMultiSelect();                              // a plain click abandons any shift-selection
+  if (splitUI.id && splitUI.id !== id) exitSplitMode();   // …and a half-placed divider on another stand
   if (selectedAreaKey) {
     svgDoc.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
     selectedAreaKey = null;
@@ -523,6 +633,7 @@ function multiEl(id) { return svgDoc.querySelector(`[data-booth="${CSS.escape(id
 
 function toggleMultiSelect(id) {
   if (!id || !booths[id]) return;
+  if (splitUI.id) exitSplitMode();                 // one thing at a time on the plan
   // Seed the set with the current single selection so shift-clicking a second
   // stand grows the pair the admin already had focused.
   if (!multiSel.size && selectedAdminId && selectedAdminId !== id) multiSel.add(selectedAdminId);
@@ -551,6 +662,200 @@ function clearMultiSelect() {
 
 // Commercial fields now live under `assignment` on the booth document.
 const dealOf = (b) => (b && b.assignment) || {};
+
+/* ---- Drag-to-split: one divider across a stand, two cells, live sizes ---- */
+//
+// The admin presses Split on a stand, a divider appears across its middle, and
+// dragging it moves the split point with both sizes updating as whole m². The
+// server carves the geometry in the same proportion, so the line lands on the
+// plan where it was dragged. One divider makes exactly two stands; a third
+// part is a second split of one of the halves.
+const splitUI = { id: null, axis: 'vertical', first: 0, total: 0, g: null, group: null, parts: null, dragging: false };
+const SPLIT_NS = 'http://www.w3.org/2000/svg';
+
+// Mirrors the server's rules for booth:split, so the button is only offered
+// where the split would be accepted: available, unsold, not already a merge or
+// a split parent, and big enough to leave 1 m² on each side.
+function canSplitOnMap(b) {
+  return !!b && b.status === 'available' && !dealOf(b).company
+      && !b.mergeSnapshot && !b.splitSnapshot && !!b.geometry && (b.sqm || 0) >= 2;
+}
+
+function enterSplitMode(id) {
+  const b = booths[id];
+  if (!svgDoc || !canSplitOnMap(b)) return;
+  if (splitUI.id) exitSplitMode();
+  clearMultiSelect();
+  const g = b.geometry;
+  splitUI.id = id;
+  splitUI.g = g;
+  splitUI.total = Math.round(b.sqm);
+  splitUI.first = Math.max(1, Math.min(splitUI.total - 1, Math.floor(splitUI.total / 2)));
+  // Default to the direction that leaves the squarer cells: a wide stand is
+  // cut left/right, a tall one top/bottom.
+  splitUI.axis = g.w >= g.h ? 'vertical' : 'horizontal';
+  buildSplitPreview();
+  const bar = document.getElementById('split-bar');
+  if (bar) bar.hidden = false;
+  const idEl = document.getElementById('split-bar-id');
+  if (idEl) idEl.textContent = shownN(id);
+  renderSplitPreview();
+}
+
+function exitSplitMode() {
+  if (splitUI.group && splitUI.group.parentNode) splitUI.group.parentNode.removeChild(splitUI.group);
+  splitUI.group = null; splitUI.parts = null; splitUI.id = null; splitUI.g = null; splitUI.dragging = false;
+  const bar = document.getElementById('split-bar');
+  if (bar) bar.hidden = true;
+}
+
+function setSplitAxis(axis) {
+  if (!splitUI.id) return;
+  splitUI.axis = axis === 'horizontal' ? 'horizontal' : 'vertical';
+  renderSplitPreview();
+}
+
+function setSplitFirst(first) {
+  if (!splitUI.id) return;
+  splitUI.first = Math.max(1, Math.min(splitUI.total - 1, Math.round(first)));
+  renderSplitPreview();
+}
+
+// Build the preview once per split; renderSplitPreview() moves the pieces.
+// Appended at the very end of the SVG so it sits above every stand overlay
+// and split box, which are themselves appended last.
+function buildSplitPreview() {
+  const mk = (tag, cls) => { const el = document.createElementNS(SPLIT_NS, tag); if (cls) el.setAttribute('class', cls); return el; };
+  const group = mk('g'); group.id = 'split-preview';
+  const cellA = mk('rect', 'split-cell'), cellB = mk('rect', 'split-cell');
+  cellA.setAttribute('fill', 'rgba(56,189,248,0.22)');
+  cellB.setAttribute('fill', 'rgba(16,185,129,0.22)');
+  const line = mk('line', 'split-line');
+  line.setAttribute('stroke', '#f43f5e');
+  line.setAttribute('stroke-linecap', 'round');
+  const handle = mk('rect', 'split-handle');
+  const textA = mk('text'), textB = mk('text');
+  [textA, textB].forEach(t => { t.setAttribute('text-anchor', 'middle'); t.setAttribute('dominant-baseline', 'central'); t.setAttribute('fill', '#0f172a'); });
+  group.append(cellA, cellB, line, textA, textB, handle);
+  svgDoc.appendChild(group);
+  splitUI.group = group;
+  splitUI.parts = { cellA, cellB, line, handle, textA, textB };
+
+  // Pointer events drive the drag; the plain mouse/touch events are stopped
+  // here so panzoom (listening on the map frame) doesn't pan the plan too.
+  handle.addEventListener('mousedown', e => e.stopPropagation());
+  handle.addEventListener('touchstart', e => { e.stopPropagation(); }, { passive: true });
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    splitUI.dragging = true;
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    splitFromPointer(e);
+  });
+  handle.addEventListener('pointermove', (e) => { if (splitUI.dragging) splitFromPointer(e); });
+  const stop = () => { splitUI.dragging = false; };
+  handle.addEventListener('pointerup', stop);
+  handle.addEventListener('pointercancel', stop);
+  handle.addEventListener('lostpointercapture', stop);
+}
+
+// Where along the stand the pointer is, as a share of its area. Measured
+// against the stand's own on-screen box, so pan and zoom fall out naturally.
+function splitFromPointer(e) {
+  const el = multiEl(splitUI.id);
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const frac = splitUI.axis === 'vertical' ? (e.clientX - r.left) / r.width : (e.clientY - r.top) / r.height;
+  if (!Number.isFinite(frac)) return;
+  setSplitFirst(frac * splitUI.total);
+}
+
+function renderSplitPreview() {
+  const P = splitUI.parts, g = splitUI.g;
+  if (!P || !g) return;
+  const vertical = splitUI.axis === 'vertical';
+  const frac = splitUI.first / splitUI.total;
+  const len = vertical ? g.w : g.h;
+  const a = len * frac;
+  const shorter = Math.min(g.w, g.h);
+  const sw = Math.max(1, Math.min(4, shorter * 0.05));       // divider stroke
+  const hw = Math.max(8, Math.min(24, shorter * 0.3));       // grab width around it
+  const setRect = (el, x, y, w, h) => { el.setAttribute('x', x); el.setAttribute('y', y); el.setAttribute('width', Math.max(0, w)); el.setAttribute('height', Math.max(0, h)); };
+
+  if (vertical) {
+    setRect(P.cellA, g.x, g.y, a, g.h);
+    setRect(P.cellB, g.x + a, g.y, g.w - a, g.h);
+    P.line.setAttribute('x1', g.x + a); P.line.setAttribute('x2', g.x + a);
+    P.line.setAttribute('y1', g.y);     P.line.setAttribute('y2', g.y + g.h);
+    setRect(P.handle, g.x + a - hw / 2, g.y, hw, g.h);
+  } else {
+    setRect(P.cellA, g.x, g.y, g.w, a);
+    setRect(P.cellB, g.x, g.y + a, g.w, g.h - a);
+    P.line.setAttribute('x1', g.x);     P.line.setAttribute('x2', g.x + g.w);
+    P.line.setAttribute('y1', g.y + a); P.line.setAttribute('y2', g.y + a);
+    setRect(P.handle, g.x, g.y + a - hw / 2, g.w, hw);
+  }
+  P.line.setAttribute('stroke-width', sw);
+  P.handle.setAttribute('class', 'split-handle ' + (vertical ? 'vertical' : 'horizontal'));
+
+  // Each cell's size sits in its centre, sized to fit that cell — a thin
+  // sliver gets a small figure rather than one spilling over the line.
+  const second = splitUI.total - splitUI.first;
+  const label = (t, str, x, y, w, h) => {
+    t.textContent = str;
+    t.setAttribute('x', x); t.setAttribute('y', y);
+    const fs = Math.max(4, Math.min(12, w / (0.62 * str.length), h / 1.6));
+    t.setAttribute('font-size', fs);
+  };
+  if (vertical) {
+    label(P.textA, `${splitUI.first} ${UNIT}`, g.x + a / 2, g.y + g.h / 2, a, g.h);
+    label(P.textB, `${second} ${UNIT}`, g.x + a + (g.w - a) / 2, g.y + g.h / 2, g.w - a, g.h);
+  } else {
+    label(P.textA, `${splitUI.first} ${UNIT}`, g.x + g.w / 2, g.y + a / 2, g.w, a);
+    label(P.textB, `${second} ${UNIT}`, g.x + g.w / 2, g.y + a + (g.h - a) / 2, g.w, g.h - a);
+  }
+
+  const aEl = document.getElementById('split-bar-a'), bEl = document.getElementById('split-bar-b');
+  if (aEl) aEl.textContent = `${splitUI.first} ${UNIT}`;
+  if (bEl) bEl.textContent = `${second} ${UNIT}`;
+  document.getElementById('split-bar-vertical')?.classList.toggle('active', vertical);
+  document.getElementById('split-bar-horizontal')?.classList.toggle('active', !vertical);
+}
+
+function applySplit() {
+  if (!splitUI.id) return;
+  const { id, axis, first, total } = splitUI;
+  const btn = document.getElementById('split-bar-apply');
+  if (btn) btn.disabled = true;
+  socket.emit('booth:split', { boothNumber: id, parts: 2, axis, firstSqm: first }, (res) => {
+    if (btn) btn.disabled = false;
+    if (res && res.ok) {
+      adminToast(`Stand ${shownN(id)} split into ${first} + ${total - first} ${UNIT} — added ${(res.created || []).join(', ')}.`, 'ok');
+      exitSplitMode();
+    } else {
+      adminToast((res && res.error) || 'Could not split that stand.', 'error');
+    }
+  });
+}
+
+// Bar buttons and keys. Wired once; the bar is a fixed part of the page.
+(function wireSplitBar() {
+  document.getElementById('split-bar-vertical')?.addEventListener('click', () => setSplitAxis('vertical'));
+  document.getElementById('split-bar-horizontal')?.addEventListener('click', () => setSplitAxis('horizontal'));
+  document.getElementById('split-bar-apply')?.addEventListener('click', applySplit);
+  document.getElementById('split-bar-cancel')?.addEventListener('click', exitSplitMode);
+  document.addEventListener('keydown', (e) => {
+    if (!splitUI.id) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+    const vertical = splitUI.axis === 'vertical';
+    const back = vertical ? 'ArrowLeft' : 'ArrowUp', fwd = vertical ? 'ArrowRight' : 'ArrowDown';
+    if (e.key === 'Enter' && tag === 'BUTTON') return;   // the focused button already handles Enter
+    if (e.key === 'Escape') { e.preventDefault(); exitSplitMode(); }
+    else if (e.key === back) { e.preventDefault(); setSplitFirst(splitUI.first - 1); }
+    else if (e.key === fwd)  { e.preventDefault(); setSplitFirst(splitUI.first + 1); }
+    else if (e.key === 'Enter') { e.preventDefault(); applySplit(); }
+  });
+})();
 
 // Show-level settings pushed from the server: area unit (m²/ft², a label only)
 // and the rate. All update live via the 'settings' socket event.
@@ -599,8 +904,7 @@ function renderAdminBoothAction(n) {
   // activity stream, so it survives restarts and is not capped.
   const clickList = document.getElementById('aba-click-list');
   clickList.textContent = 'Loading…';
-  fetch(`/api/booths/${encodeURIComponent(n)}/activity?limit=20`)
-    .then(r => r.ok ? r.json() : [])
+  api(`/api/booths/${encodeURIComponent(n)}/activity?limit=20`)
     .then(rows => {
       clickList.replaceChildren();
       if (!rows.length) { clickList.textContent = 'No activity yet.'; return; }
@@ -641,10 +945,6 @@ function renderAdminBoothAction(n) {
   };
 }
 
-// ─── Bookings table ───────────────────────────────────────────────────────────
-// Built with DOM nodes rather than an interpolated HTML string. Company names
-// and notes originate from the public enquiry form, so treating them as markup
-// made the admin dashboard executable by anyone who could submit the form.
 function cell(parent, tag = 'td') {
   const el = document.createElement(tag);
   parent.appendChild(el);
@@ -662,12 +962,115 @@ function actionButton(td, label, cls, action, n) {
   return btn;
 }
 
-function renderBookingsTable() {
-  const tbody  = document.getElementById('bookings-tbody');
+// ── Holds: the clock nobody could see ────────────────────────────────────────
+//
+// A hold expires after 24 hours and the stand goes quietly back on sale. The
+// server has tracked the expiry and swept it all along; the console simply never
+// showed it, so "on hold" looked like a state rather than a countdown and an
+// operator found out it had lapsed by noticing the stand was white again.
+//
+// Expiry lives in the holds collection, not on the booth, so it is fetched
+// separately and kept in this map. Re-read on every state broadcast (the only
+// thing that can start or end a hold) and on a slow timer as a backstop.
+let holdsCache = new Map();          // boothNumber -> expiry in ms
+
+async function loadHolds() {
+  try {
+    const rows = await api('/api/holds') || [];
+    holdsCache = new Map(rows
+      .filter(h => h && h.boothNumber && h.expiresAt)
+      .map(h => [String(h.boothNumber), new Date(h.expiresAt).getTime()]));
+  } catch {
+    // Not fatal: the stand still reads "On hold", it just has no clock on it.
+    return;
+  }
+  paintHoldClocks();
+}
+
+/** "3h 12m left" — the unit people actually think in at each scale. */
+function holdLeft(boothNumber) {
+  const exp = holdsCache.get(String(boothNumber));
+  if (!exp) return null;
+  const ms = exp - Date.now();
+  if (ms <= 0) return { text: 'expired — releasing shortly', urgent: true, ms };
+  const mins = Math.floor(ms / 60000);
+  if (mins >= 1440) return { text: `${Math.floor(mins / 1440)}d ${Math.floor((mins % 1440) / 60)}h left`, urgent: false, ms };
+  if (mins >= 60)   return { text: `${Math.floor(mins / 60)}h ${mins % 60}m left`, urgent: mins < 120, ms };
+  if (mins >= 1)    return { text: `${mins}m left`, urgent: true, ms };
+  return { text: `${Math.max(0, Math.floor(ms / 1000))}s left`, urgent: true, ms };
+}
+
+/** Repaint every clock on the page in place — no rebuild, no lost focus. */
+function paintHoldClocks() {
+  document.querySelectorAll('[data-hold-clock]').forEach(node => {
+    const left = holdLeft(node.dataset.holdClock);
+    node.textContent = left ? left.text : '';
+    node.classList.toggle('hidden', !left);
+    node.classList.toggle('urgent', !!(left && left.urgent));
+  });
+  if (selectedAdminId) renderHoldPanel(selectedAdminId);
+}
+setInterval(paintHoldClocks, 1000);
+setInterval(loadHolds, 120000);      // backstop for a hold placed by someone else
+
+/** The hold block in the stand panel: when it runs out, and how to extend it. */
+function renderHoldPanel(n) {
+  const row = document.getElementById('aba-hold-row');
+  if (!row) return;
+  const b = booths[n];
+  const left = b && b.status === 'held' ? holdLeft(n) : null;
+  row.classList.toggle('hidden', !left);
+  if (!left) return;
+  const txt = document.getElementById('aba-hold-left');
+  if (txt) {
+    const exp = holdsCache.get(String(n));
+    txt.textContent = `Hold ${left.text} · until ${new Date(exp).toLocaleString('en-GB')}`;
+    txt.classList.toggle('urgent', left.urgent);
+  }
+  const btn = document.getElementById('aba-hold-extend');
+  if (btn) btn.dataset.booth = n;
+}
+
+/** Give a hold another 24 hours, measured from whichever is later. */
+async function extendHold(boothNumber, btn) {
+  return withPending(btn, async () => {
+    try {
+      const r = await api(`/api/holds/${encodeURIComponent(boothNumber)}/extend`, {
+        method: 'POST', body: JSON.stringify({ hours: 24 }),
+      });
+      holdsCache.set(String(boothNumber), new Date(r.expiresAt).getTime());
+      paintHoldClocks();
+      adminToast(`Stand ${shownN(boothNumber)} now held until ${new Date(r.expiresAt).toLocaleString('en-GB')}.`, 'ok');
+    } catch (e) {
+      adminToast(e.message || 'Could not extend that hold.', 'error');
+      loadHolds();
+    }
+  });
+}
+
+document.getElementById('aba-hold-extend')?.addEventListener('click', (e) => {
+  const n = e.currentTarget.dataset.booth;
+  if (n) extendHold(n, e.currentTarget);
+});
+
+// ─── Bookings table ───────────────────────────────────────────────────────────
+//
+// Built with DOM nodes rather than an interpolated HTML string. Company names
+// and notes originate from the public enquiry form, so treating them as markup
+// made the admin dashboard executable by anyone who could submit the form.
+//
+// It is also PATCHED rather than rebuilt whenever it can be. This table used to
+// be thrown away and re-created on every broadcast, and broadcasts used to
+// include a visitor hovering a stand on the public plan — so an admin typing a
+// note lost it mid-word to a stranger's mouse. The server no longer broadcasts
+// on presence; this side no longer rebuilds unless the set of rows has actually
+// changed, and never while the operator has focus inside the table.
+
+/** Which stands the current search/filter selects, in display order. */
+function bookingRows() {
   const search = document.getElementById('bookings-search').value.toLowerCase();
   const filter = document.getElementById('bookings-filter').value;
-
-  const rows = Object.values(booths).filter(b => {
+  return Object.values(booths).filter(b => {
     const d = dealOf(b);
     const matchFilter = filter === 'all' || b.status === filter;
     const matchSearch = !search ||
@@ -676,73 +1079,205 @@ function renderBookingsTable() {
       (d.company || '').toLowerCase().includes(search);
     return matchFilter && matchSearch;
   });
+}
 
-  tbody.replaceChildren();
+/** A deal price or note only exists on a sold or held stand — the server
+ *  refuses the write on any other, so offering the box was offering a failure. */
+const dealEditable = (b) => b.status === 'sold' || b.status === 'held';
 
-  rows.forEach(b => {
-    const d  = dealOf(b);
-    const n  = b.boothNumber;
-    const tr = document.createElement('tr');
+function dealInput({ type, cls, placeholder, width, field, booth, value, enabled, label }) {
+  const inp = document.createElement('input');
+  inp.type = type;
+  inp.className = `admin-input ${cls}`;
+  inp.placeholder = placeholder;
+  inp.value = value;
+  inp.style.cssText = `width:${width}px;padding:4px 8px;font-size:12px;background:var(--bg);`;
+  inp.dataset.field = field;
+  inp.dataset.booth = booth;
+  // Remembered so a rejected save can put back exactly what was on screen.
+  inp.dataset.prev = value;
+  inp.disabled = !enabled;
+  inp.title = enabled ? '' : 'Only a sold or held stand can carry a deal price or notes.';
+  // Every one of these boxes was unlabelled — a screen reader announced eight
+  // identical "edit text" fields per row with nothing to tell them apart.
+  inp.setAttribute('aria-label', `${label} for stand ${booth}`);
+  return inp;
+}
 
-    const stand = cell(tr);
-    const strong = document.createElement('strong');
-    // Show the override when set, with the real identity in parentheses so the
-    // operator can still cross-reference bookings/history keyed by identity.
-    strong.textContent = b.displayNumber ? `Stand ${b.displayNumber} (${n})` : `Stand ${n}`;
-    stand.appendChild(strong);
+function buildBookingRow(b) {
+  const d  = dealOf(b);
+  const n  = b.boothNumber;
+  const tr = document.createElement('tr');
+  tr.dataset.booth = n;
 
-    cell(tr).textContent = `${b.sqm} ${UNIT}`;
-    cell(tr).textContent = `${CUR}${(b.listPrice || 0).toLocaleString()}`;
+  const stand = cell(tr);
+  stand.dataset.cell = 'stand';
+  const strong = document.createElement('strong');
+  // Show the override when set, with the real identity in parentheses so the
+  // operator can still cross-reference bookings/history keyed by identity.
+  strong.textContent = b.displayNumber ? `Stand ${b.displayNumber} (${n})` : `Stand ${n}`;
+  stand.appendChild(strong);
 
-    const priceTd = cell(tr);
-    const priceIn = document.createElement('input');
-    priceIn.type = 'number';
-    priceIn.className = 'admin-input';
-    priceIn.placeholder = 'Price…';
-    priceIn.value = d.actualPrice ?? '';
-    priceIn.style.cssText = 'width:80px;padding:4px 8px;font-size:12px;background:var(--bg);';
-    priceIn.dataset.field = 'price';
-    priceIn.dataset.booth = n;
-    priceTd.appendChild(priceIn);
+  const sizeTd = cell(tr); sizeTd.dataset.cell = 'size';
+  sizeTd.textContent = `${b.sqm} ${UNIT}`;
 
-    const statusTd = cell(tr);
-    const pill = document.createElement('span');
-    pill.className = `status-pill pill-${b.status}`;
+  const listTd = cell(tr); listTd.dataset.cell = 'list';
+  listTd.textContent = money(b.listPrice || 0);
+
+  const priceTd = cell(tr); priceTd.dataset.cell = 'price';
+  priceTd.appendChild(dealInput({
+    type: 'number', cls: 'deal-price', placeholder: 'Price…', width: 80,
+    field: 'price', booth: n, value: d.actualPrice ?? '', enabled: dealEditable(b),
+    label: 'Deal price',
+  }));
+
+  const statusTd = cell(tr); statusTd.dataset.cell = 'status';
+  const pill = document.createElement('span');
+  pill.className = `status-pill pill-${b.status}`;
+  pill.textContent = cap(b.status);
+  statusTd.appendChild(pill);
+  // The countdown on a held stand, patched in place by paintHoldClocks.
+  const clock = document.createElement('span');
+  clock.className = 'hold-clock hidden';
+  clock.dataset.holdClock = n;
+  statusTd.appendChild(clock);
+
+  const companyTd = cell(tr); companyTd.dataset.cell = 'company';
+  paintCompanyCell(companyTd, d.company);
+
+  const notesTd = cell(tr); notesTd.dataset.cell = 'notes';
+  notesTd.appendChild(dealInput({
+    type: 'text', cls: 'deal-notes', placeholder: 'Notes…', width: 140,
+    field: 'notes', booth: n, value: d.notes ?? '', enabled: dealEditable(b),
+    label: 'Notes',
+  }));
+
+  const actions = cell(tr); actions.dataset.cell = 'actions';
+  actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+  paintActionCell(actions, b);
+
+  return tr;
+}
+
+function paintCompanyCell(td, company) {
+  td.replaceChildren();
+  if (company) { td.textContent = company; return; }
+  const dash = document.createElement('span');
+  dash.style.color = 'var(--muted)';
+  dash.textContent = '—';
+  td.appendChild(dash);
+}
+
+function paintActionCell(td, b) {
+  const n = b.boothNumber;
+  td.replaceChildren();
+  td.dataset.forStatus = b.status;
+  if (b.status !== 'sold')      actionButton(td, 'Book',    'success', 'book',    n);
+  if (b.status === 'available') actionButton(td, 'Hold',    'warning', 'hold',    n);
+  if (b.status === 'held')      actionButton(td, '+24h',    '',        'extend',  n);
+  if (b.status !== 'available') actionButton(td, 'Release', '',        'release', n);
+  const csv = actionButton(td, '⬇️ CSV', '', 'csv', n);
+  csv.style.cssText += ';background:var(--glass-bg);border:1px solid var(--border);';
+}
+
+/** Update one existing row's cells without replacing the row. */
+function patchBookingRow(tr, b) {
+  const d = dealOf(b);
+  const q = (name) => tr.querySelector(`[data-cell="${name}"]`);
+
+  const stand = q('stand')?.querySelector('strong');
+  const standText = b.displayNumber ? `Stand ${b.displayNumber} (${b.boothNumber})` : `Stand ${b.boothNumber}`;
+  if (stand && stand.textContent !== standText) stand.textContent = standText;
+
+  const size = q('size'); const sizeText = `${b.sqm} ${UNIT}`;
+  if (size && size.textContent !== sizeText) size.textContent = sizeText;
+
+  const list = q('list'); const listText = money(b.listPrice || 0);
+  if (list && list.textContent !== listText) list.textContent = listText;
+
+  const pill = q('status')?.querySelector('.status-pill');
+  if (pill && pill.textContent !== cap(b.status)) {
     pill.textContent = cap(b.status);
-    statusTd.appendChild(pill);
+    pill.className = `status-pill pill-${b.status}`;
+  }
 
-    const companyTd = cell(tr);
-    if (d.company) {
-      companyTd.textContent = d.company;
-    } else {
-      const dash = document.createElement('span');
-      dash.style.color = 'var(--muted)';
-      dash.textContent = '—';
-      companyTd.appendChild(dash);
-    }
+  const company = q('company');
+  if (company && company.textContent.trim() !== (d.company || '—')) paintCompanyCell(company, d.company);
 
-    const notesTd = cell(tr);
-    const notesIn = document.createElement('input');
-    notesIn.type = 'text';
-    notesIn.className = 'admin-input';
-    notesIn.placeholder = 'Notes…';
-    notesIn.value = d.notes ?? '';
-    notesIn.style.cssText = 'width:140px;padding:4px 8px;font-size:12px;background:var(--bg);';
-    notesIn.dataset.field = 'notes';
-    notesIn.dataset.booth = n;
-    notesTd.appendChild(notesIn);
+  const actions = q('actions');
+  if (actions && actions.dataset.forStatus !== b.status) paintActionCell(actions, b);
 
-    const actions = cell(tr);
-    actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
-    if (b.status !== 'sold')      actionButton(actions, 'Book',    'success', 'book',    n);
-    if (b.status === 'available') actionButton(actions, 'Hold',    'warning', 'hold',    n);
-    if (b.status !== 'available') actionButton(actions, 'Release', '',        'release', n);
-    const csv = actionButton(actions, '⬇️ CSV', '', 'csv', n);
-    csv.style.cssText += ';background:var(--glass-bg);border:1px solid var(--border);';
-
-    tbody.appendChild(tr);
+  // The two editable fields: never overwritten while they are being typed into.
+  [['price', d.actualPrice ?? ''], ['notes', d.notes ?? '']].forEach(([field, value]) => {
+    const inp = tr.querySelector(`input[data-field="${field}"]`);
+    if (!inp) return;
+    inp.disabled = !dealEditable(b);
+    inp.title = dealEditable(b) ? '' : 'Only a sold or held stand can carry a deal price or notes.';
+    if (document.activeElement === inp) return;
+    if (String(inp.value) !== String(value)) inp.value = value;
+    inp.dataset.prev = value;
   });
 }
+
+let lastRowSig = '';
+let bookingsDeferred = false;
+
+/**
+ * Bring the table in line with the current state, doing the least work that
+ * will do it.
+ *
+ * Three levels, deliberately: leave it entirely alone while the operator is
+ * typing in it; patch the cells when the same stands are showing; rebuild only
+ * when the set of rows has genuinely changed.
+ */
+function refreshBookingsTable() {
+  const tbody = document.getElementById('bookings-tbody');
+  if (!tbody) return;
+
+  // Never rebuild under someone's hands. A rebuild moves focus, drops a
+  // half-typed note and closes an open select — which is exactly the bug.
+  if (tbody.contains(document.activeElement)) {
+    bookingsDeferred = true;
+    const rows = bookingRows();
+    // The focused row's own cells are still safe to patch: patchBookingRow
+    // skips whatever is focused.
+    rows.forEach(b => {
+      const tr = tbody.querySelector(`tr[data-booth="${CSS.escape(b.boothNumber)}"]`);
+      if (tr) patchBookingRow(tr, b);
+    });
+    paintHoldClocks();
+    return;
+  }
+
+  const rows = bookingRows();
+  const sig = rows.map(b => b.boothNumber).join('|');
+  if (sig !== lastRowSig) {
+    lastRowSig = sig;
+    tbody.replaceChildren(...rows.map(buildBookingRow));
+  } else {
+    rows.forEach(b => {
+      const tr = tbody.querySelector(`tr[data-booth="${CSS.escape(b.boothNumber)}"]`);
+      if (tr) patchBookingRow(tr, b);
+    });
+  }
+  bookingsDeferred = false;
+  paintHoldClocks();
+}
+
+/** A full rebuild, for when the operator themselves changed what should show. */
+function renderBookingsTable() {
+  lastRowSig = '';
+  refreshBookingsTable();
+}
+
+// Anything deferred while the operator was typing is applied the moment they
+// step out of the table, rather than waiting for the next broadcast.
+document.getElementById('bookings-tbody')?.addEventListener('focusout', () => {
+  setTimeout(() => {
+    const tbody = document.getElementById('bookings-tbody');
+    if (bookingsDeferred && tbody && !tbody.contains(document.activeElement)) refreshBookingsTable();
+  }, 0);
+});
 
 // Delegation, so no handler names are exposed on `window` and no user data is
 // ever interpolated into an attribute.
@@ -811,9 +1346,19 @@ function renderStandActions(n) {
   book.onclick    = () => adminAction('book', n);
   hold.onclick    = () => adminAction('hold', n);
   release.onclick = () => adminAction('release', n);
+
+  // Drag-to-split, offered only where the server would accept the split.
+  const split = document.getElementById('aba-split');
+  if (split) {
+    split.hidden = !canSplitOnMap(b);
+    split.onclick = () => enterSplitMode(n);
+  }
 }
 
-function adminAction(action, boothNumber) {
+/** What the release/un-book gate is asking for, in the operator's words. */
+const secretNoun = () => (recoveryRequired ? 'recovery key' : 'admin password');
+
+async function adminAction(action, boothNumber) {
   const done = (verb) => (res) => {
     if (res && res.ok) adminToast(`Stand ${boothNumber} ${verb}.`, 'ok');
     else adminToast((res && res.error) || `Could not ${action} stand ${boothNumber}.`, 'error');
@@ -839,33 +1384,80 @@ function adminAction(action, boothNumber) {
   }
   if (action === 'release') {
     // Releasing frees a stand and clears its booking, so it's gated: the recovery
-    // key when the failsafe is on, otherwise the admin's own password.
-    const secret = prompt(recoveryRequired
-      ? `Enter your RECOVERY KEY to release stand ${boothNumber}.\nThis frees the stand and clears any booking.`
-      : `Enter your admin password to release stand ${boothNumber}.\nThis frees the stand and clears any booking.`);
+    // key when the failsafe is on, otherwise the admin's own password. Asked for
+    // in a masked field — prompt() showed it in clear text and left it in the
+    // browser's dialog history.
+    const b = booths[boothNumber];
+    const co = dealOf(b).company;
+    const price = dealOf(b).actualPrice;
+    // Snapshot BEFORE the release, because the release is what destroys it —
+    // this is what Undo puts back.
+    const snapshot = {
+      status: b?.status,
+      assignment: {
+        company: co || '',
+        actualPrice: dealOf(b).actualPrice ?? null,
+        notes: dealOf(b).notes || '',
+        tags: (dealOf(b).tags || []).slice(),
+        country: dealOf(b).country || null,
+      },
+    };
+    const secret = await askSecret(
+      `Releasing stand ${shownN(boothNumber)}${co ? ` from ${co}` : ''}` +
+      `${price != null ? ` (${money(price)})` : ''}.\n\n` +
+      'The stand goes back on sale and its company, price and notes are cleared.',
+      { title: `Release stand ${shownN(boothNumber)}`,
+        label: recoveryRequired ? 'Recovery key' : 'Your admin password',
+        confirmLabel: 'Release it' });
     if (secret === null) return;                       // cancelled
-    if (!secret) return adminToast(`${recoveryRequired ? 'Recovery key' : 'Password'} required to release a stand.`, 'error');
-    socket.emit('booth:release', { boothNumber, password: secret }, done('released'));
+    if (!secret) return adminToast(`A ${secretNoun()} is required to release a stand.`, 'error');
+    socket.emit('booth:release', { boothNumber, password: secret }, (res) => {
+      if (res && res.ok) offerUndoRelease(boothNumber, snapshot, secret);
+      else adminToast((res && res.error) || `Could not release stand ${boothNumber}.`, 'error');
+    });
   }
+}
+
+/**
+ * A short window in which a release can be taken back.
+ *
+ * Release destroys a booking outright — the company, the negotiated price, the
+ * notes, the tags — and the only recovery was to retype all of it from memory,
+ * assuming anyone remembered it. The snapshot is the console's own copy of the
+ * stand as it was a moment ago, and the secret has just been verified, so
+ * undoing costs one click rather than a second interrogation.
+ *
+ * The secret is held in a closure for the length of the window and nowhere
+ * else — not in storage, not on an element — and the server refuses the restore
+ * outright if anyone else has taken the stand in the meantime.
+ */
+function offerUndoRelease(boothNumber, snapshot, secret) {
+  if (!snapshot?.assignment?.company) {
+    return adminToast(`Stand ${shownN(boothNumber)} released.`, 'ok');
+  }
+  window.UI.toastAction(
+    `Stand ${shownN(boothNumber)} released from ${snapshot.assignment.company}.`,
+    { ...TOAST, kind: 'ok', ms: 10000, label: 'Undo',
+      onAction: async () => {
+        try {
+          await api(`/api/booths/${encodeURIComponent(boothNumber)}/restore`, {
+            method: 'POST',
+            headers: { 'X-Confirm-Password': secret },
+            body: JSON.stringify(snapshot),
+          });
+          adminToast(`Stand ${shownN(boothNumber)} restored to ${snapshot.assignment.company}.`, 'ok');
+        } catch (e) {
+          adminToast(e.message || 'Could not restore that booking.', 'error');
+        }
+      } });
 }
 
 // ─── Toast ──────────────────────────────────────────────────────────────────
 // Transient confirmation or error. Server actions used to fail silently, so an
 // admin had no way to tell a rejected hold from a successful one.
-let toastTimer = null;
+const TOAST = { id: 'admin-toast', cls: 'admin-toast', show: 'show', ms: 4000 };
 function adminToast(message, kind = 'ok') {
-  let el = document.getElementById('admin-toast');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'admin-toast';
-    el.className = 'admin-toast';
-    el.setAttribute('role', 'status');
-    document.body.appendChild(el);
-  }
-  el.textContent = message;
-  el.className = `admin-toast show ${kind}`;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'admin-toast'; }, 4000);
+  return window.UI.toast(message, kind, TOAST);
 }
 
 function inlineUpdateDeal(boothNumber, field, value) {
@@ -1094,7 +1686,12 @@ function updateMovePreview() {
   const from = booths[document.getElementById('move-from')?.value];
   const to   = booths[document.getElementById('move-to')?.value];
   if (!from || !to) { el.classList.add('hidden'); return; }
-  const eur = n => CUR + Number(n || 0).toLocaleString();
+  // money() is the shared helper now. This function called one that was never
+  // defined anywhere, while this unused local `eur` sat right beside it — so
+  // picking both Move dropdowns threw a ReferenceError, and because
+  // populateToolDropdowns calls this and the state:full handler calls THAT,
+  // every later broadcast died at the same line: the search list, the tag
+  // counts and the plan repaint all stopped until someone reloaded.
   const dealFrom = dealOf(from);
   const rate = (dealFrom.actualPrice != null && from.sqm > 0) ? dealFrom.actualPrice / from.sqm : null;
   const newCost = rate != null ? Math.round(rate * to.sqm) : to.listPrice;
@@ -1260,6 +1857,28 @@ document.getElementById('clear-log').addEventListener('click', () => {
 
 // ─── Socket Events ────────────────────────────────────────────────────────────
 let lastAdminSig = '';
+
+/**
+ * Run one section's render without letting it take the others down with it.
+ *
+ * The handler below was a straight run of eight calls. A throw anywhere in it —
+ * and there WAS one, see updateMovePreview — abandoned everything after that
+ * line for the rest of the session, so the page kept receiving broadcasts and
+ * silently ignored them. The failure is reported once per section rather than
+ * on every broadcast, because a broken render fires as often as the plan moves.
+ */
+const renderFailures = new Set();
+function safely(what, fn) {
+  try { fn(); }
+  catch (e) {
+    console.error(`Admin render failed (${what}):`, e);
+    if (!renderFailures.has(what)) {
+      renderFailures.add(what);
+      adminToast(`The ${what} could not be redrawn — reload if it looks out of date.`, 'error');
+    }
+  }
+}
+
 socket.on('state:full', (serverBooths) => {
   const incoming = new Set(serverBooths.map(b => b.boothNumber));
   serverBooths.forEach(b => { booths[b.boothNumber] = b; });
@@ -1267,36 +1886,84 @@ socket.on('state:full', (serverBooths) => {
   // cell) so the tools, tables and overview counts don't show ghosts.
   Object.keys(booths).forEach(n => { if (!incoming.has(n)) delete booths[n]; });
   if (selectedAdminId && !booths[selectedAdminId]) selectedAdminId = null;
+  // Someone else booked or reshaped the stand under the divider: the split the
+  // admin is lining up can no longer happen, so take the divider away rather
+  // than let it be submitted and refused.
+  if (splitUI.id && !canSplitOnMap(booths[splitUI.id])) exitSplitMode();
 
-  updateOverview();
-  renderBookingsTable();
-  populateToolDropdowns();
-  populateAdminSearchList();
-  renderTagCatalogue();                       // the "used on N stands" counts move with the booths
+  safely('overview', updateOverview);
+  safely('bookings table', refreshBookingsTable);
+  safely('tool dropdowns', populateToolDropdowns);
+  safely('stand search list', populateAdminSearchList);
+  safely('activity tags', renderTagCatalogue);   // "used on N stands" moves with the booths
+  // A broadcast is a state CHANGE, which is the only thing that can start or
+  // end a hold — so it is exactly when the countdowns need re-reading.
+  safely('hold clocks', loadHolds);
   if (selectedAdminId) {
-    renderBoothTags(selectedAdminId);
-    renderStandActions(selectedAdminId);
-    renderBoothSponsor(selectedAdminId);
-  }
-
-  // Tag on the first state if the floorplan tab is already open; otherwise
-  // loadAdminSVG() tags when the tab is first shown.
-  if (adminSvgReady && !adminTagged) { tagAdminBooths(); lastAdminSig = BoothMap.signature(serverBooths); return; }
-  if (svgDoc && adminTagged) {
-    // A split/merge/reset changes the plan's STRUCTURE; re-tag the whole map so
-    // new cells appear and removed ones disappear without a page reload.
-    const sig = BoothMap.signature(serverBooths);
-    if (sig !== lastAdminSig) { lastAdminSig = sig; retagAdminMap(); }
-    else Object.values(booths).forEach(b => {
-      const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
-      if (el) applyAdminVisual(el, b.status);
+    safely('stand panel', () => {
+      renderBoothTags(selectedAdminId);
+      renderStandActions(selectedAdminId);
+      renderBoothSponsor(selectedAdminId);
+      renderHoldPanel(selectedAdminId);
     });
   }
+
+  safely('floorplan', () => {
+    // Tag on the first state if the floorplan tab is already open; otherwise
+    // loadAdminSVG() tags when the tab is first shown.
+    if (adminSvgReady && !adminTagged) { tagAdminBooths(); lastAdminSig = BoothMap.signature(serverBooths); return; }
+    if (svgDoc && adminTagged) {
+      // A split/merge/reset changes the plan's STRUCTURE; re-tag the whole map so
+      // new cells appear and removed ones disappear without a page reload.
+      const sig = BoothMap.signature(serverBooths);
+      if (sig !== lastAdminSig) { lastAdminSig = sig; retagAdminMap(); }
+      else Object.values(booths).forEach(b => {
+        const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
+        if (el) applyAdminVisual(el, b.status);
+      });
+    }
+  });
 });
+
+/**
+ * Live viewer counts, on their own channel.
+ *
+ * Presence used to ride on state:full, so a visitor moving their mouse over a
+ * stand on the public plan rebuilt this entire console: the bookings table, all
+ * eight tool dropdowns and the tag catalogue. An admin halfway through typing a
+ * note watched it vanish, and an open <select> snapped shut. The server now
+ * sends presence separately — and this handler touches NOTHING but the numbers.
+ *
+ * The payload only carries stands that have at least one viewer; anything
+ * absent from it is at zero.
+ */
+socket.on('viewers:map', (map) => {
+  const counts = map && typeof map === 'object' ? map : {};
+  Object.values(booths).forEach(b => { b.viewers = Number(counts[b.boothNumber]) || 0; });
+
+  // The one place a count is on screen, patched in place.
+  if (selectedAdminId) {
+    const cell = document.getElementById('aba-viewers');
+    if (cell) cell.textContent = booths[selectedAdminId]?.viewers || 0;
+  }
+});
+
+// The server's "your first state has landed". Used rather than ignored: it is
+// the moment the console genuinely has the event in front of it.
+socket.on('ready', () => {
+  document.getElementById('conn-badge')?.classList.add('is-live');
+  loadHolds();
+});
+
+// The analytics session this socket belongs to. Kept rather than dropped, so a
+// line in the activity log can be matched to this browser.
+let adminSessionId = null;
+socket.on('session:id', (id) => { adminSessionId = id || null; });
 
 // Re-run the SVG↔booth mapping from a clean slate after a structural change.
 function retagAdminMap() {
   if (!svgDoc) return;
+  if (splitUI.id) exitSplitMode();   // the stand under the divider may be gone or reshaped
   BoothMap.clear(svgDoc);
   adminTagged = false;
   tagAdminBooths();
@@ -1374,30 +2041,39 @@ document.querySelectorAll('[data-currency]').forEach(btn => btn.addEventListener
 
 // Rejected holds, failed merges and denied actions used to disappear silently.
 socket.on('error:action', ({ message }) => adminToast(message || 'That action could not be completed.', 'error'));
-socket.on('error:auth',   ({ message }) => adminToast(message || 'Administrator access required.', 'error'));
 
-socket.on('booth:updated', (b) => {
-  booths[b.boothNumber] = { ...booths[b.boothNumber], ...b };
-  updateOverview();
-  renderBookingsTable();
-  if (svgDoc) {
-    const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);
-    if (el) applyAdminVisual(el, b.status);
-  }
-  if (selectedAdminId === b.boothNumber) renderAdminBoothAction(b.boothNumber);
+// "Administrator access required" on a page you are LOOKING at means the socket
+// is no longer authenticated — almost always an expired session after a
+// reconnect. Toasting it on every action and leaving the admin there was a dead
+// end; re-check and send them to sign in.
+socket.on('error:auth', ({ message }) => {
+  adminToast(message || 'Administrator access required.', 'error');
+  checkSession();
 });
+
+// 'booth:updated' used to be handled here. The server has never emitted it, so
+// the handler was fifteen lines that could not run — and its existence implied a
+// per-stand update channel that does not exist. Stand changes arrive as
+// state:full, which is why that handler has to stay cheap.
 
 socket.on('stats:updated', (stats) => {
   updateOverviewFromStats(stats);
 });
 
-socket.on('booth:consolidated', ({ secondary }) => {
-  // Drop the absorbed stand from the client map; the state:full that follows
-  // this event re-tags the map cleanly (removing its overlay, split box, number
-  // and size nodes together), so no ghost outline is left behind.
-  delete booths[secondary];
-  renderBookingsTable();
-  populateToolDropdowns();
+socket.on('booth:consolidated', ({ secondary, absorbed }) => {
+  // Two shapes: a single merge sends one `secondary`, an N-way merge sends
+  // `absorbed` as an ARRAY. This did `delete booths[secondary]` in both cases,
+  // so after a multi-stand merge `secondary` was undefined, nothing was
+  // removed, and every absorbed stand stayed in the table and the dropdowns as
+  // a ghost until the next reload.
+  const gone = Array.isArray(absorbed) ? absorbed : (secondary ? [secondary] : []);
+  gone.forEach(n => { delete booths[n]; });
+  if (selectedAdminId && gone.includes(selectedAdminId)) selectedAdminId = null;
+  // The state:full that follows re-tags the map cleanly (removing each overlay,
+  // split box, number and size node together), so no ghost outline is left
+  // behind on the plan either.
+  safely('bookings table', refreshBookingsTable);
+  safely('tool dropdowns', populateToolDropdowns);
 });
 
 socket.on('viewers:count', (n) => {
@@ -1476,10 +2152,11 @@ function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB'
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+// esc / cap / money live in lib/ui.js now (destructured at the top of this
+// file). `el` stays local and stays a by-id lookup: it is used a couple of
+// dozen times in the KPI code below, and it means something different from the
+// shared element BUILDER of the same name.
 function el(id) { return document.getElementById(id); }
-function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ─── Leads ──────────────────────────────────────────────────────────────────
 // Enquiries captured from the public floorplan, each shown with the browsing
@@ -1492,10 +2169,12 @@ async function loadLeads() {
   const listEl = document.getElementById('leads-list');
   listEl.textContent = 'Loading…';
   try {
-    leadCache = await fetch(`/api/inquiries?limit=200&archived=${leadsArchived ? 1 : 0}`).then(r => r.ok ? r.json() : []);
+    leadCache = await api(`/api/inquiries?limit=200&archived=${leadsArchived ? 1 : 0}`) || [];
     renderLeadsList();
-  } catch {
-    listEl.textContent = 'Could not load enquiries.';
+  } catch (e) {
+    // Say WHY. "No enquiries yet" over a failed request reads as a quiet sales
+    // pipeline, which is the opposite of what it means.
+    listEl.textContent = `Could not load enquiries — ${e.message}`;
   }
 }
 
@@ -1624,8 +2303,8 @@ async function openLead(id) {
   const panel = document.getElementById('lead-detail');
   panel.textContent = 'Loading…';
   let lead;
-  try { lead = await fetch(`/api/inquiries/${encodeURIComponent(id)}`).then(r => r.ok ? r.json() : null); }
-  catch { lead = null; }
+  try { lead = await api(`/api/inquiries/${encodeURIComponent(id)}`); }
+  catch (e) { panel.textContent = `Could not load this enquiry — ${e.message}`; return; }
   if (!lead) { panel.textContent = 'Could not load this enquiry.'; return; }
 
   panel.replaceChildren();
@@ -1649,15 +2328,16 @@ async function openLead(id) {
     : '<i data-lucide="archive"></i> Archive';
   archiveBtn.onclick = async () => {
     const toArchive = !lead.archived;
-    try {
-      const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}/archive`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: toArchive }),
-      });
-      if (!res.ok) throw new Error();
-      adminToast(toArchive ? 'Enquiry archived.' : 'Enquiry restored.', 'ok');
-      renderLeadEmpty();                   // it just left this view
-      loadLeads();
-    } catch { adminToast('Could not update the enquiry.', 'error'); }
+    await withPending(archiveBtn, async () => {
+      try {
+        await api(`/api/inquiries/${encodeURIComponent(id)}/archive`, {
+          method: 'POST', body: JSON.stringify({ archived: toArchive }),
+        });
+        adminToast(toArchive ? 'Enquiry archived.' : 'Enquiry restored.', 'ok');
+        renderLeadEmpty();                   // it just left this view
+        loadLeads();
+      } catch (e) { adminToast(e.message || 'Could not update the enquiry.', 'error'); }
+    });
   };
   actions.appendChild(archiveBtn);
 
@@ -1666,14 +2346,19 @@ async function openLead(id) {
   delBtn.style.cssText = 'font-size:12px;padding:5px 10px';
   delBtn.innerHTML = '<i data-lucide="trash-2"></i> Delete';
   delBtn.onclick = async () => {
-    if (!confirm(`Permanently delete the enquiry from ${lead.contact?.name || 'this contact'}? This cannot be undone.`)) return;
-    try {
-      const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error();
-      adminToast('Enquiry deleted.', 'ok');
-      renderLeadEmpty();
-      loadLeads();
-    } catch { adminToast('Could not delete the enquiry.', 'error'); }
+    if (!await confirmDialog(
+      `Permanently delete the enquiry from ${lead.contact?.name || 'this contact'}` +
+      `${lead.contact?.company ? ` at ${lead.contact.company}` : ''}?\n\n` +
+      'Their browsing history goes with it. This cannot be undone — Archive shelves it instead, and is reversible.',
+      { title: 'Delete this enquiry', confirmLabel: 'Delete it', danger: true })) return;
+    await withPending(delBtn, async () => {
+      try {
+        await api(`/api/inquiries/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        adminToast('Enquiry deleted.', 'ok');
+        renderLeadEmpty();
+        loadLeads();
+      } catch (e) { adminToast(e.message || 'Could not delete the enquiry.', 'error'); }
+    });
   };
   actions.appendChild(delBtn);
 
@@ -1692,20 +2377,19 @@ async function openLead(id) {
     btn.type = 'button';
     btn.className = `lead-status-btn st-${st}` + (lead.status === st ? ' active' : '');
     btn.textContent = st.charAt(0).toUpperCase() + st.slice(1);
-    btn.onclick = async () => {
+    btn.onclick = () => withPending(btn, async () => {
       try {
-        const res = await fetch(`/api/inquiries/${encodeURIComponent(id)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st }),
+        await api(`/api/inquiries/${encodeURIComponent(id)}`, {
+          method: 'PATCH', body: JSON.stringify({ status: st }),
         });
-        if (!res.ok) throw new Error();
         lead.status = st;
         statusRow.querySelectorAll('.lead-status-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const cached = leadCache.find(l => l._id === id); if (cached) cached.status = st;
         renderLeadsList();                       // refresh the list + "new" badge
         adminToast(`Lead marked ${st}.`, 'ok');
-      } catch { adminToast('Could not update lead status.', 'error'); }
-    };
+      } catch (e) { adminToast(e.message || 'Could not update lead status.', 'error'); }
+    });
     btns.appendChild(btn);
   });
   statusRow.appendChild(btns);
@@ -1731,13 +2415,23 @@ async function openLead(id) {
     select.appendChild(o);
   });
   select.onchange = async () => {
+    // The response was never looked at. The server returns 400 for an unknown
+    // name and 404 for a lead that has been deleted underneath the panel, and
+    // both of those toasted "Assigned to …" as though they had worked.
+    const previous = lead.assignedTo?.name || '';
     try {
-      await fetch(`/api/inquiries/${encodeURIComponent(id)}/assign`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: select.value }),
+      await api(`/api/inquiries/${encodeURIComponent(id)}/assign`, {
+        method: 'POST', body: JSON.stringify({ name: select.value }),
       });
+      lead.assignedTo = select.value ? { name: select.value } : null;
+      const cached = leadCache.find(l => l._id === id);
+      if (cached) cached.assignedTo = lead.assignedTo;
+      renderLeadsList();
       adminToast(select.value ? `Assigned to ${select.value}.` : 'Assignment cleared.', 'ok');
-    } catch { adminToast('Could not save assignment.', 'error'); }
+    } catch (e) {
+      select.value = previous;                 // don't leave a name that wasn't saved
+      adminToast(e.message || 'Could not save assignment.', 'error');
+    }
   };
   fwd.appendChild(select);
 
@@ -1836,13 +2530,25 @@ async function loadAnalytics() {
   const days = document.getElementById('analytics-days').value;
   try {
     const [funnel, demand] = await Promise.all([
-      fetch(`/api/analytics/funnel?days=${days}`).then(r => r.json()),
-      fetch(`/api/analytics/demand?days=${days}`).then(r => r.json()),
+      api(`/api/analytics/funnel?days=${days}`),
+      api(`/api/analytics/demand?days=${days}`),
     ]);
     renderFunnel(funnel);
     renderDemand(demand);
-  } catch {
-    document.getElementById('funnel').textContent = 'Could not load analytics.';
+  } catch (e) {
+    // The demand table was left showing the PREVIOUS period's numbers under the
+    // new period's heading — stale data presented as current, which is worse
+    // than no data. Clear it and say what happened.
+    document.getElementById('funnel').textContent = `Could not load analytics — ${e.message}`;
+    const tb = document.getElementById('demand-tbody');
+    if (tb) {
+      tb.replaceChildren();
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 6; td.className = 'demand-empty';
+      td.textContent = 'Not loaded — these numbers would be from a different period.';
+      tr.appendChild(td); tb.appendChild(tr);
+    }
   }
 }
 
@@ -1932,7 +2638,7 @@ async function loadNavPartners() {
   const box  = document.getElementById('nav-partners-logos');
   if (!wrap || !box) return;
   let list = [];
-  try { list = (await fetch('/partners').then(r => r.ok ? r.json() : {})).partners || []; } catch {}
+  try { list = (await api('/partners') || {}).partners || []; } catch { /* the strip just stays hidden */ }
 
   box.replaceChildren();
   if (!list.length) { wrap.classList.add('hidden'); return; }
@@ -1961,7 +2667,15 @@ async function loadPartners() {
   if (!tbody) return;
   tbody.replaceChildren();
   let list = [];
-  try { list = await fetch('/api/partners').then(r => r.ok ? r.json() : []); } catch {}
+  let failed = null;
+  try { list = await api('/api/partners') || []; } catch (e) { failed = e.message; }
+
+  if (failed) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td'); td.colSpan = 5; td.className = 'partners-empty';
+    td.textContent = `Could not load the logos — ${failed}`;
+    tr.appendChild(td); tbody.appendChild(tr); return;
+  }
 
   if (!list.length) {
     const tr = document.createElement('tr');
@@ -2005,10 +2719,19 @@ async function loadPartners() {
     del.className = 'admin-btn danger'; del.style.cssText = 'font-size:11px;padding:5px 10px';
     del.textContent = 'Remove';
     del.onclick = async () => {
-      if (!confirm(`Remove "${p.name || 'this logo'}" from the floorplan?`)) return;
-      const res = await fetch(`/api/partners/${p._id}`, { method: 'DELETE' });
-      adminToast(res.ok ? 'Logo removed.' : 'Could not remove.', res.ok ? 'ok' : 'error');
-      if (res.ok) { loadPartners(); loadNavPartners(); }
+      if (!await confirmDialog(
+        `Remove "${p.name || 'this logo'}" from the public floorplan?\n\nThe logo is deleted; add it again by dropping the file back in.`,
+        { title: 'Remove this logo', confirmLabel: 'Remove it', danger: true })) return;
+      // No try/catch at all before this: a dropped connection here was an
+      // unhandled rejection with no toast, so the row simply stayed put and the
+      // admin clicked Remove again.
+      await withPending(del, async () => {
+        try {
+          await api(`/api/partners/${p._id}`, { method: 'DELETE' });
+          adminToast('Logo removed.', 'ok');
+          loadPartners(); loadNavPartners();
+        } catch (e) { adminToast(e.message || 'Could not remove that logo.', 'error'); }
+      });
     };
     act.appendChild(del); tr.appendChild(act);
 
@@ -2028,13 +2751,11 @@ function partnerInput(id, field, value, placeholder, width) {
 
 async function savePartner(id, fields) {
   try {
-    const res = await fetch(`/api/partners/${id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
-    });
-    const d = await res.json().catch(() => ({}));
-    adminToast(res.ok ? 'Logo updated.' : (d.error || 'Could not save.'), res.ok ? 'ok' : 'error');
-    if (res.ok) { if ('image' in fields || 'active' in fields) loadPartners(); loadNavPartners(); }
-  } catch { adminToast('Could not save.', 'error'); }
+    await api(`/api/partners/${id}`, { method: 'PATCH', body: JSON.stringify(fields) });
+    adminToast('Logo updated.', 'ok');
+    if ('image' in fields || 'active' in fields) loadPartners();
+    loadNavPartners();
+  } catch (e) { adminToast(e.message || 'Could not save that logo.', 'error'); }
 }
 
 /**
@@ -2165,29 +2886,27 @@ function resetPartnerDropzone() {
   form.querySelector('button[type=submit]').classList.remove('cta-ready');
 }
 
-document.getElementById('partner-add-form')?.addEventListener('submit', async (e) => {
+document.getElementById('partner-add-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
-  // A dropped file wins over a pasted URL.
-  const image = pendingPartnerImage || document.getElementById('partner-image').value.trim();
-  if (!image) return adminToast('Drop in a logo, or paste an image URL.', 'error');
+  // Guarded: double-clicking Add logo published the same logo twice.
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    // A dropped file wins over a pasted URL.
+    const image = pendingPartnerImage || document.getElementById('partner-image').value.trim();
+    if (!image) return adminToast('Drop in a logo, or paste an image URL.', 'error');
 
-  const body = {
-    name:  document.getElementById('partner-name').value.trim(),
-    image,
-    url:   document.getElementById('partner-url').value.trim(),
-  };
-  try {
-    const res = await fetch('/api/partners', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const d = await res.json().catch(() => ({}));
-    if (res.ok) {
+    const body = {
+      name:  document.getElementById('partner-name').value.trim(),
+      image,
+      url:   document.getElementById('partner-url').value.trim(),
+    };
+    try {
+      await api('/api/partners', { method: 'POST', body: JSON.stringify(body) });
       adminToast('Logo added.', 'ok');
       ['partner-name', 'partner-image', 'partner-url'].forEach(i => { document.getElementById(i).value = ''; });
       resetPartnerDropzone();
       loadPartners(); loadNavPartners();
-    } else adminToast(d.error || 'Could not add logo.', 'error');
-  } catch { adminToast('Could not add logo.', 'error'); }
+    } catch (err) { adminToast(err.message || 'Could not add that logo.', 'error'); }
+  });
 });
 
 // ─── Sponsors (admin — with prices) ──────────────────────────────────────────
@@ -2196,8 +2915,15 @@ async function loadSponsorsAdmin() {
   const tbody = document.getElementById('sponsors-admin-tbody');
   tbody.replaceChildren();
   try {
-    sponsorAdminCache = await fetch('/api/sponsors').then(r => r.ok ? r.json() : []);
-  } catch { sponsorAdminCache = []; }
+    sponsorAdminCache = await api('/api/sponsors') || [];
+  } catch (e) {
+    sponsorAdminCache = [];
+    const tr = document.createElement('tr');
+    const td = document.createElement('td'); td.colSpan = 8; td.className = 'partners-empty';
+    td.textContent = `Could not load the sponsorship catalogue — ${e.message}`;
+    tr.appendChild(td); tbody.appendChild(tr);
+    return;
+  }
 
   const TIER_RANK = { platinum: 0, gold: 1, silver: 2 };
   sponsorAdminCache.sort((a, b) => (TIER_RANK[a.tier] ?? 9) - (TIER_RANK[b.tier] ?? 9) || (b.price || 0) - (a.price || 0));
@@ -2356,21 +3082,14 @@ function sponsorInput(key, field, value, type, placeholder, width) {
 }
 
 async function saveSponsor(key, fields) {
+  // api() carries the server's own explanation of a rejected image (too large,
+  // not an image) — saying only "Could not save sponsor" left the admin guessing.
   try {
-    const res = await fetch(`/api/sponsors/${encodeURIComponent(key)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
-    });
-    // The server explains a rejected image (too large, not an image); saying
-    // only "Could not save sponsor" would leave the admin guessing.
-    let msg = 'Sponsor updated.';
-    if (!res.ok) {
-      msg = 'Could not save sponsor.';
-      try { msg = (await res.json()).error || msg; } catch { /* no JSON body */ }
-    }
-    adminToast(msg, res.ok ? 'ok' : 'error');
-    if (res.ok && ('active' in fields || 'soldOut' in fields)) loadSponsorsAdmin();
-    return res.ok;
-  } catch { adminToast('Could not save sponsor.', 'error'); return false; }
+    await api(`/api/sponsors/${encodeURIComponent(key)}`, { method: 'PATCH', body: JSON.stringify(fields) });
+    adminToast('Sponsor updated.', 'ok');
+    if ('active' in fields || 'soldOut' in fields) loadSponsorsAdmin();
+    return true;
+  } catch (e) { adminToast(e.message || 'Could not save sponsor.', 'error'); return false; }
 }
 
 // ─── Team (admin accounts) ────────────────────────────────────────────────────
@@ -2385,7 +3104,16 @@ async function loadTeam() {
   if (addCard) addCard.style.display = isOwner ? '' : 'none';
 
   let admins = [];
-  try { admins = await fetch('/api/admins').then(r => r.ok ? r.json() : []); } catch {}
+  try {
+    admins = await api('/api/admins') || [];
+  } catch (e) {
+    // An empty team table is indistinguishable from a company with no staff.
+    const tr = document.createElement('tr');
+    const td = document.createElement('td'); td.colSpan = 5; td.className = 'partners-empty';
+    td.textContent = `Could not load the team — ${e.message}`;
+    tr.appendChild(td); tbody.appendChild(tr);
+    return;
+  }
 
   admins.forEach(a => {
     const tr = document.createElement('tr');
@@ -2485,18 +3213,27 @@ document.querySelectorAll('input[name="team-role"]').forEach(r =>
   r.addEventListener('change', syncRoleFields));
 
 /**
- * Fill the roster dropdown from the existing sales team list, so the owner
- * picks "Tom" rather than retyping his details. Choosing a name prefills the
- * username, display name and email; every field stays editable.
+ * Fill the roster dropdown.
+ *
+ * This used to list nine names hard-coded in server/data/sales-team.js — the
+ * same list that fed "Send to" — so it offered people who had no account and
+ * omitted every rep who did. It now lists the accounts themselves, and its
+ * only job is the shortcut it was always meant to be: it names the people who
+ * are already on the roster, so the owner can see at a glance who is missing.
  */
 function fillRoster() {
   const sel = document.getElementById('team-roster');
   if (!sel) return;
-  const opts = [Object.assign(document.createElement('option'), { value: '', textContent: 'Choose a name…' })];
-  (salesTeamCache.team || []).forEach(m => {
+  const reps = (salesTeamCache.team || []).filter(m => m.role === 'sales');
+  const opts = [Object.assign(document.createElement('option'), {
+    value: '',
+    textContent: reps.length ? 'Choose an existing name…' : 'No sales accounts yet',
+  })];
+  reps.forEach(m => {
     const o = document.createElement('option');
-    o.value = m.name; o.textContent = m.name;
+    o.value = m.name; o.textContent = m.email ? `${m.name} — ${m.email}` : `${m.name} (no email set)`;
     o.dataset.email = m.email || '';
+    o.dataset.username = m.username || '';
     opts.push(o);
   });
   sel.replaceChildren(...opts);
@@ -2506,50 +3243,57 @@ document.getElementById('team-roster')?.addEventListener('change', (e) => {
   const opt = e.target.selectedOptions[0];
   if (!opt || !opt.value) return;
   // Usernames are constrained to lowercase letters, numbers and . _ - server-side.
-  document.getElementById('team-username').value = opt.value.toLowerCase().replace(/[^a-z0-9._-]/g, '');
+  document.getElementById('team-username').value =
+    (opt.dataset.username || opt.value).toLowerCase().replace(/[^a-z0-9._-]/g, '');
   document.getElementById('team-displayname').value = opt.value;
   document.getElementById('team-email').value = opt.dataset.email || '';
 });
 
-document.getElementById('team-add-form')?.addEventListener('submit', async (e) => {
+document.getElementById('team-add-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
-  const role = selectedNewRole();
-  const username = document.getElementById('team-username').value.trim();
-  const password = document.getElementById('team-password').value;
-  const displayName = document.getElementById('team-displayname')?.value.trim() || '';
-  const email = document.getElementById('team-email')?.value.trim() || '';
-  const noun = role === 'sales' ? 'Sales member' : 'Administrator';
-  try {
-    const res = await fetch('/api/admins', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, role, displayName, email }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
+  // Guarded: the second half of a double-click was answered with a 409
+  // ("that username already exists") for the account the FIRST half had just
+  // created, which reads as a failure.
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    const role = selectedNewRole();
+    const username = document.getElementById('team-username').value.trim();
+    const password = document.getElementById('team-password').value;
+    const displayName = document.getElementById('team-displayname')?.value.trim() || '';
+    const email = document.getElementById('team-email')?.value.trim() || '';
+    const noun = role === 'sales' ? 'Sales member' : 'Administrator';
+    try {
+      const data = await api('/api/admins', {
+        method: 'POST', body: JSON.stringify({ username, password, role, displayName, email }),
+      });
       adminToast(`${noun} "${username}" added.`, 'ok');
       showInviteCode(username, data.claim, role);
       ['team-username', 'team-password', 'team-displayname', 'team-email'].forEach(id => {
-        const f = document.getElementById(id); if (f) f.value = '';
+        const fld = document.getElementById(id); if (fld) fld.value = '';
       });
       const roster = document.getElementById('team-roster'); if (roster) roster.value = '';
+      // The new account IS the roster now, so both the "Send to" list and the
+      // roster shortcut have to be re-read — that is the whole point of the fix.
+      await loadSalesTeam();
+      fillRoster();
       loadTeam();
-    } else {
-      adminToast(data.error || `Could not add ${noun.toLowerCase()}.`, 'error');
-    }
-  } catch { adminToast(`Could not add ${noun.toLowerCase()}.`, 'error'); }
+    } catch (err) { adminToast(err.message || `Could not add ${noun.toLowerCase()}.`, 'error'); }
+  });
 });
 
 async function changeMemberRole(username, role) {
   const noun = role === 'sales' ? 'Sales (dashboard only)' : 'Administrator (full console)';
-  if (!confirm(`Change "${username}" to ${noun}?\n\nThey will be signed out and must log in again.`)) return;
+  if (!await confirmDialog(
+    `Change "${username}" to ${noun}?\n\nThey are signed out immediately and must log in again.`,
+    { title: 'Change access level', confirmLabel: 'Change it' })) return;
   try {
-    const res = await fetch(`/api/admins/${encodeURIComponent(username)}/role`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }),
+    await api(`/api/admins/${encodeURIComponent(username)}/role`, {
+      method: 'PATCH', body: JSON.stringify({ role }),
     });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) { adminToast(`"${username}" is now ${role}.`, 'ok'); loadTeam(); }
-    else adminToast(data.error || 'Could not change access level.', 'error');
-  } catch { adminToast('Could not change access level.', 'error'); }
+    adminToast(`"${username}" is now ${role}.`, 'ok');
+    await loadSalesTeam();                 // a new rep joins the Send-to list
+    fillRoster();
+    loadTeam();
+  } catch (e) { adminToast(e.message || 'Could not change access level.', 'error'); }
 }
 
 // Show the one-time invite code the owner must share (with the temp password)
@@ -2569,30 +3313,48 @@ function showInviteCode(username, code, role) {
   );
 }
 
+// These three had no try/catch of any kind: a dropped connection mid-click was
+// an unhandled promise rejection, with nothing on screen to say the action had
+// not happened.
 async function resetMemberTotp(username) {
-  if (!confirm(`Reset 2FA for "${username}"? They will set it up again on their next login with a new invite code.`)) return;
-  const res = await fetch(`/api/admins/${encodeURIComponent(username)}/reset-2fa`, { method: 'POST' });
-  const data = await res.json().catch(() => ({}));
-  if (res.ok) { adminToast(`2FA reset for ${username}.`, 'ok'); showInviteCode(username, data.claim); loadTeam(); }
-  else adminToast(data.error || 'Could not reset 2FA.', 'error');
+  if (!await confirmDialog(
+    `Reset two-factor authentication for "${username}"?\n\nTheir current authenticator stops working and their recovery codes are destroyed. They set it up again on their next login, using a new invite code you will be given to pass on.`,
+    { title: 'Reset 2FA', confirmLabel: 'Reset it', danger: true })) return;
+  try {
+    const data = await api(`/api/admins/${encodeURIComponent(username)}/reset-2fa`, { method: 'POST' });
+    adminToast(`2FA reset for ${username}.`, 'ok');
+    showInviteCode(username, data.claim);
+    loadTeam();
+  } catch (e) { adminToast(e.message || 'Could not reset 2FA.', 'error'); }
 }
 
 async function resetMemberPassword(username) {
-  const pw = prompt(`New password for "${username}" (at least 8 characters):`);
+  // Was a window.prompt(): the new password appeared in clear text on screen
+  // and went into the browser's dialog history. A password field does neither.
+  const pw = await askSecret(
+    `Set a new password for "${username}". At least 8 characters.\n\nThey are signed out immediately and will need this password — pass it to them out of band.`,
+    { title: `New password for ${username}`, label: 'New password', confirmLabel: 'Set password' });
   if (pw === null) return;
-  const res = await fetch(`/api/admins/${encodeURIComponent(username)}/password`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }),
-  });
-  const data = await res.json().catch(() => ({}));
-  adminToast(res.ok ? `Password updated for ${username}.` : (data.error || 'Could not update password.'), res.ok ? 'ok' : 'error');
+  if (!pw) return adminToast('No password entered — nothing was changed.', 'error');
+  try {
+    await api(`/api/admins/${encodeURIComponent(username)}/password`, {
+      method: 'POST', body: JSON.stringify({ password: pw }),
+    });
+    adminToast(`Password updated for ${username}. They have been signed out.`, 'ok');
+  } catch (e) { adminToast(e.message || 'Could not update password.', 'error'); }
 }
 
 async function removeMember(username) {
-  if (!confirm(`Remove administrator "${username}"? They will lose access immediately.`)) return;
-  const res = await fetch(`/api/admins/${encodeURIComponent(username)}`, { method: 'DELETE' });
-  const data = await res.json().catch(() => ({}));
-  adminToast(res.ok ? `Removed ${username}.` : (data.error || 'Could not remove.'), res.ok ? 'ok' : 'error');
-  if (res.ok) loadTeam();
+  if (!await confirmDialog(
+    `Remove "${username}"?\n\nTheir account is deleted and any open session ends immediately. Anything they created — proposals, audit lines — stays.`,
+    { title: 'Remove this account', confirmLabel: 'Remove them', danger: true })) return;
+  try {
+    await api(`/api/admins/${encodeURIComponent(username)}`, { method: 'DELETE' });
+    adminToast(`Removed ${username}.`, 'ok');
+    await loadSalesTeam();                 // they leave the Send-to list too
+    fillRoster();
+    loadTeam();
+  } catch (e) { adminToast(e.message || 'Could not remove that account.', 'error'); }
 }
 
 document.getElementById('analytics-refresh')?.addEventListener('click', loadAnalytics);
@@ -2756,7 +3518,14 @@ async function loadPlans() {
   if (!grid) return;
 
   let rows = [];
-  try { rows = await fetch('/api/floorplans').then(r => r.ok ? r.json() : []); } catch { rows = []; }
+  try {
+    rows = await api('/api/floorplans') || [];
+  } catch (e) {
+    // "No events yet" was shown for a failed request as readily as for an empty
+    // system — and this deployment has never had zero events.
+    grid.textContent = `Could not load the events — ${e.message}`;
+    return;
+  }
 
   grid.replaceChildren();
   if (!rows.length) {
@@ -2935,10 +3704,9 @@ async function previewStands(row) {
 
   let p;
   try {
-    const res = await fetch('/api/stands/preview', { headers: { 'X-Show': row.slug } });
-    p = await res.json();
-  } catch {
-    return adminToast('Could not read the floorplan.', 'error');
+    p = await api('/api/stands/preview', { headers: { 'X-Show': row.slug } });
+  } catch (e) {
+    return adminToast(`Could not read the floorplan — ${e.message}`, 'error');
   }
   if (!p.ok) return adminToast(p.message || 'No floorplan to read for this event.', 'error');
   if (!p.stands) {
@@ -3015,23 +3783,24 @@ async function previewStands(row) {
 
 /** Import the stands, once the password is given. */
 async function importStands(row, preview, box) {
-  const pw = prompt(
+  // Was a window.prompt(), which shows the admin password in clear text and
+  // leaves it in the browser's dialog history.
+  const pw = await askSecret(
     `Import ${preview.stands} stands into ${row.name || row.showId}?\n\n` +
     (preview.existing ? `This replaces the ${preview.existing} stands already there (a snapshot is kept).\n\n` : '') +
-    'Enter the admin password to confirm.');
+    'Enter your admin password to confirm.',
+    { title: `Import stands into ${row.name || row.showId}`, confirmLabel: 'Import them' });
   if (!pw) return;
 
   adminToast('Importing…');
   let r;
   try {
-    const res = await fetch('/api/stands/import', {
+    r = await api('/api/stands/import', {
       method: 'POST',
       headers: { 'X-Show': row.slug, 'X-Confirm-Password': pw },
     });
-    r = await res.json();
-    if (!res.ok) return adminToast(r.error || 'The import was refused.', 'error');
-  } catch {
-    return adminToast('The import could not be completed.', 'error');
+  } catch (e) {
+    return adminToast(e.message || 'The import could not be completed.', 'error');
   }
 
   adminToast(
@@ -3055,14 +3824,20 @@ function pickPlan(row) {
       return adminToast('That is not an SVG. The floorplan must be vector artwork.', 'error');
     }
     if (row.boothCount > 0 &&
-        !confirm(`Replace the floorplan for ${row.name || row.showId}?\n\n${row.boothCount} stands are positioned against the current one. If the new plan is drawn differently they may stop appearing on the map until their geometry is re-extracted. Bookings are not affected.`)) {
+        !await confirmDialog(
+          `${row.boothCount} stands are positioned against ${row.name || row.showId}'s current plan.\n\nIf the new artwork is drawn differently they may stop appearing on the map until their geometry is re-extracted. Bookings are not affected.`,
+          { title: `Replace the floorplan for ${row.name || row.showId}`, confirmLabel: 'Replace it', danger: true })) {
       return;
     }
-    const password = prompt(`Enter your admin password to change the floorplan for ${row.name || row.showId}.`);
+    const password = await askSecret(
+      `Changing the floorplan for ${row.name || row.showId}.`,
+      { title: 'Confirm the floorplan change', confirmLabel: 'Upload it' });
     if (password === null) return;
     if (!password) return adminToast('Password required to change a floorplan.', 'error');
 
     try {
+      // Raw fetch, not api(): the BODY of this request is the SVG, so it does
+      // not carry a JSON content type. The 401 case is handled explicitly.
       const res = await fetch('/api/floorplan', {
         method: 'POST',
         // X-Show names the event explicitly: this page can change any of them,
@@ -3071,9 +3846,13 @@ function pickPlan(row) {
                    'X-Show': row.slug, 'X-Confirm-Password': password },
         body: await file.text(),
       });
+      if (res.status === 401) {
+        location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+        return;
+      }
       if (!res.ok) {
         let msg = 'Could not upload that floorplan.';
-        try { msg = (await res.json()).error || msg; } catch {}
+        try { msg = (await res.json()).error || msg; } catch { /* no JSON body */ }
         return adminToast(msg, 'error');
       }
       const r = await res.json();
@@ -3093,19 +3872,24 @@ function pickPlan(row) {
 }
 
 async function removePlan(row) {
-  if (!confirm(`Remove the uploaded floorplan for ${row.name || row.showId} and go back to the one shipped with the app?`)) return;
-  const password = prompt(`Enter your admin password to remove the floorplan for ${row.name || row.showId}.`);
+  if (!await confirmDialog(
+    `${row.name || row.showId} goes back to the floorplan shipped with the app.` +
+    (row.boothCount > 0 ? `\n\nIts ${row.boothCount} stands are positioned against the uploaded artwork and may stop appearing on the map.` : ''),
+    { title: `Remove ${row.name || row.showId}'s uploaded plan`, confirmLabel: 'Remove it', danger: true })) return;
+
+  const password = await askSecret(
+    `Removing the uploaded floorplan for ${row.name || row.showId}.`,
+    { title: 'Confirm the removal', confirmLabel: 'Remove it' });
   if (password === null) return;
   if (!password) return adminToast('Password required to remove a floorplan.', 'error');
 
-  const res = await fetch('/api/floorplan', {
-    method: 'DELETE', headers: { 'X-Show': row.slug, 'X-Confirm-Password': password },
-  });
-  if (res.ok) adminToast(`${row.name || row.showId}: reverted to the shipped plan.`, 'ok');
-  else {
-    let msg = 'Could not remove that floorplan.';
-    try { msg = (await res.json()).error || msg; } catch {}
-    adminToast(msg, 'error');
+  try {
+    await api('/api/floorplan', {
+      method: 'DELETE', headers: { 'X-Show': row.slug, 'X-Confirm-Password': password },
+    });
+    adminToast(`${row.name || row.showId}: reverted to the shipped plan.`, 'ok');
+  } catch (e) {
+    adminToast(e.message || 'Could not remove that floorplan.', 'error');
   }
   loadPlans();
 }
@@ -3121,7 +3905,7 @@ async function initShowSwitcher() {
   if (!wrap || !sel) return;
 
   let list = [];
-  try { list = await fetch('/api/shows').then(r => r.ok ? r.json() : []); } catch { list = []; }
+  try { list = await api('/api/shows') || []; } catch { list = []; }
   let live = list.filter(sh => sh.active !== false);
 
   // ALWAYS shown, even with a single event. It used to hide itself when there
@@ -3163,8 +3947,14 @@ let showsCache = [];
 async function loadShows() {
   const box = document.getElementById('show-list');
   if (!box) return;
-  try { showsCache = await fetch('/api/shows').then(r => r.ok ? r.json() : []); }
-  catch { showsCache = []; }
+  try { showsCache = await api('/api/shows') || []; }
+  catch (e) {
+    showsCache = [];
+    box.replaceChildren(Object.assign(document.createElement('p'), {
+      className: 'tag-empty', textContent: `Could not load the events — ${e.message}`,
+    }));
+    return;
+  }
 
   box.replaceChildren();
   if (!showsCache.length) {
@@ -3205,11 +3995,26 @@ async function loadShows() {
     const retire = document.createElement('button');
     retire.type = 'button';
     retire.className = 'admin-btn area-remove';
-    retire.textContent = sh.active === false ? 'Put back on air' : 'Retire';
-    retire.title = sh.active === false
+    const retired = sh.active === false;
+    retire.textContent = retired ? 'Put back on air' : 'Retire';
+    retire.title = retired
       ? 'Make this event reachable again'
       : 'Stop serving this event. Nothing is deleted — its data stays exactly as it is.';
-    retire.onclick = () => saveShow(sh.showId, { active: sh.active === false });
+    // This took a live event off the air the instant it was clicked, with no
+    // confirmation at all: its public URL starts returning 404 to anyone
+    // already on it, and the button sits next to a plain "rename" field.
+    retire.onclick = () => withPending(retire, async () => {
+      const name = sh.name || sh.showId;
+      const ok = retired
+        ? await confirmDialog(
+            `Put ${name} back on air?\n\n/floorplan/${sh.slug} starts answering again immediately.`,
+            { title: `Put ${name} back on air`, confirmLabel: 'Put it back' })
+        : await confirmDialog(
+            `Take ${name} off the air?\n\n/floorplan/${sh.slug} and /admin/${sh.slug} start returning 404 straight away — including for anyone looking at the plan right now. Nothing is deleted: its stands, bookings and artwork stay exactly as they are, and this is reversible.`,
+            { title: `Retire ${name}`, confirmLabel: 'Take it off the air', danger: true });
+      if (!ok) return;
+      await saveShow(sh.showId, { active: retired });
+    });
 
     card.append(name, meta, links, retire);
     box.appendChild(card);
@@ -3218,40 +4023,29 @@ async function loadShows() {
 
 async function saveShow(showId, fields) {
   try {
-    const res = await fetch(`/api/shows/${encodeURIComponent(showId)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
+    await api(`/api/shows/${encodeURIComponent(showId)}`, {
+      method: 'PATCH', body: JSON.stringify(fields),
     });
-    if (!res.ok) {
-      let msg = 'Could not update that event.';
-      try { msg = (await res.json()).error || msg; } catch {}
-      return adminToast(msg, 'error');
-    }
     adminToast('Event updated.', 'ok');
     loadShows();
-  } catch { adminToast('Could not update that event.', 'error'); }
+  } catch (e) { adminToast(e.message || 'Could not update that event.', 'error'); }
 }
 
-document.getElementById('show-form')?.addEventListener('submit', async (e) => {
+document.getElementById('show-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
-  const name = document.getElementById('show-name').value.trim();
-  const slug = document.getElementById('show-slug').value.trim();
-  const showId = document.getElementById('show-id').value.trim();
-  if (!slug || !showId) return adminToast('A URL name and a show id are both needed.', 'error');
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    const name = document.getElementById('show-name').value.trim();
+    const slug = document.getElementById('show-slug').value.trim();
+    const showId = document.getElementById('show-id').value.trim();
+    if (!slug || !showId) return adminToast('A URL name and a show id are both needed.', 'error');
 
-  try {
-    const res = await fetch('/api/shows', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, slug, showId }),
-    });
-    if (!res.ok) {
-      let msg = 'Could not add that event.';
-      try { msg = (await res.json()).error || msg; } catch {}
-      return adminToast(msg, 'error');
-    }
-    adminToast(`${name || showId} added — it is live at /floorplan/${slug}.`, 'ok');
-    ['show-name', 'show-slug', 'show-id'].forEach(id => { document.getElementById(id).value = ''; });
-    loadShows();
-  } catch { adminToast('Could not add that event.', 'error'); }
+    try {
+      await api('/api/shows', { method: 'POST', body: JSON.stringify({ name, slug, showId }) });
+      adminToast(`${name || showId} added — it is live at /floorplan/${slug}.`, 'ok');
+      ['show-name', 'show-slug', 'show-id'].forEach(id => { document.getElementById(id).value = ''; });
+      loadShows();
+    } catch (err) { adminToast(err.message || 'Could not add that event.', 'error'); }
+  });
 });
 
 // ── Tools: sponsored areas ───────────────────────────────────────────────────
@@ -3521,9 +4315,8 @@ let countryListLoaded = null;
 
 function loadCountries() {
   if (!countryListLoaded) {
-    countryListLoaded = fetch('/countries', { cache: 'force-cache' })
-      .then(r => r.ok ? r.json() : { countries: [] })
-      .then(d => { countryList = Array.isArray(d.countries) ? d.countries : []; fillCountrySelect(); })
+    countryListLoaded = api('/countries', { cache: 'force-cache' })
+      .then(d => { countryList = Array.isArray(d?.countries) ? d.countries : []; fillCountrySelect(); })
       .catch(() => { countryList = []; });
   }
   return countryListLoaded;
@@ -3668,8 +4461,7 @@ async function deleteSponsor(s) {
   )) return;
 
   try {
-    const res = await fetch(`/api/sponsors/${encodeURIComponent(s.key)}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not delete that package.');
+    await api(`/api/sponsors/${encodeURIComponent(s.key)}`, { method: 'DELETE' });
     adminToast(`"${s.name}" deleted.`, 'ok');
     loadSponsorsAdmin();
   } catch (e) { adminToast(e.message, 'error'); }
@@ -3681,21 +4473,21 @@ document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e
   if (!name) return adminToast('Give the package a name first.', 'error');
   const priceRaw = document.getElementById('sp-new-price').value;
 
-  try {
-    const res = await fetch('/api/sponsors', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name, tier: document.getElementById('sp-new-tier').value,
-        price: priceRaw === '' ? '' : Number(priceRaw),
-      }),
-    });
-    const d = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(d.error || 'Could not add that package.');
-    document.getElementById('sp-new-name').value = '';
-    document.getElementById('sp-new-price').value = '';
-    adminToast(`"${name}" added.`, 'ok');
-    loadSponsorsAdmin();
-  } catch (err) { adminToast(err.message, 'error'); }
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    try {
+      await api('/api/sponsors', {
+        method: 'POST',
+        body: JSON.stringify({
+          name, tier: document.getElementById('sp-new-tier').value,
+          price: priceRaw === '' ? '' : Number(priceRaw),
+        }),
+      });
+      document.getElementById('sp-new-name').value = '';
+      document.getElementById('sp-new-price').value = '';
+      adminToast(`"${name}" added.`, 'ok');
+      loadSponsorsAdmin();
+    } catch (err) { adminToast(err.message, 'error'); }
+  });
 });
 
 // ── CSV import ───────────────────────────────────────────────────────────────
@@ -3722,13 +4514,10 @@ document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e
   };
 
   async function send(text, { dryRun }) {
-    const res = await fetch('/api/sponsors/import', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return api('/api/sponsors/import', {
+      method: 'POST',
       body: JSON.stringify({ csv: text, dryRun, removeMissing: document.getElementById('csv-remove-missing').checked }),
     });
-    const d = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(d.error || 'That file could not be read.');
-    return d;
   }
 
   async function handleFile(file) {

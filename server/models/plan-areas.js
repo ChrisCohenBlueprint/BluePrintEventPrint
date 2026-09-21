@@ -13,10 +13,20 @@ const { safeImage } = require('../lib/safe-url');
  * lounges and theatres a sponsor buys — so an area tracks a sponsor and an
  * availability the same way a stand tracks a company and a status.
  *
- * The areas themselves live in ../data/plan-areas.js because their geometry
- * comes from the artwork and is not the admin's to change. This collection
- * holds only the editable part, keyed by area, so re-exporting the plan updates
- * every area's position without touching a single sponsor's logo.
+ * WHERE THE AREAS COME FROM. Originally ../data/plan-areas.js, a static list
+ * measured off Europe's artwork — which meant every event was served Europe's
+ * lounges, sitting at Europe's coordinates, whatever its own plan drew. The
+ * extractor already finds each plan's OWN sponsorable areas (the dark fill a
+ * plan uses for only a handful of shapes) and they were being discarded, so the
+ * import now persists them here, per show, and this model reads them back.
+ *
+ * The static file is kept as EUROPE'S SEED and nothing more: an event with no
+ * stored areas falls back to it, so the event already running is unaffected
+ * until its own plan is imported.
+ *
+ * Either way the editable part — sponsor, logo, corrected label, status — lives
+ * on the same row and is keyed by area, so re-importing a plan updates every
+ * area's position without touching a single sponsor's logo.
  */
 const col = () => getDb().collection('planAreas');
 
@@ -34,19 +44,84 @@ const inlineImage = (v) => /^data:image\/(png|jpe?g|gif|webp|svg\+xml);/i.test(v
 const STATUSES = ['available', 'taken'];
 
 /**
- * The shipped areas merged with whatever the admin has set — the one shape both
- * the public plan and the admin ever see. An area with no row yet simply
- * carries its shipped label and no logo.
+ * Is this a real area on THIS show?
+ *
+ * The shipped catalogue is no longer the only answer — an imported plan brings
+ * its own areas — so every edit checks both. Asked of the database rather than
+ * a module constant, because an area created by an import a minute ago has to
+ * be editable now.
+ */
+async function isValid(key) {
+  const k = String(key || '');
+  if (!k) return false;
+  if (catalogue.isValid(k)) return true;
+  return !!await col().findOne({ showId: config.showId, key: k }, { projection: { _id: 1 } });
+}
+
+/** A stable key for an area read off a plan. */
+const slug = (v) => String(v == null ? '' : v).toLowerCase().trim()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+
+/**
+ * Store the sponsorable areas an import read out of this show's plan.
+ *
+ * Only the geometry and the printed label are written. Everything an admin has
+ * put on an area — the sponsor, the logo, the corrected name, the package it is
+ * sold under — is on the same row and is deliberately not in the $set, so
+ * re-importing a plan moves the areas and keeps the sponsorships.
+ *
+ * Areas the new plan no longer draws lose their geometry marker rather than
+ * their row: a sponsor's logo is not ours to delete because a designer moved a
+ * lounge, and a row with no geometry simply stops being listed.
+ */
+async function replaceFromArtwork(areas, { actor = null } = {}) {
+  const list = (Array.isArray(areas) ? areas : []).filter(a => a && a.geometry);
+  const showId = config.showId;
+  const seen = [];
+  let order = 0;
+
+  for (const a of list) {
+    const label = (a.exhibitor && a.exhibitor.trim()) || `Area ${a.number}`;
+    const key = slug(label) || `area-${slug(a.number) || order}`;
+    if (seen.includes(key)) continue;          // two shapes, one name — the first is the area
+    seen.push(key);
+    await col().updateOne(
+      { showId, key },
+      { $set: { geometry: a.geometry, artworkLabel: label, fromArtwork: true,
+                order: order++, updatedAt: new Date(), updatedBy: actor },
+        $setOnInsert: { showId, key } },
+      { upsert: true });
+  }
+
+  // Rows from a previous import of this plan that the new one does not draw.
+  const stale = await col().updateMany(
+    { showId, fromArtwork: true, key: { $nin: seen } },
+    { $unset: { geometry: '', fromArtwork: '' }, $set: { updatedAt: new Date(), updatedBy: actor } });
+
+  return { ok: true, areas: seen.length, keys: seen, retired: stale.modifiedCount };
+}
+
+/**
+ * This show's own areas if its plan has been imported, Europe's seed if not,
+ * merged in both cases with whatever the admin has set — the one shape both the
+ * public plan and the admin ever see. An area with no row yet simply carries
+ * its shipped label and no logo.
  */
 async function all() {
   const rows = await col().find({ showId: config.showId }).toArray();
   const by = new Map(rows.map(r => [r.key, r]));
-  return catalogue.AREAS.map(a => {
+  // An area read from this show's own artwork carries its geometry on the row.
+  // Their presence is what says "this event's plan has been imported"; without
+  // one, the shipped catalogue stands in.
+  const own = rows.filter(r => r.geometry && r.fromArtwork).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const base = own.length ? own.map(r => ({ key: r.key, label: r.artworkLabel || r.key, geometry: r.geometry }))
+                          : catalogue.AREAS;
+  return base.map(a => {
     const saved = by.get(a.key);
     return {
       key: a.key,
       label: (saved && saved.label) || a.label,
-      geometry: a.geometry,
+      geometry: (saved && saved.geometry) || a.geometry,
       logo: (saved && saved.logo) || null,
       sponsor: (saved && saved.sponsor) || null,
       // Which sponsorship package sells this area, if an admin has said. The
@@ -62,7 +137,7 @@ async function all() {
 
 /** Set (or clear) an area's sponsor logo. Inline images only — see above. */
 async function setLogo(key, image, { actor = null } = {}) {
-  if (!catalogue.isValid(key)) return { ok: false, reason: 'unknown_area' };
+  if (!await isValid(key)) return { ok: false, reason: 'unknown_area' };
 
   const raw = typeof image === 'string' ? image.trim() : '';
   if (raw.length > MAX_LOGO) return { ok: false, reason: 'too_large' };
@@ -83,7 +158,7 @@ async function setLogo(key, image, { actor = null } = {}) {
  * an empty value restores the shipped name rather than blanking it.
  */
 async function setLabel(key, label, { actor = null } = {}) {
-  if (!catalogue.isValid(key)) return { ok: false, reason: 'unknown_area' };
+  if (!await isValid(key)) return { ok: false, reason: 'unknown_area' };
   const name = String(label == null ? '' : label).trim().slice(0, 60);
 
   await col().updateOne(
@@ -91,7 +166,7 @@ async function setLabel(key, label, { actor = null } = {}) {
     { $set: { label: name || null, updatedAt: new Date(), updatedBy: actor },
       $setOnInsert: { showId: config.showId, key } },
     { upsert: true });
-  return { ok: true, key, label: name || catalogue.get(key).label };
+  return { ok: true, key, label: name || (catalogue.get(key) || {}).label || key };
 }
 
 /**
@@ -103,7 +178,7 @@ async function setLabel(key, label, { actor = null } = {}) {
  * sponsor frees the area for the same reason.
  */
 async function setSponsor(key, { sponsor, status } = {}, { actor = null } = {}) {
-  if (!catalogue.isValid(key)) return { ok: false, reason: 'unknown_area' };
+  if (!await isValid(key)) return { ok: false, reason: 'unknown_area' };
 
   const $set = { updatedAt: new Date(), updatedBy: actor };
 
@@ -139,7 +214,7 @@ async function setSponsor(key, { sponsor, status } = {}, { actor = null } = {}) 
  * belongs to without holding it in their head. An empty value unlinks.
  */
 async function setPackage(key, sponsorKey, { actor = null } = {}) {
-  if (!catalogue.isValid(key)) return { ok: false, reason: 'unknown_area' };
+  if (!await isValid(key)) return { ok: false, reason: 'unknown_area' };
   const value = String(sponsorKey == null ? '' : sponsorKey).trim().slice(0, 60) || null;
 
   await col().updateOne(
@@ -170,5 +245,5 @@ async function applyPackageSoldOut(sponsorKey, soldOut, { actor = null } = {}) {
   return res.modifiedCount;
 }
 
-module.exports = { col, ensureIndexes, all, setLogo, setLabel, setSponsor, setPackage,
-                   applyPackageSoldOut, STATUSES, MAX_LOGO };
+module.exports = { col, ensureIndexes, all, isValid, setLogo, setLabel, setSponsor, setPackage,
+                   applyPackageSoldOut, replaceFromArtwork, STATUSES, MAX_LOGO };

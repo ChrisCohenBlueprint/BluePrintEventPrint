@@ -74,6 +74,11 @@
     .link-btn { background: none; border: none; color: var(--muted); font-family: inherit; font-size: 12px;
       cursor: pointer; text-decoration: underline; margin-top: 14px; display: block; width: 100%; text-align: center; }
     .link-btn:hover { color: var(--accent); }
+
+    .enrol-timer { font-size: 11.5px; color: var(--muted); line-height: 1.5;
+      margin: -8px 0 16px; padding: 8px 11px; border-radius: 8px;
+      background: rgba(255,255,255,.03); border: 1px solid var(--border); }
+    .enrol-timer.warn { color: var(--err); border-color: rgba(248,113,113,.35); background: var(--err-bg); }
   </style>
 </head>
 <body>
@@ -118,11 +123,15 @@
         <p>Save these somewhere safe. Each lets you sign in once if you lose your phone.</p>
         <div class="recovery-codes" id="recovery-codes"></div>
       </div>
+      <!-- The setup window is five minutes. Copying eight codes takes longer
+           than people expect, so the deadline is shown rather than discovered. -->
+      <div class="enrol-timer hidden" id="enrol-timer"></div>
       <div class="field field-code">
         <label for="enrol-code">6-digit code from your app</label>
         <input type="text" id="enrol-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
       </div>
       <button type="submit" class="primary" id="btn-enrol">Confirm &amp; sign in</button>
+      <button type="button" class="link-btn" id="enrol-restart">Start the setup again with fresh codes</button>
     </form>
 
     <!-- Step 2: verify (returning) -->

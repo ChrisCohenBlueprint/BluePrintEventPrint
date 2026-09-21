@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const util   = require('util');
 const { getDb } = require('../db');
 const totp = require('../services/totp');
 
@@ -11,26 +12,41 @@ const cleanRole = (r) => (ROLES.includes(String(r || '').toLowerCase().trim())
   ? String(r).toLowerCase().trim() : 'admin');
 
 // ─── Password hashing (scrypt, from node crypto — no dependency) ──────────────
-function hashPassword(password) {
+// ASYNC, deliberately. scrypt is ~26ms of pure CPU, and scryptSync ran it on the
+// event loop: /login does one per request from anyone who can reach the page, so
+// forty wrong passwords a second pinned the single Node thread and every open
+// socket stalled with it. The callback form hands the work to libuv's thread
+// pool, so the loop keeps serving while the hash is computed.
+//
+// Every one of these returns a promise — `hashPassword`, `verifyPassword` and
+// `absorbPassword` must all be awaited. An un-awaited `verifyPassword` resolves
+// to a promise object, which is truthy, so a missing `await` at a call site is
+// an authentication BYPASS rather than a visible failure.
+const scrypt = util.promisify(crypto.scrypt);
+
+async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(String(password), salt, 64);
+  const hash = await scrypt(String(password), salt, 64);
   return `${salt.toString('hex')}:${hash.toString('hex')}`;
 }
 
-function verifyPassword(password, stored) {
+async function verifyPassword(password, stored) {
   if (!stored || !stored.includes(':')) return false;
   const [saltHex, hashHex] = stored.split(':');
   const salt = Buffer.from(saltHex, 'hex');
   const expected = Buffer.from(hashHex, 'hex');
-  const actual = crypto.scryptSync(String(password), salt, 64);
+  const actual = await scrypt(String(password), salt, 64);
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
 // A fixed decoy hash so a login for an unknown username can still run one full
 // scrypt, matching the timing of a real account. Without this, a missing user
 // returned instantly and its non-existence leaked through response latency.
-const DECOY_HASH = hashPassword('bp-timing-decoy');
-const absorbPassword = (password) => { verifyPassword(password, DECOY_HASH); };
+// Built once, lazily: computing it at require() time would mean an await in the
+// module body, and it is only ever needed on a failed login.
+let decoyHash = null;
+const decoy = async () => (decoyHash ||= await hashPassword('bp-timing-decoy'));
+const absorbPassword = async (password) => { await verifyPassword(password, await decoy()); };
 
 // ─── Recovery codes ───────────────────────────────────────────────────────────
 // Shown once at enrolment; each works once if the phone is lost. Stored hashed,
@@ -70,7 +86,7 @@ async function upsert({ username, password, role = 'admin', displayName, email }
   const uname = String(username).toLowerCase().trim();
   const $set = {
     username: uname,
-    passwordHash: hashPassword(password),
+    passwordHash: await hashPassword(password),
     updatedAt: new Date(),
   };
   // Profile fields are optional and only written when supplied, so re-running
@@ -263,7 +279,7 @@ async function setPassword(username, password) {
   const res = await col().updateOne(
     { username: String(username || '').toLowerCase().trim() },
     // Bump tokenVersion so changing the password logs out existing sessions.
-    { $set: { passwordHash: hashPassword(password), updatedAt: new Date() },
+    { $set: { passwordHash: await hashPassword(password), updatedAt: new Date() },
       $inc: { tokenVersion: 1 } });
   return res.matchedCount === 1;
 }

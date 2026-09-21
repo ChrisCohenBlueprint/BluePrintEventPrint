@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Seed MongoDB from public/booth_data.json, and rescue any bookings still
+ * Seed MongoDB from server/data/booth_data.json, and rescue any bookings still
  * sitting in a legacy booth_state.json.
  *
  * Idempotent: booths are upserted on (showId, boothNumber), so re-running after
@@ -14,6 +14,7 @@ const path = require('path');
 
 const { connect, getDb, close } = require('../server/db');
 const config = require('../server/config');
+const showsModel = require('../server/models/shows');
 
 const argv      = process.argv.slice(2);
 const stateFlag = argv.indexOf('--state');
@@ -26,20 +27,17 @@ async function main() {
   const db = getDb();
 
   // ── Show document ───────────────────────────────────────────────────────────
-  await db.collection('shows').updateOne(
-    { _id: config.showId },
-    { $setOnInsert: {
-        _id: config.showId,
-        name: 'LEX26',
-        svgFile: 'LEX26_Floorplan_Web-Format_57.svg',
-        ratePerSqm: 600,
-        createdAt: new Date(),
-    } },
-    { upsert: true }
-  );
+  // There isn't one to write here any more. This used to upsert a row shaped
+  // { _id, name, svgFile, ratePerSqm } — a schema with no `showId` field at all,
+  // which shows.ensureSeeded now DELETES on the next boot as wreckage from a
+  // failed deploy, correctly: nothing can be filed against an undefined show.
+  // So migrating created a row, booting destroyed it, and the pair looked like a
+  // phantom duplicate event in the admin. The events are seeded by
+  // shows.ensureSeeded at startup, which is the one place that knows the shape.
+  await showsModel.ensureSeeded();
 
   // ── Booths ──────────────────────────────────────────────────────────────────
-  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', 'booth_data.json'), 'utf8'));
+  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'server', 'data', 'booth_data.json'), 'utf8'));
   const entries = Object.values(raw);
 
   // Guard against the renumber footgun. migrate keys on boothNumber and only

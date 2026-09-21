@@ -12,7 +12,8 @@ const users     = require('../models/users');
 const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
 const { track } = require('../services/tracking');
-const { socketAuth, requireAdmin } = require('../auth');
+const { socketAuth, requireAdmin: requireAdminAuth,
+        checkSecretThrottle, registerSecretFailure, clearSecretFailures } = require('../auth');
 
 const ADMIN_ROOM = 'admins';
 
@@ -122,6 +123,31 @@ function limiter(perMin) {
   };
 }
 
+// ─── Denied admin attempts ────────────────────────────────────────────────────
+// The auth guard records every rejected admin event as a `security.denied`
+// activity entry. That record was uncapped, so one anonymous socket emitting an
+// admin event in a loop filled the activity buffer and pushed the real events
+// out of it. The rejection itself is unchanged — refused, warned about and
+// acked exactly as before — only the STORING of it is rate limited per socket,
+// like every other unauthenticated event here.
+function requireAdmin(socket, type, handler) {
+  const guarded = requireAdminAuth(socket, type, handler);
+  return (payload = {}, ack) => {
+    // Mirror the guard's own argument shuffle: socket.emit(event, cb) puts the
+    // acknowledgement in the first position.
+    if (typeof payload === 'function') { ack = payload; payload = {}; }
+    if (!socket.data.isAdmin) {
+      socket.data.allowDenied = socket.data.allowDenied || limiter(20);
+      if (!socket.data.allowDenied()) {
+        socket.emit('error:auth', { event: type, message: 'Administrator access required.' });
+        if (typeof ack === 'function') ack({ ok: false, error: 'Administrator access required.' });
+        return;
+      }
+    }
+    return guarded(payload, ack);
+  };
+}
+
 // ─── Broadcast ────────────────────────────────────────────────────────────────
 // Admins and the public receive different payloads from the same state. The
 // public projection omits company, negotiated price and internal notes.
@@ -166,6 +192,20 @@ function broadcastState(io) {
       console.error('Broadcast failed:', e.message);
     }
   }), 80);
+}
+
+// Presence alone, without the stands. A visitor moving between stands changes
+// nothing about the stands themselves, so pushing all ~273 rows through
+// state:full for it made every public plan re-fit every label and every admin
+// console rebuild its tables and dropdowns — destroying whatever an admin was
+// mid-way through typing — several times a second on a busy plan. The counts go
+// out on their own instead; state:full still carries `viewers` so the first
+// paint has them.
+function broadcastViewers(io) {
+  const showId = config.showId;
+  // One emit to the union of both rooms: admins are in their show's public room
+  // as well, so chaining .to() still delivers to each socket exactly once.
+  io.to(pubRoom(showId)).to(adminRoom(showId)).emit('viewers:map', viewerCounts());
 }
 
 /**
@@ -248,7 +288,11 @@ function register(io) {
         ? socket.handshake.auth.sessionId
         : crypto.randomBytes(16).toString('hex');
 
-    track({ type: 'session.start', socket, meta: { admin: isAdmin } });
+    // Inside this socket's show: track() reads config.showId, which outside a
+    // context falls back to the DEFAULT show — so every North America visitor's
+    // session was being recorded against Europe.
+    showContext.runAs(socket.data.showId, () =>
+      track({ type: 'session.start', socket, meta: { admin: isAdmin } }));
     console.log(`+ ${isAdmin ? 'ADMIN' : 'visitor'} ${socket.id} (total: ${connectionsFor(socket.data.showId)})`);
 
     // ── Handlers are bound synchronously, before any await ────────────────────
@@ -261,9 +305,22 @@ function register(io) {
     const allowSubmit = limiter(5);
 
     // ── Public ────────────────────────────────────────────────────────────────
-    socket.on('booth:view', ({ boothNumber }) => {
+    // Wrapped in safe() like every other public handler. It used to destructure
+    // the payload straight out of the argument list, so a bare
+    // `socket.emit('booth:view')` from any anonymous browser console threw
+    // inside Socket.IO's process.nextTick dispatch — an uncaught exception that
+    // took the whole server down and dropped every connected visitor with it.
+    // safe() also runs this inside the socket's show, so a North America
+    // visitor's views stop being recorded against Europe.
+    socket.on('booth:view', safe('booth:view', (payload) => {
       if (!allowView()) return;
+      const { boothNumber } = payload || {};
       const n = stand(boothNumber);
+      // Only stands that exist. The number goes into the activity stream
+      // unfiltered, so without this an anonymous socket could store any string
+      // it liked, 240 times a minute — the existence check booth:click has
+      // always made.
+      if (!showState().cache.some(x => x.boothNumber === n)) return;
 
       // Close out the previous booth's dwell before switching. This used to be
       // overwritten, so all attention except the final booth was discarded.
@@ -277,8 +334,9 @@ function register(io) {
       socket.data.viewStart = Date.now();
       socket.data.viewing   = n;
       track({ type: 'booth.view', boothNumber: n, socket });
-      broadcastState(io);
-    });
+      // Presence only — the stands themselves did not change.
+      broadcastViewers(io);
+    }, socket));
 
     socket.on('booth:click', safe('booth:click', async ({ boothNumber }) => {
       if (!allowClick()) return;
@@ -304,27 +362,38 @@ function register(io) {
       socket.data.viewing   = n;
       socket.data.viewStart = Date.now();
 
-      await refresh();
-      broadcastState(io);
+      // Bump the cached row in place. This used to re-read all ~273 stands from
+      // the database to move one counter; the authoritative count lives in the
+      // DB and the next real mutation refreshes the cache from it anyway.
+      b.clicks = (b.clicks || 0) + 1;
+      // Presence only — no state:full for a click. The admin's click column can
+      // lag until the next real mutation, which is worth not rebuilding every
+      // open admin table for.
+      broadcastViewers(io);
     }, socket));
 
     // Sent when a visitor accepts analytics consent mid-session, so their
     // events attach to a stable id from that point on.
-    socket.on('session:adopt', ({ sessionId }) => {
+    // Wrapped in safe() for the same reason as booth:view — destructuring a
+    // missing payload here crashed the process — and so the consent event is
+    // stored against the show the visitor actually has open.
+    socket.on('session:adopt', safe('session:adopt', (payload) => {
+      const { sessionId } = payload || {};
       if (typeof sessionId === 'string' && /^[a-f0-9]{32}$/.test(sessionId)) {
         socket.data.sessionId = sessionId;
         track({ type: 'consent.granted', socket });
       }
-    });
+    }, socket));
 
-    socket.on('plan:zoom', ({ level, cx, cy }) => {
+    socket.on('plan:zoom', safe('plan:zoom', (payload) => {
       if (!allowView()) return;
+      const { level, cx, cy } = payload || {};
       // Coerce to finite numbers — the client controls these and they land in a
       // stored `meta`; an arbitrarily large string/object would bloat memory and
       // could even produce a >16 MB document Mongo rejects. Non-finite → null.
       const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
       track({ type: 'plan.zoom', socket, meta: { level: num(level), cx: num(cx), cy: num(cy) } });
-    });
+    }, socket));
 
     // Replaces booth:book / booth:hold on the public floorplan. Captures the
     // name and email that were previously discarded in the browser.
@@ -389,13 +458,72 @@ function register(io) {
       const r  = await holdsSvc.create({ boothNumber: n, company: company || 'Pending',
                                          durationMs: ms, actor: socket.data.user });
       if (!r.ok) {
+        // The ack IS the failure report. Emitting error:action as well raised a
+        // second toast for the same refusal.
         const reason = r.reason === 'not_available' ? 'it is not available' : r.reason;
-        socket.emit('error:action', { message: `Cannot hold stand ${n} — ${reason}` });
         return { ok: false, error: `Stand ${n} could not be held — ${reason}.` };
       }
       await refresh(); broadcastState(io);
       log(io, `⏳ Stand ${escapeHtml(n)} held for ${escapeHtml(company || 'Pending')} until ${r.expiresAt.toLocaleString('en-GB')}`, 'hold');
     }));
+
+    /**
+     * Re-confirm a destructive action's secret, with an attempt limit.
+     *
+     * The recovery key exists precisely to survive a STOLEN admin session, so
+     * letting whoever holds that session guess it at full speed defeats the
+     * point of having it — and a wrong guess used to reach no log at all. Five
+     * failures buy the account a pause, and the counter is the SAME one the
+     * REST gates in routes/api.js use, so the two surfaces cannot be alternated
+     * to double the attempt budget. Only re-confirmation is gated; signing in
+     * is not, so this can never lock anyone out of the console.
+     *
+     * `candidates` is a list because the admin console has always sent the
+     * recovery key as `key` while the public client sends `password`; either
+     * field may carry it, and a wrong value in one must not veto a right value
+     * in the other.
+     *
+     * `kind` says WHICH secret is being asked for. 'unbooking' follows the
+     * failsafe — the recovery key when RECOVERY_KEY is set, the admin's own
+     * password when it is not — because that is what protects a booking from a
+     * stolen session. 'password' always means the admin's own login password:
+     * repricing the board is guarded, but it destroys no booking, and quietly
+     * promoting it to the recovery key would change what an admin is asked for
+     * on an action that has always taken their password.
+     */
+    async function confirmSecret(candidates, what, kind = 'unbooking') {
+      const who = socket.data.user;
+      const gate = checkSecretThrottle(who);
+      if (!gate.ok) {
+        return { ok: false, error: `Too many incorrect attempts — wait ${Math.ceil(gate.retryAfter / 60)} minute(s) and try again. ${what}.` };
+      }
+      const tries = candidates
+        .filter(v => v !== undefined && v !== null)
+        .map(v => String(v));
+      const offered = tries.length ? tries : [''];
+
+      if (kind === 'unbooking' && config.recoveryEnabled()) {
+        if (!offered.some(v => config.recoveryOk(v))) {
+          registerSecretFailure(who, { what, socket });
+          return { ok: false, error: `Recovery key incorrect — ${what}.` };
+        }
+      } else {
+        const account = await users.findByUsername(who);   // full doc incl. passwordHash
+        let matched = false;
+        for (const v of offered) {
+          // Awaited: verifyPassword returns a promise, and an unawaited promise
+          // is truthy — the check would pass for ANY password.
+          if (account && await users.verifyPassword(v, account.passwordHash)) { matched = true; break; }
+          await users.absorbPassword(v);                   // constant-time on the failure path
+        }
+        if (!matched) {
+          registerSecretFailure(who, { what, socket });
+          return { ok: false, error: `Password incorrect — ${what}.` };
+        }
+      }
+      clearSecretFailures(who);
+      return { ok: true };
+    }
 
     // Password-gated (re-enter the admin's own login password): release now frees
     // a SOLD stand too, which drops the sale, so a stray click can't un-book an
@@ -404,15 +532,8 @@ function register(io) {
       // Releasing un-books a stand (destroys the booking). When the recovery-key
       // failsafe is on, require THAT key (not the admin login, so a stolen admin
       // session can't erase bookings); otherwise fall back to the admin password.
-      if (config.recoveryEnabled()) {
-        if (!config.recoveryOk(password)) return { ok: false, error: 'Recovery key incorrect — stand not released.' };
-      } else {
-        const account = await users.findByUsername(socket.data.user);   // full doc incl. passwordHash
-        if (!account || !users.verifyPassword(String(password || ''), account.passwordHash)) {
-          users.absorbPassword(String(password || ''));          // constant-time on the failure path
-          return { ok: false, error: 'Password incorrect — stand not released.' };
-        }
-      }
+      const gate = await confirmSecret([password], 'stand not released');
+      if (!gate.ok) return gate;
       const n = stand(boothNumber);
       const before = await booths.get(n);
       await holdsSvc.release(n, { actor: socket.data.user });
@@ -439,7 +560,7 @@ function register(io) {
       log(io, `📝 Deal updated for Stand ${escapeHtml(n)}`, 'admin');
     }));
 
-    socket.on('admin:setStatus', requireAdmin(socket, 'admin:setStatus', async ({ boothNumber, status, company, key }) => {
+    socket.on('admin:setStatus', requireAdmin(socket, 'admin:setStatus', async ({ boothNumber, status, company, key, password }) => {
       const allowed = ['available', 'held', 'sold'];
       // Returning bare `undefined` here made requireAdmin ack {ok:true}, so the
       // UI reported a successful change that never happened.
@@ -449,10 +570,18 @@ function register(io) {
       if (!before) return { ok: false, error: `Stand ${n} not found.` };
 
       // Forcing a booked/held stand back to Available un-books it (destroys the
-      // booking) — same failsafe as Release: require the recovery key when on.
+      // booking), so it takes EXACTLY the gate Release takes: the recovery key
+      // when the failsafe is on, the admin's own login password when it is not.
+      // Only the first half of that was here, so with RECOVERY_KEY unset — the
+      // default — an admin could un-book a stand from this path with no
+      // credential at all, while Release next to it demanded the password.
+      // The secret arrives as `password` from the public client; the admin
+      // console has always sent it as `key` for the recovery case, so both are
+      // accepted.
       const unbooking = status === 'available' && before.status !== 'available';
-      if (unbooking && config.recoveryEnabled() && !config.recoveryOk(key)) {
-        return { ok: false, error: 'Recovery key incorrect — status not changed.' };
+      if (unbooking) {
+        const gate = await confirmSecret([password, key], 'status not changed');
+        if (!gate.ok) return gate;
       }
 
       // Forcing 'held' without a hold document left the booth to be reclaimed
@@ -469,7 +598,9 @@ function register(io) {
         company: company || (status === 'available' ? null : before.assignment?.company || null),
         actor: socket.data.user,
       });
-      if (!r) return;
+      // Bare `return` here acked {ok:true} for a stand that no longer exists —
+      // the very failure the comment above warns about.
+      if (!r) return { ok: false, error: `Stand ${n} not found.` };
       track({ type: 'booth.status_change', boothNumber: n, socket,
               meta: { from: r.before.status, to: status, forced: true } });
       await refresh(); broadcastState(io);
@@ -541,7 +672,10 @@ function register(io) {
       }
       track({ type: 'booth.consolidate', boothNumber: r.primary.boothNumber, socket, meta: { many: r.absorbed } });
       await refresh();
-      io.to(adminRoom(config.showId)).emit('booth:consolidated', { primary: r.primary.boothNumber, secondary: r.absorbed });
+      // `absorbed` (an array), not `secondary` (a single stand, which is what
+      // the one-to-one merge above emits). Same event, two payload shapes, and
+      // the client could not tell which it had.
+      io.to(adminRoom(config.showId)).emit('booth:consolidated', { primary: r.primary.boothNumber, absorbed: r.absorbed });
       broadcastState(io);
       log(io, `🔗 ${r.absorbed.length + 1} stands merged into ${escapeHtml(r.primary.boothNumber)}`, 'admin');
       return { ok: true, primary: r.primary.boothNumber, absorbed: r.absorbed };
@@ -549,19 +683,24 @@ function register(io) {
 
     // Divide one stand into equal parts — the inverse of consolidate, and the
     // manual fix for stands the artwork drew as a single block.
-    socket.on('booth:split', requireAdmin(socket, 'booth:split', async ({ boothNumber, parts, axis }) => {
+    // `firstSqm` (optional, two parts only) makes the split uneven: the size the
+    // original keeps, from the divider the admin dragged on the plan.
+    socket.on('booth:split', requireAdmin(socket, 'booth:split', async ({ boothNumber, parts, axis, firstSqm }) => {
       const n = stand(boothNumber);
-      const r = await booths.split(n, { parts, axis, actor: socket.data.user });
+      const r = await booths.split(n, { parts, axis, firstSqm, actor: socket.data.user });
       if (!r.ok) {
         const why = r.reason === 'reset_first' ? 'it was already merged or split — reset it first'
                   : r.reason === 'not_available' ? 'the stand must be available'
                   : r.reason === 'too_small' ? 'the stand is too small to divide that many ways'
+                  : r.reason === 'bad_ratio' ? 'each side must keep at least 1 m²'
+                  : r.reason === 'uneven_needs_two' ? 'an uneven split makes exactly two stands'
                   : r.reason;
         return { ok: false, error: `Could not split — ${why}.` };
       }
-      track({ type: 'booth.split', boothNumber: n, socket, meta: { parts, axis, created: r.created } });
+      track({ type: 'booth.split', boothNumber: n, socket, meta: { parts, axis, firstSqm: firstSqm ?? null, created: r.created } });
       await refresh(); broadcastState(io);
-      log(io, `✂️ Stand ${escapeHtml(n)} split into ${r.created.length + 1} — added ${r.created.map(escapeHtml).join(', ')}`, 'admin');
+      const sizes = firstSqm != null ? ` (${r.sizes.join(' + ')} m²)` : '';
+      log(io, `✂️ Stand ${escapeHtml(n)} split into ${r.created.length + 1}${sizes} — added ${r.created.map(escapeHtml).join(', ')}`, 'admin');
       return { ok: true, created: r.created };
     }));
 
@@ -780,7 +919,7 @@ function register(io) {
         return { ok: false, error: `Could not save the logo — ${why}.` };
       }
       await refreshAreas(); broadcastAreas(io);
-      const name = showState().showState().areaCache.find(a => a.key === r.key)?.label || r.key;
+      const name = showState().areaCache.find(a => a.key === r.key)?.label || r.key;
       log(io, r.logo ? `🖼️ ${escapeHtml(name)} sponsor logo set`
                      : `🖼️ ${escapeHtml(name)} sponsor logo removed`, 'admin');
       return { ok: true, ...r };
@@ -804,7 +943,7 @@ function register(io) {
           : 'That is not an area on this plan.' };
       }
       await refreshAreas(); broadcastAreas(io);
-      const name = showState().showState().areaCache.find(a => a.key === r.key)?.label || r.key;
+      const name = showState().areaCache.find(a => a.key === r.key)?.label || r.key;
       log(io, r.sponsor ? `🏛️ ${escapeHtml(name)} sponsored by <strong>${escapeHtml(r.sponsor)}</strong>`
                         : `🏛️ ${escapeHtml(name)} is available to sponsor`, 'admin');
       return { ok: true, ...r };
@@ -821,11 +960,8 @@ function register(io) {
     // Change the €/unit rate. Password-gated (re-enter the admin's own login
     // password), because it reprices every stand's list price across the board.
     socket.on('settings:set-rate', requireAdmin(socket, 'settings:set-rate', async ({ rate, password }) => {
-      const account = await users.findByUsername(socket.data.user);   // full doc incl. passwordHash
-      if (!account || !users.verifyPassword(String(password || ''), account.passwordHash)) {
-        users.absorbPassword(String(password || ''));          // constant-time on the failure path
-        return { ok: false, error: 'Password incorrect — rate not changed.' };
-      }
+      const gate = await confirmSecret([password], 'rate not changed', 'password');
+      if (!gate.ok) return gate;
       const saved = await settings.setRate(rate);
       if (!saved.ok) return { ok: false, error: 'Enter a valid rate (a positive number).' };
       const rep = await booths.recomputeListPrices(saved.ratePerSqm, { actor: socket.data.user });
@@ -861,14 +997,21 @@ function register(io) {
     // anonymous browser console.
 
     socket.on('disconnect', () => {
-      
-      if (socket.data.viewing && socket.data.viewStart) {
-        track({ type: 'booth.dwell', boothNumber: socket.data.viewing, socket,
-                meta: { ms: Date.now() - socket.data.viewStart } });
-      }
-      delete activeViewers[socket.id];
-      broadcastState(io);
-      io.to(pubRoom(config.showId)).emit('viewers:count', connectionsFor(config.showId));
+      // Inside this socket's show. Nothing here named one, so config.showId fell
+      // back to the DEFAULT show: a North America visitor's dwell was stored
+      // against Europe, and both broadcasts below went to Europe's rooms —
+      // refreshing a plan nobody had left while the counts on the plan they DID
+      // leave stayed stale.
+      showContext.runAs(socket.data.showId, () => {
+        if (socket.data.viewing && socket.data.viewStart) {
+          track({ type: 'booth.dwell', boothNumber: socket.data.viewing, socket,
+                  meta: { ms: Date.now() - socket.data.viewStart } });
+        }
+        delete activeViewers[socket.id];
+        // Presence only — a visitor leaving changes nothing about the stands.
+        broadcastViewers(io);
+        io.to(pubRoom(config.showId)).emit('viewers:count', connectionsFor(config.showId));
+      });
     });
 
     // ── Initial state, sent only once every handler above is bound ────────────
@@ -901,6 +1044,11 @@ function register(io) {
           recoveryRequired: isAdmin ? config.recoveryEnabled() : undefined });
 
         io.to(pubRoom(config.showId)).emit('viewers:count', connectionsFor(config.showId));
+        // The per-stand counts too, so a client that joins mid-session does not
+        // wait for the next presence change to agree with everyone else. The
+        // state:full above already carries `viewers` for this socket's own first
+        // paint; this is the same map, as its own event.
+        broadcastViewers(io);
         socket.emit('ready');
       } catch (e) {
         console.error('Initial state failed:', e.message);

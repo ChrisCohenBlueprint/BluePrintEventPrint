@@ -1,19 +1,33 @@
 /**
- * One-shot: put North America's plan back and rebuild its stands from it.
+ * Put North America's plan back and rebuild its stands from it.
  *
  * Why this exists rather than an instruction to click through the admin:
  * removing the printed exhibitor names OVERWROTE the stored plan, which was
- * the only copy of those names on the server. The event is now sitting on a
+ * the only copy of those names on the server. The event was left sitting on a
  * plan with none left in it and 99 stands with no exhibitors, and no amount of
- * re-importing can recover what is no longer in the file. The designer's
- * original is shipped in the repo, so the deploy can simply put it back.
+ * re-importing could recover what was no longer in the file. The designer's
+ * original is shipped in the repo, so the repair can simply put it back.
  *
- * Guarded three ways:
- *   - a meta flag, so it runs exactly once however many times the app boots;
+ * IT NO LONGER RUNS AT BOOT. It used to, guarded by a flag in `meta`, which
+ * meant a deploy could rewrite an event's inventory with nobody having asked
+ * and nobody watching — and, worse, a run that restored the plan and was then
+ * refused the import wrote its flag anyway, so every later boot saw a healthy
+ * plan, skipped, and left the stands broken for good. It is now a function with
+ * a DRY RUN as its default, driven by scripts/seed-north-america.js, which
+ * prints the database, the event and every change before anything is written.
+ *
+ * Still guarded three ways:
+ *   - a deliberate --apply, so nothing happens by accident;
  *   - booths.importFromArtwork's own refusal on any event with real bookings,
- *     holds, contacts or agreed prices, which is what keeps Europe untouched;
- *   - it only acts on the event it names, and only if that event's stored plan
- *     is actually worse than the shipped one.
+ *     holds, contacts, agreed prices or hand-made layout work, which is what
+ *     keeps Europe untouched;
+ *   - it only acts on the event it names.
+ *
+ * It is also the last automatic path that would have written REAL CUSTOMER
+ * NAMES into a fresh database: the shipped artwork carries 78 exhibitors, and
+ * a boot-time seed baked them into every database this code was ever run
+ * against. Behind --apply, that is a person importing an event's own plan,
+ * which is the whole point of the feature.
  */
 const fs = require('fs');
 const path = require('path');
@@ -21,18 +35,21 @@ const path = require('path');
 const showContext = require('../show-context');
 const showsModel = require('../models/shows');
 const floorplans = require('../models/floorplans');
+const planAreas = require('../models/plan-areas');
 const settings = require('../models/settings');
 const booths = require('../models/booths');
 const { getDb } = require('../db');
 const { extractStands, stripExhibitorNames, paletteOf } = require('../lib/extract-stands');
 
-const FLAG = 'seed-artwork-lna-v6';   // v5 skipped: its check did not look at status counts
 const SLUG = 'lna';
 const FILE = path.join(__dirname, '..', '..', 'public', 'LNA27_Floorplan_Web-Format_24.svg');
+// Kept as a record of what was done and when, NOT as a gate. A flag that
+// decides whether a repair runs is a flag that can disable it after a
+// half-finished run, which is exactly what happened.
+const RAN = 'seed-artwork-lna';
 
-async function seedNorthAmerica() {
+async function seedNorthAmerica({ apply = false, force = false, actor = 'deploy' } = {}) {
   const meta = getDb().collection('meta');
-  if (await meta.findOne({ _id: FLAG })) return { skipped: 'already-run' };
 
   const show = showsModel.list().find(s => s.slug === SLUG);
   if (!show) return { skipped: 'no-such-show' };
@@ -42,7 +59,7 @@ async function seedNorthAmerica() {
   catch (e) { return { skipped: 'no-shipped-file', detail: e.message }; }
 
   const source = extractStands(shipped);
-  if (!source.stands.length) return { skipped: 'shipped-file-unreadable' };
+  if (!source.stands.length) return { skipped: 'shipped-file-unreadable', warnings: source.warnings };
 
   return showContext.runAs(show.showId, async () => {
     const stored = await floorplans.get();
@@ -52,21 +69,23 @@ async function seedNorthAmerica() {
 
     // Lounges and conference tracks are sponsorable space, not sellable stands.
     const sellable = source.stands.filter(s => !s.sponsored);
+    const areas = source.stands.filter(s => s.sponsored);
 
     // Two separate things can be wrong, and fixing one is not fixing the other.
     // An earlier run of this restored the plan and was then refused the import,
-    // so the plan was right while the stands stayed wrong — and because the
-    // decision to act was made on the plan alone, every boot afterwards saw a
-    // healthy plan and skipped, leaving the stands broken for good.
+    // so the plan was right while the stands stayed wrong.
     const planNeedsRestoring = namesNow < namesShipped;
 
     // Does the stored inventory match what the plan says? Compared as a whole
-    // rather than by a list of specific symptoms: the first version of this
-    // checked only whether the plan had names, the second only the stand count
-    // and whether ANY carried a company — and each time the defect that was
-    // actually there fell outside the check and the repair skipped itself.
-    // Counting every status catches whatever is wrong, including the four held
-    // stands that kept reverting to empty.
+    // rather than by a list of specific symptoms: earlier versions checked only
+    // whether the plan had names, then only the stand count, and each time the
+    // defect actually present fell outside the check.
+    //
+    // This is now a REPORT, not a decision. Comparing tallies cannot tell a
+    // broken import from an admin legitimately merging two stands — one merge
+    // changes the total and made this declare the whole inventory in need of
+    // rebuilding — so what to do about a difference is left to the person
+    // reading it, and the import's own guards decide what may be overwritten.
     const tally = (rows, status, company) => ({
       total: rows.length,
       available: rows.filter(status('available')).length,
@@ -77,31 +96,42 @@ async function seedNorthAmerica() {
     const want = tally(sellable, (st) => (r) => r.status === st, (r) => !!r.exhibitor && r.status !== 'available');
     const have = await booths.all();
     const got = tally(have, (st) => (r) => r.status === st, (r) => !!(r.assignment && r.assignment.company));
+    const standsDiffer = Object.keys(want).some(k => want[k] !== got[k]);
 
-    const standsNeedRebuilding = Object.keys(want).some(k => want[k] !== got[k]);
-    if (standsNeedRebuilding) {
-      console.log('North America stands differ from the plan —',
-        `plan ${JSON.stringify(want)} vs stored ${JSON.stringify(got)}`);
-    }
+    const report = {
+      showId: show.showId, slug: SLUG,
+      planNeedsRestoring, namesNow, namesShipped,
+      standsDiffer, want, got,
+      sellable: sellable.length, areas: areas.length,
+      committed: await booths.countCommitted(),
+      customised: await booths.countHandwork(),
+      warnings: source.warnings,
+    };
 
-    if (!planNeedsRestoring && !standsNeedRebuilding) {
-      await meta.insertOne({ _id: FLAG, at: new Date(), skipped: 'nothing-to-repair' });
-      return { skipped: 'nothing-to-repair', stands: have.length, namesNow };
-    }
+    if (!apply) return { ok: true, dryRun: true, ...report };
 
     if (planNeedsRestoring) {
       const saved = await floorplans.save(shipped, {
-        filename: 'LNA27_Floorplan_Web Format_24.svg', actor: 'deploy',
+        filename: 'LNA27_Floorplan_Web Format_24.svg', actor,
       });
-      if (!saved.ok) return { skipped: 'could-not-store', reason: saved.reason };
+      if (!saved.ok) return { ok: false, ...report, reason: 'could-not-store', detail: saved.reason };
     }
-    const out = await booths.importFromArtwork(sellable, { actor: 'deploy' });
+
+    const out = await booths.importFromArtwork(sellable, { actor, force });
     if (!out.ok) {
-      // Refused because the event has real bookings — exactly the intent. The
-      // plan is restored either way; the stands are left as they are.
-      await meta.insertOne({ _id: FLAG, at: new Date(), artworkRestored: true, importRefused: out.reason });
-      return { artworkRestored: true, importRefused: out.reason };
+      // Refused because the event has real bookings or hand-made work — exactly
+      // the intent. The plan is restored either way; the stands are left alone.
+      await meta.updateOne({ _id: RAN },
+        { $set: { at: new Date(), artworkRestored: planNeedsRestoring, importRefused: out.reason } },
+        { upsert: true });
+      return { ok: false, ...report, artworkRestored: planNeedsRestoring, importRefused: out.reason, import: out };
     }
+
+    // The plan's own sponsorable areas — its lounges and conference tracks —
+    // stored against THIS event. Without this every show was served Europe's.
+    let storedAreas = null;
+    try { storedAreas = await planAreas.replaceFromArtwork(areas, { actor }); }
+    catch (e) { console.error('Seed: areas not stored —', e.message); }
 
     if (source.unit) await settings.setUnit(source.unit === 'sqft' ? 'ft' : 'm');
     try { await settings.setPalette(paletteOf(source.fills)); }
@@ -117,10 +147,10 @@ async function seedNorthAmerica() {
       }
     } catch (e) { console.error('Seed: names not stripped —', e.message); }
 
-    await meta.insertOne({ _id: FLAG, at: new Date(), ...out, namesRemoved });
-    return { ...out, namesRemoved, areasSkipped: source.stands.length - sellable.length,
+    await meta.updateOne({ _id: RAN }, { $set: { at: new Date(), ...out, namesRemoved } }, { upsert: true });
+    return { ok: true, ...report, ...out, namesRemoved, storedAreas,
              planRestored: planNeedsRestoring };
   });
 }
 
-module.exports = { seedNorthAmerica };
+module.exports = { seedNorthAmerica, SLUG, FILE };

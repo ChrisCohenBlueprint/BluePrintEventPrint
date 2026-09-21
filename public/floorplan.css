@@ -4,7 +4,10 @@
    is the artwork SVG — white/yellow booths on the light hall floor — which is
    already light and unchanged. The floating tooltip is deliberately kept dark:
    a high-contrast popover reads cleanly on a light page. */
-@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&display=swap');
+/* The web font is requested ONCE, by the <link> in floorplan.html. An @import
+   used to sit here as well: a second fetch of the same font, and one the
+   browser cannot even begin until this stylesheet has arrived, so it turned
+   one round trip into two on the critical path. */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -18,7 +21,6 @@
   --accent-glow:  rgba(79,70,229,0.30);
   /* --yellow / --orange come from booth-colours.css so the stand colours cannot
      drift between the website and the printed proposal. */
-  --white-booth:  #ffffff;
   --radius:       12px;
 }
 
@@ -241,19 +243,15 @@ body {
   50%      { filter: drop-shadow(0 0 12px rgba(244,63,94,1)); }
 }
 
-@media (max-width: 900px) {
-  /* Stacked, the search gets the full width of its own row; the dropdowns share
-     the next one rather than being cut off the right edge. */
-  .fp-search { flex: 1 1 100%; max-width: none; flex-wrap: wrap; order: 3; }
-  .fps-box { flex: 1 1 100%; }
-  .fps-select { flex: 1 1 40%; max-width: none; }
-}
-
 .fp-map-frame {
   flex: 1;
   overflow: hidden;
   cursor: grab;
   position: relative;
+  /* The map owns every gesture inside it. Without this, a vertical drag on the
+     narrow layout both panned the plan AND scrolled the page underneath it, so
+     the hall slid away while the visitor was trying to move it. */
+  touch-action: none;
 }
 .fp-map-frame:active { cursor: grabbing; }
 .fp-map-inner {
@@ -278,9 +276,13 @@ body {
   backdrop-filter: blur(16px);
   min-width: 130px;
   box-shadow: 0 10px 30px rgba(15,23,42,0.25);
-  transition: opacity 0.12s;
+  transition: opacity .12s, visibility .12s;
 }
-.fp-tooltip.hidden { opacity: 0; }
+/* The global .hidden below is display:none !important, so this rule set opacity
+   on something already removed from the box tree and the 0.12s fade never once
+   ran. Fade the tooltip out and take it out of the way with visibility, which
+   transitions cleanly. */
+.fp-tooltip.hidden { opacity: 0; visibility: hidden; display: block !important; }
 .tt-label  { font-weight: 700; font-size: 13px; margin-bottom: 3px; }
 .tt-status { font-size: 11px; color: var(--yellow); margin-bottom: 2px; }
 .tt-price  { font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 3px; }
@@ -440,17 +442,18 @@ body {
 .eq-field select:focus, .eq-field textarea:focus { border-color: var(--accent); }
 .eq-field select { cursor: pointer; appearance: auto; }
 
-.eq-actions { display: flex; gap: 8px; }
-.btn-hold, .btn-book {
+/* .eq-actions / .btn-hold were the old "Hold this stand" pair. Holding is an
+   administrator action and has not been on this page for a long time; the rules
+   were still here, styling nothing. */
+.btn-book {
   flex: 1; padding: 10px; border: none; border-radius: 8px;
   font-family: inherit; font-size: 13px; font-weight: 600;
   cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
   transition: opacity 0.2s;
+  background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff;
 }
-.btn-hold { background: rgba(249,115,22,0.14); color: #c2410c; border: 1px solid rgba(194,65,12,0.30); }
-.btn-hold:hover { background: rgba(249,115,22,0.22); }
-.btn-book { background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff; }
 .btn-book:hover { opacity: 0.88; }
+.btn-book:disabled { opacity: .5; cursor: not-allowed; }
 
 /* Stats strip — pinned to the bottom of the side panel (margin-top:auto eats the
    free space above it) so it stays on the bottom edge and rides up/down as the
@@ -473,19 +476,41 @@ body {
 
 /* ─── SVG Booth Styles (the map artwork — already light) ──────────────────────── */
 .booth-interactive { cursor: pointer; transition: fill 0.2s, filter 0.2s; }
-.booth-taken-orig  { cursor: default; opacity: 0.85; }
 
 /* The three status FILLS live in booth-colours.css, which every surface loads —
-   see that file. Only this page's own behaviour on top of them is set here. */
-.booth-available:hover { fill: #dbeafe !important; filter: drop-shadow(0 0 8px rgba(79,70,229,0.6)) !important; }
-.booth-held { animation: holdPulse 1.8s ease-in-out infinite; }
+   see that file. Only this page's own behaviour on top of them is set here.
+
+   Wrapped in (hover: hover) because a touchscreen has no hover to LEAVE: tapping
+   a stand fired :hover and then left it stuck on, so a phone ended up with a
+   trail of pale blue stands the visitor had merely tapped past. Keyboard focus
+   gets the same cue, which it never had at all. */
+@media (hover: hover) {
+  .booth-available:hover { fill: #dbeafe !important; filter: drop-shadow(0 0 8px rgba(79,70,229,0.6)) !important; }
+}
+.booth-interactive:focus-visible {
+  outline: none;
+  stroke: #4f46e5 !important; stroke-width: 5px !important;
+  filter: drop-shadow(0 0 8px rgba(79,70,229,.8)) !important;
+}
+
+/* ON HOLD is drawn, not animated.
+   It used to pulse opacity. Opacity on an SVG child is not compositor-driven —
+   the browser cannot promote one <rect> inside a 6000-path document to its own
+   layer — so every held stand forced a REPAINT OF THE WHOLE PLAN at 60fps, for
+   as long as the page sat open doing nothing. A hatch says "on hold" just as
+   clearly and costs one paint. */
+.booth-held {
+  stroke: var(--booth-held) !important;
+  stroke-width: 3px !important;
+  stroke-dasharray: 7 5 !important;
+}
 
 .booth-selected {
   stroke: #4f46e5 !important; stroke-width: 8px !important;
   filter: drop-shadow(0 0 12px rgba(79,70,229,0.7)) !important;
 }
 
-@keyframes holdPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
+/* holdPulse is gone: ON HOLD is a static hatch now (see .booth-held). */
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* Loading */
@@ -547,7 +572,6 @@ body {
 
 .stand-hint, .stand-alt { font-size: 11.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
 
-.badge-taken    { background: rgba(234,179,8,.18);  color: #a16207; }
 
 .booth-shortlisted {
   stroke: #16a34a !important; stroke-width: 3px !important;
@@ -590,7 +614,11 @@ body {
 .embed .fp-header { display: none; }
 .embed .fp-main { padding-top: 0; }
 /* Our own cookie bar is redundant when the host site already has one; suppress
-   it in embed so two consent banners don't stack. */
+   it in embed so two consent banners don't stack.
+   The host tells us what the visitor chose instead — see the postMessage /
+   ?consent= protocol documented above initConsent() in floorplan.js. Hiding
+   this bar with nothing in its place is what left `consent` null forever and
+   made the sales heatmap empty for every real visitor. */
 .embed .consent-bar { display: none; }
 
 /* ─── Sponsor strip ────────────────────────────────────────────────────────── */
@@ -617,15 +645,21 @@ body {
 .sponsor-logos a:hover, .sponsor-logos a:focus-visible { opacity: .85; }
 .sponsor-logos img { height: 100%; width: auto; max-width: 400px; object-fit: contain; display: block; }
 
-@media (max-width: 900px) {
-  .sponsor-strip { gap: 12px; padding: 10px 12px; }
-  .sponsor-logos { gap: 18px; }
-  .sponsor-logos a, .sponsor-logos span { height: 68px; min-width: calc(68px * 16 / 9); }
-}
+/* Somebody who has asked their operating system for no motion gets none.
+   This block used to say only `.booth-match { animation: none }`, which LOSES
+   on specificity to `.booth-interactive.booth-match` (two classes beat one), so
+   the search glow pulsed on regardless — and the header dot and the loading
+   spinner were never mentioned. Each selector below matches or beats the
+   specificity of the rule that starts the animation. (The on-hold pulse is gone
+   entirely: it is drawn as a hatch now, for performance — see .booth-held.) */
 @media (prefers-reduced-motion: reduce) {
-  .booth-match { animation: none; }
-
+  .booth-interactive.booth-match { animation: none; }
+  .live-dot { animation: none; }
+  .spin-icon { animation: none; }
   .sponsor-logos a { transition: none; }
+  .fp-tooltip { transition: none; }
+  .booth-dim { transition: none; }
+  .fp-side { transition: none; }
 }
 
 /* ─── Wide selection panel: sponsorship (left) + enquiry (right) ────────────── */
@@ -745,6 +779,9 @@ body {
   .sp-head { position: relative; }
 }
 
+/* The narrow layout, in ONE place. It used to be three @media (max-width:900px)
+   blocks 500 lines apart, so working out what a phone actually gets meant
+   finding all three. */
 @media (max-width: 900px) {
   .fp-main { flex-direction: column; height: auto; min-height: 100vh; }
   .fp-map-panel { height: 62vh; min-height: 360px; flex: none; }
@@ -755,13 +792,25 @@ body {
      its selection flow naturally and the footer follows the content. */
   .fp-selection { overflow: visible; flex: 0 1 auto; }
   body { overflow: auto; }
+
+  /* Stacked, the search gets the full width of its own row; the dropdowns share
+     the next one rather than being cut off the right edge. */
+  .fp-search { flex: 1 1 100%; max-width: none; flex-wrap: wrap; order: 3; }
+  .fps-box { flex: 1 1 100%; }
+  .fps-select { flex: 1 1 40%; max-width: none; }
+
+  .sponsor-strip { gap: 12px; padding: 10px 12px; }
+  .sponsor-logos { gap: 18px; }
+  .sponsor-logos a, .sponsor-logos span { height: 68px; min-width: calc(68px * 16 / 9); }
+
+  .fp-directory { width: 100%; }
 }
 @media (max-width: 600px) {
   .fp-map-panel { height: 52vh; min-height: 300px; }
   .fp-header { padding: 0 14px; }
 }
 
-@media (prefers-reduced-motion: reduce) { .sc-add, .sc-chevron { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .sc-add, .sc-chevron, .sponsor-card { transition: none; } }
 
 /* ─── Sold-out sponsorship ────────────────────────────────────────────────── */
 .sponsor-card.sold-out { opacity: .68; }
@@ -777,4 +826,187 @@ body {
   font-size: 11.5px; line-height: 1.45; text-align: center;
   color: var(--muted); background: rgba(15,23,42,.03);
   border: 1px dashed rgba(15,23,42,.14);
+}
+
+/* ─── Screen-reader-only ──────────────────────────────────────────────────── */
+/* Present to assistive technology, absent to everyone else. Not display:none,
+   which removes it from the accessibility tree as well. */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+  overflow: hidden; white-space: nowrap;
+}
+
+/* ─── Live badge, offline ─────────────────────────────────────────────────── */
+/* The badge told everyone it was live whatever the socket was doing. */
+.live-badge.offline {
+  background: rgba(100,116,139,.12);
+  border-color: rgba(100,116,139,.32);
+  color: var(--muted);
+}
+.live-badge.offline .live-dot { background: var(--muted); animation: none; }
+
+/* ─── Banner: load trouble, connection trouble ────────────────────────────── */
+.fp-banner {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  font-size: 12.5px; line-height: 1.45;
+  background: rgba(79,70,229,.07);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.fp-banner-warn { background: rgba(249,115,22,.12); color: #9a3412; }
+.fp-banner a { color: inherit; font-weight: 700; }
+
+/* ─── Load failure, with a way out ────────────────────────────────────────── */
+.load-error {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; height: 100%; padding: 28px; text-align: center;
+}
+.load-error h3 { font-size: 15px; font-weight: 700; }
+.load-error p  { font-size: 13px; color: var(--muted); max-width: 420px; line-height: 1.5; }
+.load-error-detail { font-size: 11.5px; opacity: .75; }
+.load-retry {
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  padding: 9px 18px; border-radius: 8px; border: none; cursor: pointer;
+  background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff;
+}
+.load-retry:disabled { opacity: .5; cursor: progress; }
+
+/* ─── Exhibitor directory ─────────────────────────────────────────────────── */
+/* Sits over the map rather than beside it: the plan is the page, and a
+   permanent second column would take the hall's width on every screen for a
+   list most visitors open once. */
+/* display:flex on the class would beat the browser's own [hidden] rule, so the
+   panel has to say explicitly that hidden means hidden. */
+.fp-directory[hidden] { display: none; }
+.fp-directory {
+  position: absolute; z-index: 150;
+  top: 0; right: 0; bottom: 0;
+  width: 340px; max-width: 92%;
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -14px 0 40px rgba(15,23,42,.10);
+}
+.dir-top {
+  flex-shrink: 0;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.dir-title { font-size: 14px; font-weight: 700; }
+.dir-count { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.dir-close {
+  flex-shrink: 0; width: 28px; height: 28px; border-radius: 7px; cursor: pointer;
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  display: flex; align-items: center; justify-content: center;
+}
+.dir-close svg { width: 14px; height: 14px; }
+.dir-scroll { flex: 1 1 auto; overflow-y: auto; padding: 4px 0 12px; }
+.dir-head {
+  position: sticky; top: 0; z-index: 1;
+  padding: 9px 16px 6px;
+  font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); background: var(--surface);
+}
+.dir-ul { list-style: none; }
+.dir-row {
+  display: flex; flex-direction: column; gap: 2px;
+  width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 16px; border: 0; background: transparent;
+  font-family: inherit; color: inherit;
+  border-left: 3px solid transparent;
+}
+.dir-row:hover, .dir-row:focus-visible {
+  background: rgba(79,70,229,.06); border-left-color: var(--accent); outline: none;
+}
+.dir-name { font-size: 13px; font-weight: 600; }
+.dir-meta { font-size: 11.5px; color: var(--muted); }
+
+/* ─── "Available nearby" on a taken stand ─────────────────────────────────── */
+.stand-alts { margin-top: 14px; }
+.stand-alts-lbl {
+  font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 7px;
+}
+.stand-alt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.alt-chip {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 6px 10px; cursor: pointer;
+  font-family: inherit; text-align: left;
+  border: 1px solid rgba(96,171,191,.45); border-radius: 8px;
+  background: rgba(96,171,191,.12); color: var(--text);
+}
+.alt-chip:hover, .alt-chip:focus-visible { background: rgba(96,171,191,.26); outline: none; }
+.alt-n   { font-size: 12.5px; font-weight: 700; }
+.alt-sqm { font-size: 10.5px; color: var(--muted); }
+
+/* ─── "Tell me if this becomes available" ─────────────────────────────────── */
+.wl-box {
+  margin-top: 14px; padding: 12px; border-radius: 10px;
+  background: rgba(15,23,42,.03); border: 1px solid var(--border);
+}
+.wl-lbl { display: block; font-size: 12px; font-weight: 700; margin-bottom: 7px; }
+.wl-row { display: flex; gap: 6px; }
+.wl-input {
+  flex: 1 1 auto; min-width: 0;
+  padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border);
+  font-family: inherit; font-size: 12.5px; background: var(--surface); color: var(--text);
+}
+.wl-input:focus { outline: none; border-color: var(--accent); }
+.wl-btn {
+  flex-shrink: 0; padding: 8px 12px; border-radius: 7px; border: none; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; font-weight: 600;
+  background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff;
+}
+.wl-btn:disabled { opacity: .5; cursor: not-allowed; }
+.wl-err  { margin-top: 7px; font-size: 11.5px; color: #b91c1c; }
+.wl-note { margin-top: 7px; font-size: 11px; color: var(--muted); line-height: 1.45; }
+.wl-done {
+  margin-top: 14px; padding: 11px 12px; border-radius: 10px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; line-height: 1.4;
+  background: rgba(34,197,94,.10); border: 1px solid rgba(34,197,94,.32); color: #15803d;
+}
+.wl-done svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+/* ─── Start another enquiry ───────────────────────────────────────────────── */
+.btn-again {
+  margin-top: 12px; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; font-weight: 600;
+  background: rgba(96,171,191,.16); border: 1px solid rgba(96,171,191,.45); color: var(--text);
+}
+.btn-again:hover, .btn-again:focus-visible { background: rgba(96,171,191,.30); outline: none; }
+
+/* ─── Print ───────────────────────────────────────────────────────────────── */
+/* Ctrl+P used to produce one page: a viewport-height slice of the map with the
+   fixed header printed on top of it and the side panel cut off the edge —
+   because the whole layout is 100vh with overflow:hidden. Let the document
+   flow, drop the chrome nobody can use on paper, and give the plan the page.
+   The PNG download is still the better artefact; this stops the obvious
+   keyboard shortcut producing something broken. */
+@media print {
+  body { overflow: visible; height: auto; background: #fff; }
+  .fp-header, .fp-map-toolbar, .fp-side, .consent-bar, .sponsor-strip,
+  .fp-tooltip, .fp-directory, .fp-banner, .bg-glow { display: none !important; }
+  .fp-main { display: block; height: auto; padding: 0; }
+  .fp-map-panel { height: auto; border: 0; box-shadow: none; }
+  .fp-map-frame { height: auto; overflow: visible; }
+  .fp-map-inner { transform: none !important; width: 100%; height: auto; }
+  #svg-mount svg { width: 100%; height: auto; }
+  @page { size: landscape; margin: 10mm; }
+}
+
+/* The skip link is invisible until it takes focus, then it is the first thing
+   on the page — which is the point: it must be reachable without being seen. */
+.skip-link:focus {
+  position: fixed !important; top: 10px; left: 10px; z-index: 400;
+  width: auto; height: auto; margin: 0; overflow: visible;
+  clip: auto; clip-path: none; white-space: normal;
+  padding: 10px 16px; border-radius: 8px; border: none; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  background: var(--accent); color: #fff;
+  box-shadow: 0 8px 24px rgba(15,23,42,.24);
 }

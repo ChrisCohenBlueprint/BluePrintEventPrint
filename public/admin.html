@@ -40,16 +40,19 @@
       <select id="show-switch" class="admin-input"></select>
     </div>
 
-    <ul class="nav-links">
-      <li class="nav-link active" data-section="overview"><i data-lucide="layout-dashboard"></i> Overview</li>
-      <li class="nav-link" data-section="floorplan"><i data-lucide="map"></i> Floorplan</li>
-      <li class="nav-link" data-section="bookings"><i data-lucide="book-open"></i> Bookings</li>
-      <li class="nav-link" data-section="leads"><i data-lucide="inbox"></i> Leads <span class="nav-badge hidden" id="leads-badge">0</span></li>
-      <li class="nav-link" data-section="analytics"><i data-lucide="bar-chart-3"></i> Analytics</li>
-      <li class="nav-link" data-section="sponsors"><i data-lucide="award"></i> Sponsors</li>
-      <li class="nav-link" data-section="tools"><i data-lucide="wrench"></i> Tools</li>
-      <li class="nav-link" data-section="team"><i data-lucide="users"></i> Team</li>
-      <li class="nav-link" data-section="log"><i data-lucide="activity"></i> Activity Log</li>
+    <!-- Tab stops, a role and Enter. These were <li> with a click handler and
+         nothing else, so the entire console was unreachable from a keyboard and
+         each one announced as a plain list item. -->
+    <ul class="nav-links" role="tablist">
+      <li class="nav-link active" data-section="overview" role="tab" tabindex="0" aria-selected="true" aria-controls="section-overview"><i data-lucide="layout-dashboard"></i> Overview</li>
+      <li class="nav-link" data-section="floorplan" role="tab" tabindex="0" aria-selected="false" aria-controls="section-floorplan"><i data-lucide="map"></i> Floorplan</li>
+      <li class="nav-link" data-section="bookings" role="tab" tabindex="0" aria-selected="false" aria-controls="section-bookings"><i data-lucide="book-open"></i> Bookings</li>
+      <li class="nav-link" data-section="leads" role="tab" tabindex="0" aria-selected="false" aria-controls="section-leads"><i data-lucide="inbox"></i> Leads <span class="nav-badge hidden" id="leads-badge">0</span></li>
+      <li class="nav-link" data-section="analytics" role="tab" tabindex="0" aria-selected="false" aria-controls="section-analytics"><i data-lucide="bar-chart-3"></i> Analytics</li>
+      <li class="nav-link" data-section="sponsors" role="tab" tabindex="0" aria-selected="false" aria-controls="section-sponsors"><i data-lucide="award"></i> Sponsors</li>
+      <li class="nav-link" data-section="tools" role="tab" tabindex="0" aria-selected="false" aria-controls="section-tools"><i data-lucide="wrench"></i> Tools</li>
+      <li class="nav-link" data-section="team" role="tab" tabindex="0" aria-selected="false" aria-controls="section-team"><i data-lucide="users"></i> Team</li>
+      <li class="nav-link" data-section="log" role="tab" tabindex="0" aria-selected="false" aria-controls="section-log"><i data-lucide="activity"></i> Activity Log</li>
     </ul>
     <!-- Sponsor / partner logos, managed in Sponsors → Partner logos. Hidden
          until at least one logo is configured. -->
@@ -60,7 +63,7 @@
 
     <!-- Sits with the footer actions rather than in the main list: it is where
          you configure the event, not another view of it. -->
-    <div class="nav-link nav-settings" data-section="settings">
+    <div class="nav-link nav-settings" data-section="settings" role="tab" tabindex="0" aria-selected="false" aria-controls="section-settings">
       <i data-lucide="settings"></i> Settings
     </div>
 
@@ -180,9 +183,9 @@
           <datalist id="admin-fp-booths"></datalist>
         </div>
         <div class="fp-zoom-controls">
-          <button id="admin-zoom-in"    class="zoom-btn"><i data-lucide="zoom-in"></i></button>
-          <button id="admin-zoom-out"   class="zoom-btn"><i data-lucide="zoom-out"></i></button>
-          <button id="admin-zoom-reset" class="zoom-btn"><i data-lucide="maximize-2"></i></button>
+          <button id="admin-zoom-in"    class="zoom-btn" type="button" aria-label="Zoom in"    title="Zoom in"><i data-lucide="zoom-in"></i></button>
+          <button id="admin-zoom-out"   class="zoom-btn" type="button" aria-label="Zoom out"   title="Zoom out"><i data-lucide="zoom-out"></i></button>
+          <button id="admin-zoom-reset" class="zoom-btn" type="button" aria-label="Fit the whole plan" title="Fit the whole plan"><i data-lucide="maximize-2"></i></button>
         </div>
       </div>
       <div class="admin-map-frame" id="admin-map-frame">
@@ -200,12 +203,26 @@
           <button id="multi-consolidate" class="admin-btn success"><i data-lucide="combine"></i> Consolidate</button>
           <button id="multi-clear" class="admin-btn">Clear</button>
         </div>
+        <!-- Split bar — shown while a divider is being dragged across a stand.
+             One divider, two cells: the sizes here follow the line live. -->
+        <div id="split-bar" hidden>
+          <span>Splitting <strong id="split-bar-id">—</strong></span>
+          <div class="split-axis-toggle" role="group" aria-label="Divider direction">
+            <button type="button" class="admin-btn" id="split-bar-vertical" title="A vertical line: left and right">Left / right</button>
+            <button type="button" class="admin-btn" id="split-bar-horizontal" title="A horizontal line: top and bottom">Top / bottom</button>
+          </div>
+          <span class="split-bar-sizes"><strong id="split-bar-a">—</strong> + <strong id="split-bar-b">—</strong></span>
+          <span class="split-bar-hint">Drag the line · arrow keys nudge 1 m²</span>
+          <button id="split-bar-apply" class="admin-btn success"><i data-lucide="scissors"></i> Split</button>
+          <button id="split-bar-cancel" class="admin-btn">Cancel</button>
+        </div>
       </div>
       <!-- Admin tooltip -->
       <div id="admin-tooltip" class="fp-tooltip hidden">
         <div class="tt-label" id="att-label">Stand 001</div>
         <div class="tt-status" id="att-status">Available</div>
         <div class="tt-price" id="att-price"></div>
+        <div class="tt-hold" id="att-hold"></div>
       </div>
       <!-- Sponsorable area panel. Same slot as the stand panel, and mutually
            exclusive with it — clicking a lounge on the plan edits the lounge
@@ -214,6 +231,7 @@
         <div class="aba-header">
           <span id="ara-name">Area</span>
           <span class="aba-badge" id="ara-status-badge">Available</span>
+          <button type="button" class="aba-close" id="ara-close" aria-label="Close this area" title="Close (Esc)">×</button>
         </div>
         <div class="ara-body" id="ara-body"></div>
       </div>
@@ -223,6 +241,17 @@
         <div class="aba-header">
           <span id="aba-id">Stand —</span>
           <span class="aba-badge" id="aba-status">Available</span>
+          <!-- There was no close control at all: the panel could only ever be
+               REPLACED by opening another stand, so it sat over the plan
+               indefinitely. Escape closes it too. -->
+          <button type="button" class="aba-close" id="aba-close" aria-label="Close this stand" title="Close (Esc)">×</button>
+        </div>
+        <!-- A held stand is on a clock. The server has always tracked the
+             expiry; nothing ever showed it, so a hold lapsing read as the stand
+             mysteriously going back on sale. -->
+        <div class="aba-hold hidden" id="aba-hold-row">
+          <span class="aba-hold-left" id="aba-hold-left"></span>
+          <button type="button" class="admin-btn aba-hold-extend" id="aba-hold-extend">Extend 24h</button>
         </div>
         <div class="aba-stats">
           <div><span class="aba-lbl">Size</span><span class="aba-val" id="aba-sqm">—</span></div>
@@ -239,6 +268,7 @@
           <button class="admin-btn success" id="aba-book">✅ Mark Sold</button>
           <button class="admin-btn warning" id="aba-hold">⏳ Put on Hold</button>
           <button class="admin-btn" id="aba-release">🔓 Release</button>
+          <button class="admin-btn" id="aba-split" title="Drag a divider across this stand to split it in two">✂️ Split</button>
         </div>
         <!-- Exhibitor profile: where they are from and what they do. Only
              meaningful once a stand is booked or held, and it is what the
@@ -586,7 +616,7 @@
             <i data-lucide="split"></i>
             <h3>Split Stand</h3>
           </div>
-          <p>Divide one stand into equal parts — the manual fix where the artwork drew several stands as a single block.</p>
+          <p>Divide one stand into equal parts — the manual fix where the artwork drew several stands as a single block. For an uneven two-way split, select the stand on the plan and press Split to drag the divider.</p>
           <form id="split-form" class="tool-form">
             <div class="tool-field">
               <label>Stand</label>
@@ -880,16 +910,44 @@
     <!-- ═══ SECTION: ACTIVITY LOG ════════════════════════════════════════════ -->
     <section class="admin-section" id="section-log">
       <div class="log-toolbar">
-        <h3>Live Activity Log</h3>
-        <button id="clear-log" class="admin-btn">Clear</button>
+        <h3>Activity Log</h3>
+        <button id="log-refresh" class="admin-btn" type="button">Refresh</button>
+        <button id="clear-log" class="admin-btn" type="button">Clear live lines</button>
+      </div>
+      <!-- The log used to hold only what arrived over the socket since the page
+           loaded, so a refresh — the exact moment someone wants to check what
+           just happened — emptied it. It now opens on the stored history, with
+           live lines appending on top. -->
+      <div class="log-filters">
+        <input type="search" id="log-q" class="admin-input" placeholder="Search stand, company or person…"
+               aria-label="Search the activity log">
+        <select id="log-type" class="admin-select" aria-label="Filter by what happened">
+          <option value="">Everything</option>
+          <option value="booth.status_change">Status changes</option>
+          <option value="deal.update">Deal edits</option>
+          <option value="hold.create,hold.extend,hold.release,hold.expire">Holds</option>
+          <option value="booth.consolidate,booth.split,booth.reset,booth.move,unmerge,unsplit">Plan changes</option>
+          <option value="booth.restore">Restores</option>
+          <option value="floorplan.upload,floorplan.revert,stands.import">Artwork</option>
+          <option value="sponsor.create,sponsor.delete,sponsor.import">Sponsorship</option>
+          <option value="admin.team,lead.admin,enquiry.forward">People &amp; leads</option>
+          <option value="security.denied,security.secret_failed">Refused attempts</option>
+        </select>
+        <select id="log-actor" class="admin-select" aria-label="Filter by who did it">
+          <option value="">Anyone</option>
+        </select>
+        <span class="log-count" id="log-count"></span>
       </div>
       <div class="admin-log" id="admin-log">
-        <div class="log-entry system"><span class="log-time">Now</span> Admin console ready.</div>
+        <div class="log-entry system"><span class="log-time">Now</span> Loading history…</div>
       </div>
     </section>
 
   </div><!-- /admin-body -->
 
+  <!-- Shared helpers (esc / money / api / toast / dialogs). Must load BEFORE
+       admin.js, which reads window.UI at parse time. -->
+  <script src="/lib/ui.js"></script>
   <script src="booth-map.js"></script>
   <!-- Per-event stand colours, before the page script uses them. -->
   <script src="/booth-palette.js"></script>

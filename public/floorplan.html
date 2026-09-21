@@ -3,15 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LEX 2026 Floorplan | Interactive Expo Map</title>
+  <!-- Neutral in the markup, then set to THIS event's name by floorplan.js
+       (applyShowIdentity) from the injected show data. It used to read
+       "LEX 2026", so North America's plan introduced itself as Europe's. -->
+  <title>Floorplan | Interactive Expo Map</title>
   <!-- Embed mode: add ?embed=1 to the URL when iframing this page into another
        site. It drops our own brand header (redundant on the host site) so the
        plan fills the frame with no empty top gap to crop. Set before paint to
        avoid a flash of the header. -->
   <script>if (new URLSearchParams(location.search).has('embed')) document.documentElement.classList.add('embed');</script>
-  <meta name="description" content="Browse available exhibition stands at LEX 2026. Click any white space to view pricing and reserve your spot.">
+  <!-- Rewritten per event by applyShowIdentity(); see the title above. -->
+  <meta name="description" content="Browse available exhibition stands. Select any white space to view size and make an enquiry.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- The ONE request for the web font. floorplan.css used to @import it as
+       well, which fetched it twice and, worse, could not even start until
+       the stylesheet had downloaded. -->
   <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <!-- Self-hosted (was unpkg lucide@latest / panzoom) so a hijacked or updated
        CDN release can't run arbitrary JS on the public page. -->
@@ -26,6 +33,14 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%2360abbf%27/%3E%3Crect x=%277%27 y=%277%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3Crect x=%2717%27 y=%277%27 width=%278%27 height=%2718%27 fill=%27%230b2027%27/%3E%3Crect x=%277%27 y=%2717%27 width=%278%27 height=%278%27 fill=%27%230b2027%27/%3E%3C/svg%3E">
 </head>
 <body>
+  <!-- The keyboard / screen-reader route into the hall, offered before anything
+       else on the page. Every stand on the plan now takes focus and answers
+       Enter, but tabbing 250 rects in artwork order is not a way to find one;
+       this opens the A-Z list instead. Visually hidden until it is focused. -->
+  <button type="button" id="skip-to-list" class="visually-hidden skip-link">
+    Skip to the list of exhibitors and stands
+  </button>
+
   <div class="bg-glow g1"></div>
   <div class="bg-glow g2"></div>
 
@@ -34,12 +49,15 @@
     <div class="fp-header-inner">
       <div class="fp-brand">
         <h1>BLUEPRINT <span>EVENTPRINT</span></h1>
-        <p>LEX 2026 — Interactive Expo Floorplan</p>
+        <p id="show-name">Interactive Expo Floorplan</p>
       </div>
       <div class="fp-header-right">
+        <!-- The dot and the label are driven by the real socket state
+             (setConnectionState). This used to stay green and keep its last
+             count while the page was talking to nobody. -->
         <div class="live-badge" id="live-badge">
           <span class="live-dot"></span>
-          <span id="viewer-count">1</span> live viewers
+          <span id="viewer-count">1</span> <span id="live-label">live viewers</span>
         </div>
         <div class="avail-summary">
           <span id="avail-count">—</span> stands available
@@ -79,12 +97,22 @@
           <div id="fps-count" class="fps-count" role="status" aria-live="polite" hidden></div>
         </div>
         <div class="fp-zoom-controls">
+          <!-- The exhibitor directory. Also the keyboard and screen-reader route
+               into the hall: tabbing 250 stands in artwork order is a route, but
+               not a usable one. -->
+          <button id="directory-toggle" class="zoom-btn download-btn" type="button"
+                  aria-expanded="false" aria-controls="fp-directory"
+                  title="Who is exhibiting, and every stand A-Z"><i data-lucide="list"></i><span>Exhibitors</span></button>
           <button id="download-plan" class="zoom-btn download-btn" title="Download the floorplan as it looks now (PNG)"><i data-lucide="download"></i><span>Download Floorplan</span></button>
           <button id="zoom-in"    class="zoom-btn" title="Zoom In"><i data-lucide="zoom-in"></i></button>
           <button id="zoom-out"   class="zoom-btn" title="Zoom Out"><i data-lucide="zoom-out"></i></button>
           <button id="zoom-reset" class="zoom-btn" title="Reset View"><i data-lucide="maximize-2"></i></button>
         </div>
       </div>
+
+      <!-- Load failures, a dropped socket, and "the stands have not arrived"
+           all speak here rather than leaving the visitor a dead map. -->
+      <div class="fp-banner" id="fp-banner" role="status" aria-live="polite" hidden></div>
 
       <div class="fp-map-frame" id="map-frame">
         <div class="fp-map-inner" id="map-inner">
@@ -95,6 +123,20 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- Exhibitor directory. Hidden behind the toolbar toggle; it lists the
+           announced exhibitors A-Z and then every stand by number. A stand that
+           is only ON HOLD is never named here — see renderDirectory(). -->
+      <div class="fp-directory" id="fp-directory" hidden>
+        <div class="dir-top">
+          <div>
+            <div class="dir-title">Exhibitors &amp; stands</div>
+            <div class="dir-count" id="directory-count"></div>
+          </div>
+          <button type="button" class="dir-close" id="directory-close" aria-label="Close the directory"><i data-lucide="x"></i></button>
+        </div>
+        <div class="dir-scroll" id="directory-list"></div>
       </div>
 
       <!-- Hover tooltip -->
@@ -204,6 +246,10 @@
           <i data-lucide="check-circle"></i>
           <h4>Enquiry sent</h4>
           <p>Thanks — our team will be in touch shortly about the stands and options you selected.</p>
+          <!-- The card used to be hidden for good, while "Add to enquiry" went
+               on silently toggling the shortlist underneath it. A visitor who
+               finds two more stands after sending needs a way back. -->
+          <button type="button" class="btn-again" id="eq-again">Start another enquiry</button>
         </div>
       </div>
       </div><!-- /.fp-enquiry-col -->

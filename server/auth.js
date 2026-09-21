@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const config = require('./config');
 const users  = require('./models/users');
+const { getDb } = require('./db');
 
 const COOKIE = 'bp_admin';
 
@@ -82,9 +83,46 @@ function setSessionCookie(res, user) {
   const token = signToken({
     user: user.username, role: user.role || 'admin',
     v: user.tokenVersion || 0,               // revocation stamp, checked on every request
+    // Per-session id. `v` revokes every session the account has at once, which
+    // is right for a password reset and far too blunt for signing out of one
+    // browser — so each cookie also carries its own id that logout can retire
+    // on its own. See revokeToken() below.
+    jti: crypto.randomBytes(12).toString('base64url'),
     exp: Date.now() + config.adminTokenTtlMs,
   });
   res.setHeader('Set-Cookie', `${COOKIE}=${token}; ${cookieAttrs()}; Max-Age=${config.adminTokenTtlMs / 1000}`);
+}
+
+// ─── Revoked sessions ─────────────────────────────────────────────────────────
+// Signing out only cleared the cookie, so a copy of it taken beforehand stayed
+// valid for the rest of its 12 hours — "log out" protected nobody who had
+// already lost the cookie. The id of a retired session is written here and
+// checked on every request; the row carries the token's own expiry and a TTL
+// index drops it then (see server/db.js), so the list never grows beyond the
+// sessions that are still theoretically alive.
+const revokedCol = () => getDb().collection('revokedTokens');
+
+/** Retire one session token. Returns false if there was nothing to retire. */
+async function revokeToken(token) {
+  const payload = verifyToken(token);
+  if (!payload || !payload.jti) return false;         // pre-upgrade cookie: nothing to key on
+  await revokedCol().updateOne(
+    { jti: payload.jti },
+    { $set: { jti: payload.jti, exp: new Date(payload.exp || Date.now() + config.adminTokenTtlMs) } },
+    { upsert: true });
+  return true;
+}
+
+/** Retire the session the request is carrying (used by POST /logout). */
+async function revokeSession(req) {
+  const cookies = parseCookies(req.headers.cookie || '');
+  return revokeToken(cookies[COOKIE]);
+}
+
+async function isRevoked(jti) {
+  if (!jti) return false;                             // tokens issued before this existed
+  const hit = await revokedCol().findOne({ jti }, { projection: { _id: 1 } });
+  return !!hit;
 }
 
 function clearSessionCookie(res) {
@@ -107,7 +145,12 @@ async function sessionUser(req, roles = ADMIN_ROLES) {
   if (!payload || payload.pending || payload.purpose || !roles.includes(payload.role)) return null;
 
   let account;
-  try { account = await users.findAuth(payload.user); }
+  try {
+    // A session that has been signed out is dead even though its signature and
+    // expiry are still good.
+    if (await isRevoked(payload.jti)) return null;
+    account = await users.findAuth(payload.user);
+  }
   catch { return null; }                           // DB unavailable → fail closed
   // Account gone (deleted) or its token version moved on (password/2FA reset) →
   // the cookie is stale. Existing pre-upgrade tokens/accounts both read as 0.
@@ -222,9 +265,10 @@ async function socketAuth(socket, next) {
   let isAdmin = false, role = null;
   if (payload && ADMIN_ROLES.includes(payload.role) && !payload.pending && !payload.purpose) {
     try {
-      const account = await users.findAuth(payload.user);
-      // Same revocation check as the HTTP path: a deleted account or a bumped
-      // token version means the socket must not be treated as an admin.
+      const account = (await isRevoked(payload.jti)) ? null : await users.findAuth(payload.user);
+      // Same revocation checks as the HTTP path: a signed-out session, a deleted
+      // account or a bumped token version means the socket must not be treated
+      // as an admin.
       if (account && ADMIN_ROLES.includes(account.role) &&
           (account.tokenVersion || 0) === (payload.v || 0)) {
         isAdmin = true; role = account.role;
@@ -310,9 +354,71 @@ function consumePending(token) {
   spentPending.set(p.jti, p.exp || Date.now() + 5 * 60 * 1000);
 }
 
+// ─── Re-confirmation throttle (recovery key / own password) ───────────────────
+// The recovery key exists to survive a STOLEN ADMIN SESSION: the thief already
+// holds the cookie, so the key is the only thing between them and releasing a
+// booked stand. It was guessable at full speed — unlimited attempts, and a
+// wrong one recorded nowhere, so the attempt never reached the audit trail
+// either. Five failures buy a fifteen-minute pause on that account, and every
+// failure is written to `activity` as security.secret_failed.
+//
+// Per-account rather than per-IP, because the attacker holds the session and can
+// come from anywhere; and it gates only the confirmation step, so — unlike the
+// old login lockout — it can never keep someone out of their account.
+// In-memory, like the other limiters here: this deployment is a single process.
+const SECRET_MAX_FAILURES = 5;
+const SECRET_LOCK_MS      = 15 * 60 * 1000;
+const secretFailures = new Map();          // username -> { count, until }
+
+const secretKey = (user) => String(user || '').toLowerCase().trim();
+
+/**
+ * May this account attempt a recovery-key / password re-confirmation right now?
+ * @param {string} user  the acting username (req.admin.user, socket.data.user)
+ * @returns {{ ok: boolean, retryAfter: number }}  retryAfter is whole seconds.
+ */
+function checkSecretThrottle(user) {
+  const rec = secretFailures.get(secretKey(user));
+  if (!rec || Date.now() >= rec.until) { if (rec) secretFailures.delete(secretKey(user)); return { ok: true, retryAfter: 0 }; }
+  if (rec.count < SECRET_MAX_FAILURES) return { ok: true, retryAfter: 0 };
+  return { ok: false, retryAfter: Math.ceil((rec.until - Date.now()) / 1000) };
+}
+
+/**
+ * Record one failed re-confirmation, and audit it.
+ * @param {string} user  the acting username
+ * @param {{ what?: string, socket?: object }} [meta]  what was being confirmed
+ * @returns {{ ok: false, retryAfter: number, failures: number }}
+ */
+function registerSecretFailure(user, meta = {}) {
+  const key = secretKey(user);
+  const now = Date.now();
+  const rec = secretFailures.get(key);
+  const live = rec && now < rec.until ? rec : { count: 0, until: 0 };
+  live.count += 1;
+  // The window extends from the LATEST failure, so a patient attacker gains
+  // nothing by pacing their guesses.
+  live.until = now + SECRET_LOCK_MS;
+  secretFailures.set(key, live);
+
+  const { track } = require('./services/tracking');
+  track({ type: 'security.secret_failed', actor: user || 'unknown',
+          socket: meta.socket || null,
+          meta: { what: meta.what || null, failures: live.count,
+                  lockedOut: live.count >= SECRET_MAX_FAILURES } });
+
+  return { ok: false, failures: live.count,
+           retryAfter: live.count >= SECRET_MAX_FAILURES ? Math.ceil(SECRET_LOCK_MS / 1000) : 0 };
+}
+
+/** A correct confirmation wipes the account's failure count. */
+function clearSecretFailures(user) { secretFailures.delete(secretKey(user)); }
+
 module.exports = {
   adminAuth, salesAuth, socketAuth, requireAdmin, signToken, verifyToken, COOKIE,
   setSessionCookie, clearSessionCookie, sessionUser,
+  revokeToken, revokeSession, isRevoked,
+  checkSecretThrottle, registerSecretFailure, clearSecretFailures,
   signPending, verifyPending, consumePending,
   ADMIN_ROLES, SALES_ROLES, ALL_ROLES, homeFor,
 };

@@ -580,6 +580,32 @@ body {
 #multi-bar[hidden] { display: none; }
 #multi-bar .admin-btn { width: auto; padding: 7px 12px; }
 
+/* Floating bar for a drag-to-split — same slot as the multi-select bar; the
+   two are never shown together. */
+#split-bar {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 160;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
+  max-width: calc(100% - 32px);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 14px; box-shadow: 0 12px 40px rgba(0,0,0,.5); backdrop-filter: blur(16px);
+  font-size: 13px; color: var(--text);
+}
+#split-bar[hidden] { display: none; }
+#split-bar .admin-btn { width: auto; padding: 7px 12px; }
+.split-axis-toggle { display: inline-flex; gap: 4px; }
+.split-axis-toggle .admin-btn.active { background: rgba(56,189,248,0.18); color: #38bdf8; border-color: rgba(56,189,248,0.45); }
+.split-bar-sizes { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.split-bar-sizes strong { color: #38bdf8; }
+.split-bar-hint { font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* The divider preview drawn over the stand being split. */
+#split-preview text { pointer-events: none; font-family: Raleway, sans-serif; font-weight: 700; user-select: none; }
+#split-preview .split-cell { pointer-events: none; }
+#split-preview .split-line { pointer-events: none; }
+#split-preview .split-handle { fill: transparent; touch-action: none; }
+#split-preview .split-handle.vertical { cursor: col-resize; }
+#split-preview .split-handle.horizontal { cursor: row-resize; }
+
 @keyframes holdPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 .spin-icon { animation: spin 1s linear infinite; }

@@ -32,7 +32,7 @@ async function main() {
   const db = getDb();
 
   const oldBooths = await db.collection('booths').find({ showId: config.showId }).toArray();
-  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', 'booth_data.json'), 'utf8'));
+  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'server', 'data', 'booth_data.json'), 'utf8'));
   const fresh = Object.values(raw);
 
   console.log(`Existing: ${oldBooths.length} stands   Fresh extraction: ${fresh.length} stands`);
@@ -167,12 +167,21 @@ async function main() {
 
   // Leads reference stand numbers too — re-point boothsOfInterest through the
   // same old→new match table so a forwarded enquiry doesn't cite stale numbers.
+  //
+  // `matches` only contains stands that carried commercial state, so mapping a
+  // lead's interests THROUGH it and dropping everything it did not know about
+  // stripped every stand a lead had enquired about but nobody had yet booked —
+  // which is most of them, and exactly the ones sales were about to call about.
+  // A number the table does not mention has not moved: keep it, and only drop a
+  // reference to a stand that no longer exists at all. (booths.js gets this
+  // right; this copy did not.)
   const remap = new Map(matches.map(m => [m.old.boothNumber, String(m.next.boothId).replace(/^booth-/, '')]));
+  const freshNums = new Set(fresh.map(f => String(f.boothId).replace(/^booth-/, '')));
   const inqs = await db.collection('inquiries').find({ showId: config.showId }).toArray();
   let inqRemapped = 0;
   for (const q of inqs) {
     if (!Array.isArray(q.boothsOfInterest) || !q.boothsOfInterest.length) continue;
-    const mapped = q.boothsOfInterest.map(n => remap.get(n) || null).filter(Boolean);
+    const mapped = q.boothsOfInterest.map(n => remap.get(n) || n).filter(n => freshNums.has(n));
     if (mapped.join(',') !== q.boothsOfInterest.join(',')) {
       await db.collection('inquiries').updateOne({ _id: q._id }, { $set: { boothsOfInterest: mapped } });
       inqRemapped++;

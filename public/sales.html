@@ -32,10 +32,20 @@
         <span class="nav-brand-sub">SALES</span>
       </div>
     </div>
-    <ul class="nav-links">
-      <li class="nav-link active" data-section="inventory"><i data-lucide="sparkles"></i> Sponsorship</li>
-      <li class="nav-link" data-section="stands"><i data-lucide="layout-grid"></i> Stands</li>
-      <li class="nav-link" data-section="proposals"><i data-lucide="file-text"></i> My Proposals <span class="nav-badge hidden" id="prop-badge">0</span></li>
+    <!-- Which event this rep is quoting for. Hidden until the list loads, so a
+         blank select never flashes up naming nothing. -->
+    <div class="nav-show hidden" id="nav-show">
+      <label for="show-switch">Event</label>
+      <select id="show-switch" class="admin-input"></select>
+    </div>
+
+    <!-- Tab stops and Enter, because these are controls: they were <li> with a
+         click handler and nothing else, so the whole dashboard was unreachable
+         from a keyboard and announced as a plain list item. -->
+    <ul class="nav-links" role="tablist">
+      <li class="nav-link active" data-section="inventory" role="tab" tabindex="0" aria-selected="true" aria-controls="section-inventory"><i data-lucide="sparkles"></i> Sponsorship</li>
+      <li class="nav-link" data-section="stands" role="tab" tabindex="0" aria-selected="false" aria-controls="section-stands"><i data-lucide="layout-grid"></i> Stands</li>
+      <li class="nav-link" data-section="proposals" role="tab" tabindex="0" aria-selected="false" aria-controls="section-proposals"><i data-lucide="file-text"></i> My Proposals <span class="nav-badge hidden" id="prop-badge">0</span></li>
     </ul>
 
     <!-- Only rendered for an admin/owner previewing this dashboard. -->
@@ -96,9 +106,9 @@
         </div>
         <div class="sales-filters" id="size-filters">
           <button class="chip active" data-size="all">Any size</button>
-          <button class="chip" data-size="s">Under 12 m²</button>
-          <button class="chip" data-size="m">12–30 m²</button>
-          <button class="chip" data-size="l">Over 30 m²</button>
+          <button class="chip" data-size="s">Smaller stands</button>
+          <button class="chip" data-size="m">Mid-size stands</button>
+          <button class="chip" data-size="l">Larger stands</button>
         </div>
         <div class="sales-count" id="stand-count">—</div>
       </div>
@@ -198,6 +208,9 @@
 
   <div class="toast hidden" id="toast"></div>
 
+  <!-- Shared helpers (esc / money / api / toast / dialogs). Must load first —
+       sales.js reads window.UI at parse time. -->
+  <script src="/lib/ui.js"></script>
   <script src="/sales.js"></script>
   <script>lucide.createIcons();</script>
 </body>

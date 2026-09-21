@@ -28,54 +28,52 @@
   };
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
+  // These lived here AND in admin.js, and the copies had drifted: this one knew
+  // that a 401 means "your session ended, go and sign in" and the admin's did
+  // not. There is one copy now, in lib/ui.js, loaded before this file.
+  //
   // Text nodes only — nothing from the database is ever written as HTML, so a
   // package name or client note containing markup can't inject into the page.
-  const el = (tag, cls, text) => {
-    const n = document.createElement(tag);
-    if (cls) n.className = cls;
-    if (text != null) n.textContent = text;
-    return n;
-  };
+  const { el, money, api, withPending, confirmDialog } = window.UI;
+  const toast = (msg, kind = '') => window.UI.toast(msg, kind, { id: 'toast', cls: 'toast' });
 
-  // Both come from the show, not from this file: LNA prices in dollars per
-  // square foot while LEX prices in euros per square metre, and a proposal that
-  // says otherwise is wrong in front of a client. Defaults match what this page
-  // printed before, so a show that has set neither is unchanged.
-  let CUR = '€', AREA_UNIT = 'm²';
-
-  const money = (n) => (n == null || !Number.isFinite(Number(n)))
-    ? '—'
-    : CUR + Number(n).toLocaleString('en-GB', { maximumFractionDigits: 0 });
+  // The unit comes from the show, not from this file: LNA measures in square
+  // feet while LEX measures in square metres, and a proposal that says otherwise
+  // is wrong in front of a client. (The currency lives in UI.setCurrency for the
+  // same reason.) Defaults match what this page printed before, so a show that
+  // has set neither is unchanged.
+  let AREA_UNIT = 'm²';
 
   const area = (n) => (n == null ? '—' : `${Number(n).toLocaleString('en-GB', { maximumFractionDigits: 1 })} ${AREA_UNIT}`);
 
-  let toastTimer = null;
-  function toast(msg, kind = '') {
-    const t = $('toast');
-    t.textContent = msg;
-    t.className = `toast ${kind}`;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.add('hidden'), 3200);
-  }
-
   /**
-   * Fetch wrapper that treats an auth failure as an auth failure.
+   * The size bands the Stands filter offers.
    *
-   * A 401 means the 12h session expired mid-session; bouncing to the login page
-   * is the only useful response. A 403 means the account isn't allowed here at
-   * all, which is a different message — silently retrying either would just
-   * render an empty dashboard with no explanation.
+   * These used to be 12 and 30 with "Under 12 m²" written into the HTML — on a
+   * show configured in square feet that read as nonsense and filtered nothing
+   * the rep expected, because a 200 ft² stand is not "over 30". The square-foot
+   * band edges are the same physical sizes, rounded to numbers a rep would say
+   * out loud.
    */
-  async function api(url, opts = {}) {
-    const res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json' },
-      ...opts,
+  const SIZE_BANDS = {
+    'm²':  { small: 12,  large: 30 },
+    'ft²': { small: 130, large: 320 },
+  };
+  const bands = () => SIZE_BANDS[AREA_UNIT] || SIZE_BANDS['m²'];
+
+  /** Re-label the size chips for whichever unit this show uses. */
+  function renderSizeFilterLabels() {
+    const b = bands();
+    const text = {
+      all: 'Any size',
+      s: `Under ${b.small} ${AREA_UNIT}`,
+      m: `${b.small}–${b.large} ${AREA_UNIT}`,
+      l: `Over ${b.large} ${AREA_UNIT}`,
+    };
+    $('#size-filters .chip').forEach(chip => {
+      const t = text[chip.dataset.size];
+      if (t) chip.textContent = t;
     });
-    if (res.status === 401) { location.href = '/login?next=' + encodeURIComponent('/sales'); throw new Error('signed out'); }
-    let data = null;
-    try { data = await res.json(); } catch { /* empty body is fine on a 200 */ }
-    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
-    return data;
   }
 
   // ── Navigation ──────────────────────────────────────────────────────────────
@@ -86,13 +84,23 @@
   };
 
   function showSection(name) {
-    $$('.nav-link').forEach(l => l.classList.toggle('active', l.dataset.section === name));
-    $$('.admin-section').forEach(s => s.classList.toggle('active', s.id === `section-${name}`));
+    $('.nav-link').forEach(l => {
+      const on = l.dataset.section === name;
+      l.classList.toggle('active', on);
+      l.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    $('.admin-section').forEach(s => s.classList.toggle('active', s.id === `section-${name}`));
     $('section-title').textContent = TITLES[name] || name;
   }
 
-  $$('.nav-link').forEach(link =>
-    link.addEventListener('click', () => showSection(link.dataset.section)));
+  // Click AND Enter/Space: these are tabs, not text. With a click handler alone
+  // the whole dashboard was unreachable without a mouse.
+  $('.nav-link').forEach(link => {
+    link.addEventListener('click', () => showSection(link.dataset.section));
+    link.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showSection(link.dataset.section); }
+    });
+  });
 
   // ── Selection basket ────────────────────────────────────────────────────────
   function pickedTotal() { return state.pickedSponsors.size + state.pickedBooths.size; }
@@ -175,10 +183,11 @@
 
   // ── Stands ──────────────────────────────────────────────────────────────────
   function standMatches(b) {
-    const sqm = Number(b.sqm) || 0;
-    if (state.size === 's' && !(sqm < 12)) return false;
-    if (state.size === 'm' && !(sqm >= 12 && sqm <= 30)) return false;
-    if (state.size === 'l' && !(sqm > 30)) return false;
+    const size = Number(b.sqm) || 0;
+    const { small, large } = bands();
+    if (state.size === 's' && !(size < small)) return false;
+    if (state.size === 'm' && !(size >= small && size <= large)) return false;
+    if (state.size === 'l' && !(size > large)) return false;
     if (!state.standQ) return true;
     return `${b.boothNumber} ${b.displayNumber || ''}`.toLowerCase().includes(state.standQ);
   }
@@ -259,13 +268,13 @@
     actions.append(edit);
 
     const copy = el('button', 'admin-btn', 'Duplicate');
-    copy.addEventListener('click', async () => {
+    copy.addEventListener('click', (e) => withPending(e.currentTarget, async () => {
       try {
         await api(`/api/sales/menus/${m._id}/duplicate`, { method: 'POST' });
         await loadMenus();
         toast('Proposal duplicated.', 'ok');
       } catch (e) { toast(e.message, 'err'); }
-    });
+    }));
     actions.append(copy);
 
     const pdf = el('button', 'admin-btn success', 'PDF');
@@ -289,7 +298,15 @@
   // The print view is a separate authenticated page that opens its own print
   // dialog — the rep saves it as a PDF and emails that file to the client.
   // Nothing about the proposal is ever published to a public URL.
-  function openPrint(id) { window.open(`/sales/menu/${id}/print`, '_blank', 'noopener'); }
+  function openPrint(id) {
+    // The event has to be in the URL. Without it the print page was served with
+    // no show, so it sent no X-Show header and resolved the DEFAULT event —
+    // which is how a North America proposal came out carrying Europe's hall.
+    const slug = (window.__SHOW && window.__SHOW.slug) || '';
+    const url = slug ? `/sales/${encodeURIComponent(slug)}/menu/${id}/print`
+                     : `/sales/menu/${id}/print`;
+    window.open(url, '_blank', 'noopener');
+  }
 
   // ── Editor drawer ───────────────────────────────────────────────────────────
   function markDirty() {
@@ -409,7 +426,7 @@
     d.placeholder = 'Detail (optional)'; d.value = item.detail || '';
 
     const p = el('input'); p.type = 'number'; p.className = 'admin-input c-price';
-    p.placeholder = CUR.trim(); p.min = '0'; p.value = item.price == null ? '' : item.price;
+    p.placeholder = window.UI.currency().trim(); p.min = '0'; p.value = item.price == null ? '' : item.price;
 
     const rm = el('button', 'icon-btn', '×');
     rm.title = 'Remove line';
@@ -456,6 +473,8 @@
   async function save({ silent = false } = {}) {
     const body = readForm();
     const btn = $('drawer-save');
+    if (btn.dataset.pending === '1') return null;   // an impatient second click
+    btn.dataset.pending = '1';
     btn.disabled = true;
     try {
       const saved = state.editing?._id
@@ -477,6 +496,7 @@
       toast(e.message, 'err');
       return null;
     } finally {
+      delete btn.dataset.pending;
       btn.disabled = false;
     }
   }
@@ -490,9 +510,11 @@
     if (saved?._id) openPrint(saved._id);
   });
 
-  $('drawer-delete').addEventListener('click', async () => {
+  $('drawer-delete').addEventListener('click', (e) => withPending(e.currentTarget, async () => {
     if (!state.editing?._id) return;
-    if (!confirm(`Delete proposal ${state.editing.ref}? This cannot be undone.`)) return;
+    if (!await confirmDialog(
+      `Delete proposal ${state.editing.ref}${state.editing.title ? ` — "${state.editing.title}"` : ''}?\n\nThis cannot be undone.`,
+      { title: 'Delete this proposal', confirmLabel: 'Delete it', danger: true })) return;
     try {
       await api(`/api/sales/menus/${state.editing._id}`, { method: 'DELETE' });
       state.dirty = false;
@@ -500,7 +522,7 @@
       await loadMenus();
       toast('Proposal deleted.', 'ok');
     } catch (e) { toast(e.message, 'err'); }
-  });
+  }));
 
   $('prop-new').addEventListener('click', () => {
     state.pickedSponsors.clear();
@@ -524,7 +546,55 @@
     renderMenus();
   }
 
+  /**
+   * Which event this rep is selling.
+   *
+   * The admin console has had this for a while; the sales dashboard had no
+   * switcher and no show at all, so a rep could only ever see whichever event
+   * the deployment happened to call the default. Same design as the admin's:
+   * each event is a separate URL, so switching is a navigation rather than
+   * swapping the data underneath a live page.
+   */
+  async function initShowSwitcher() {
+    const wrap = $('nav-show');
+    const sel = $('show-switch');
+    if (!wrap || !sel) return;
+
+    let list = [];
+    try { list = await api('/api/sales/shows'); } catch { list = []; }
+
+    const here = (window.__SHOW && window.__SHOW.slug) || '';
+    // Always shown, even with one event: naming the event you are quoting for
+    // is worth the row on its own, and a rep who cannot see it has no way to
+    // notice they are pricing the wrong hall.
+    if (!list.length) {
+      list = [{ slug: here, name: (window.__SHOW && window.__SHOW.name) || here || 'This event' }];
+    }
+
+    sel.replaceChildren(...list.map(sh => {
+      const o = el('option', null, sh.name || sh.showId);
+      o.value = sh.slug;
+      return o;
+    }));
+    sel.value = here;
+    // A slug that is not among the options would render the select BLANK, which
+    // reads as broken and hides which event is open. Name something rather than
+    // nothing.
+    if (sel.selectedIndex < 0) sel.selectedIndex = 0;
+    wrap.classList.remove('hidden');
+
+    sel.addEventListener('change', () => {
+      if (state.dirty && !window.confirm('You have unsaved changes to this proposal. Switch event anyway?')) {
+        sel.value = here;
+        return;
+      }
+      location.href = `/sales/${sel.value}`;
+    });
+  }
+
   async function init() {
+    renderSizeFilterLabels();
+    initShowSwitcher();
     try {
       const [me, cat] = await Promise.all([
         api('/api/sales/me'),
@@ -535,8 +605,9 @@
       // Only an admin or the owner previewing this dashboard gets a way back.
       $('nav-back-admin').classList.toggle('hidden', !me.isAdmin);
 
-      if (cat.currencySymbol) CUR = cat.currencySymbol;
+      window.UI.setCurrency(cat.currencySymbol);
       if (cat.unit) AREA_UNIT = cat.unit === 'ft' ? 'ft²' : 'm²';
+      renderSizeFilterLabels();
 
       state.sponsors = cat.sponsors || [];
       state.booths   = cat.booths || [];

@@ -70,7 +70,15 @@ router.get('/floorplan.svg', async (req, res, next) => {
     // scoped to — that is what lets Settings show every event's plan side by
     // side. An unknown slug falls back to the current show rather than
     // erroring: a broken preview should not be a broken page.
-    const named = req.query.show ? shows.bySlug(String(req.query.show)) : null;
+    //
+    // A showId (LNA) is accepted as well as a slug (lna). The printed proposal
+    // is served from /sales/menu/:id/print with no show injected, so it carries
+    // no X-Show header and has to name the event in the URL — and what its
+    // payload actually holds is the showId. Requiring the slug there meant
+    // guessing at a mapping the client has no business knowing; resolving both
+    // here is one line and removes the guess.
+    const asked = req.query.show ? String(req.query.show) : '';
+    const named = asked ? (shows.bySlug(asked) || shows.byId(asked)) : null;
     const stored = await floorplans.get(named ? named.showId : undefined);
     res.type('image/svg+xml');
     // The response depends on which event asked. Without this a cache keyed on
