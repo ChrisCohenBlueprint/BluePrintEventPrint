@@ -47,6 +47,7 @@ function toPublic(b) {
     country: b.status === 'sold' ? (b.assignment?.country || null) : null,
     splitFrom: b.splitFrom || null,   // lets the client draw + number split cells
     splitAxis: b.splitAxis || null,   // 'vertical' | 'horizontal' — which edge is the divider
+    merged: Array.isArray(b.mergedFrom) && b.mergedFrom.length > 0,   // a block the plan draws as several stands
     viewers: b.viewers || 0,
     interest: b.clicks || 0,
   };
