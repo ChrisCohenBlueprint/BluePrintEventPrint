@@ -201,6 +201,7 @@
         <div id="multi-bar" hidden>
           <span><strong id="multi-count">0</strong> stands selected</span>
           <button id="multi-consolidate" class="admin-btn success"><i data-lucide="combine"></i> Consolidate</button>
+          <button id="multi-restore" class="admin-btn warning" title="Undo the split or merge on every selected stand"><i data-lucide="undo-2"></i> Restore</button>
           <button id="multi-clear" class="admin-btn">Clear</button>
         </div>
         <!-- Split bar — shown while a divider is being dragged across a stand.
@@ -269,6 +270,7 @@
           <button class="admin-btn warning" id="aba-hold">⏳ Put on Hold</button>
           <button class="admin-btn" id="aba-release">🔓 Release</button>
           <button class="admin-btn" id="aba-split" title="Drag a divider across this stand to split it in two">✂️ Split</button>
+          <button class="admin-btn warning" id="aba-reset" title="Undo this stand's split or merge">↩️ Reset</button>
         </div>
         <!-- Exhibitor profile: where they are from and what they do. Only
              meaningful once a stand is booked or held, and it is what the

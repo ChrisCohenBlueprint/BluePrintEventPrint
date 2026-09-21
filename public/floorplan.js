@@ -454,6 +454,7 @@ function tagBooths() {
 
   const list = Object.values(booths).filter(b => b.geometry);
   const res = BoothMap.attach(svgDoc, list, {
+    unit: UNIT,   // printed on a split cell's size, the way the plan prints its own
     onTag(el, n) {
       el.classList.add('booth-interactive');
       el.addEventListener('mouseenter', e => showTooltip(e, n));
@@ -1485,6 +1486,11 @@ socket.on('settings', (s) => {
   if (!s.unit) return;
   UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
   document.querySelectorAll('.unit-label').forEach(el => { el.textContent = UNIT; });
+  // The size printed on a split cell carries the unit too.
+  if (svgDoc) svgDoc.querySelectorAll('[data-split-size]').forEach((t) => {
+    const b = booths[t.getAttribute('data-split-size')];
+    if (b && b.sqm) t.textContent = b.sqm + UNIT;
+  });
   if (selectedId) renderPanel(selectedId);
   // The unit is spoken in every stand's accessible name and printed in the
   // directory, so both follow it.

@@ -219,6 +219,7 @@ function wireMultiBar() {
   multiWired = true;
   document.getElementById('multi-clear')?.addEventListener('click', clearMultiSelect);
   document.getElementById('multi-consolidate')?.addEventListener('click', consolidateMultiSelect);
+  document.getElementById('multi-restore')?.addEventListener('click', restoreMultiSelect);
 }
 
 async function consolidateMultiSelect() {
@@ -389,6 +390,7 @@ function tagAdminBooths() {
   adminTagged = true;
 
   BoothMap.attach(svgDoc, Object.values(booths).filter(b => b.geometry), {
+    unit: UNIT,   // printed on a split cell's size, the way the plan prints its own
     onTag(el, id) {
       el.classList.add('booth-interactive');
       applyAdminVisual(el, booths[id]?.status || 'sold');
@@ -664,6 +666,104 @@ function clearMultiSelect() {
   multiSel.forEach((id) => multiEl(id)?.classList.remove('booth-multi'));
   multiSel.clear();
   renderMultiSelect();
+}
+
+/* ---- Reset from the plan: undo a split or a merge where it was made ------ */
+//
+// Reset used to live only in Tools, behind a dropdown of every stand, so a
+// split made with two clicks on the plan took a hunt through a list to undo.
+// The stand panel now offers it on any composite stand, and the shift-select
+// bar undoes several at once.
+//
+// What "reset" acts on depends on which piece was clicked. A merged block and
+// a split PARENT carry the snapshot and are reset directly. A split CELL is
+// only a fragment: undoing it means restoring its parent, which removes every
+// sibling too — so the cell's reset targets the parent. A cell whose parent
+// has no snapshot (a leftover from before snapshots existed) is just removed.
+function resetTargetOf(b) {
+  if (!b) return null;
+  if (b.mergeSnapshot) return { target: b.boothNumber, kind: 'unmerge' };
+  if (b.splitSnapshot) return { target: b.boothNumber, kind: 'unsplit' };
+  if (b.splitFrom) {
+    const parent = booths[b.splitFrom];
+    if (parent && parent.splitSnapshot && (parent.splitSnapshot.created || []).includes(b.boothNumber)) {
+      return { target: b.boothNumber === parent.boothNumber ? b.boothNumber : parent.boothNumber, kind: 'unsplit', via: b.boothNumber };
+    }
+    return { target: b.boothNumber, kind: 'remove-cell' };
+  }
+  return null;
+}
+
+function resetDescription(r) {
+  if (r.kind === 'unmerge') return `un-merge stand ${shownN(r.target)} back into its original stands`;
+  if (r.kind === 'unsplit') return `undo the split of stand ${shownN(r.target)} — its cells are removed and the whole stand comes back`;
+  return `remove the leftover cell ${shownN(r.target)}`;
+}
+
+function resetToastFor(boothNumber, res) {
+  return res.type === 'unmerge' ? `Stand ${shownN(boothNumber)} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
+       : res.type === 'unsplit' ? `Stand ${shownN(boothNumber)} un-split — removed ${(res.removed || []).join(', ')}.`
+       : `Removed leftover cell ${shownN(boothNumber)}.`;
+}
+
+function resetFromPanel(n) {
+  const r = resetTargetOf(booths[n]);
+  if (!r) return adminToast('That stand was not merged or split.', 'error');
+  if (!confirm(`Reset: ${resetDescription(r)}?`)) return;
+  socket.emit('booth:reset', { boothNumber: r.target }, (res) => {
+    if (res && res.ok) { adminToast(resetToastFor(r.target, res), 'ok'); if (booths[r.target]) selectAdminBooth(r.target); }
+    else adminToast((res && res.error) || 'Reset failed.', 'error');
+  });
+}
+
+// Every selected stand resolved to what its reset acts on, de-duplicated —
+// selecting both halves of one split resets that split once, not twice (the
+// second would be refused as "not merged or split" after the first succeeded).
+function restoreMultiSelect() {
+  const seen = new Set(), targets = [];
+  let skipped = 0;
+  multiSel.forEach((id) => {
+    const r = resetTargetOf(booths[id]);
+    if (!r) { skipped++; return; }
+    if (seen.has(r.target)) return;
+    seen.add(r.target); targets.push(r);
+  });
+  if (!targets.length) return adminToast('None of the selected stands was merged or split.', 'error');
+  const lines = targets.map(r => `• ${resetDescription(r)}`).join('\n');
+  const note = skipped ? `\n\n(${skipped} selected stand${skipped === 1 ? ' was' : 's were'} not merged or split and will be left alone.)` : '';
+  if (!confirm(`Restore ${targets.length} stand${targets.length === 1 ? '' : 's'}?\n\n${lines}${note}`)) return;
+
+  const btn = document.getElementById('multi-restore');
+  if (btn) btn.disabled = true;
+  // One at a time, in order: each reset changes the plan the next one acts
+  // on, and the server re-tags the map after every success.
+  const done = [], failed = [];
+  const next = (i) => {
+    if (i >= targets.length) {
+      if (btn) btn.disabled = false;
+      clearMultiSelect();
+      if (done.length) adminToast(`Restored ${done.map(shownN).join(', ')}.`, failed.length ? 'error' : 'ok');
+      if (failed.length) adminToast(failed.join(' '), 'error');
+      return;
+    }
+    const r = targets[i];
+    socket.emit('booth:reset', { boothNumber: r.target }, (res) => {
+      if (res && res.ok) done.push(r.target);
+      else failed.push((res && res.error) || `Could not reset ${shownN(r.target)}.`);
+      next(i + 1);
+    });
+  };
+  next(0);
+}
+
+// A split cell prints its size with the unit; when the unit changes after the
+// plan was drawn, the printed figures follow without a re-tag.
+function relabelSplitSizes() {
+  if (!svgDoc) return;
+  svgDoc.querySelectorAll('[data-split-size]').forEach((t) => {
+    const b = booths[t.getAttribute('data-split-size')];
+    if (b && b.sqm) t.textContent = b.sqm + UNIT;
+  });
 }
 
 // Commercial fields now live under `assignment` on the booth document.
@@ -1427,6 +1527,19 @@ function renderStandActions(n) {
     split.hidden = !canSplitOnMap(b);
     split.onclick = () => enterSplitMode(n);
   }
+
+  // Reset, for any stand that is (or is part of) a split or a merge. The label
+  // says which it is, and for a split cell names the parent it will restore.
+  const reset = document.getElementById('aba-reset');
+  if (reset) {
+    const r = resetTargetOf(b);
+    reset.hidden = !r;
+    if (r) {
+      reset.textContent = r.kind === 'unmerge' ? '↩️ Un-merge' : r.kind === 'unsplit' ? '↩️ Undo split' : '↩️ Remove cell';
+      reset.title = `Reset: ${resetDescription(r)}`;
+      reset.onclick = () => resetFromPanel(n);
+    }
+  }
 }
 
 /** What the release/un-book gate is asking for, in the operator's words. */
@@ -2157,6 +2270,7 @@ socket.on('settings', (s) => {
   // The colours this event's plan is drawn in.
   if (window.BoothPalette) BoothPalette.apply(s && s.palette);
   if (s && s.unit) UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
+  if (s && s.unit) relabelSplitSizes();
   if (s && s.currencySymbol) { CUR = s.currencySymbol; window.UI.setCurrency(CUR); }
   if (s && s.currency) CURRENCY = s.currency;
   if (s && s.ratePerSqm != null) RATE = s.ratePerSqm;
