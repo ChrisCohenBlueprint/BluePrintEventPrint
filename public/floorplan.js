@@ -318,7 +318,6 @@ function wireCollapsers() {
         if (boxId === 'fp-sponsors') {
           document.getElementById('fp-side').classList.toggle('sponsors-collapsed', collapsed);
         }
-        matchSponsorHeight();
       });
     });
 }
@@ -552,17 +551,28 @@ function showTooltip(e, n) {
   tooltip.classList.remove('hidden');
   moveTooltip(e);
 }
-// The frame's position on screen, cached. getBoundingClientRect() forces a
-// layout, and this ran on EVERY mousemove across a 6000-node plan. The frame
-// only moves when the window or the side panel does, so recompute then instead.
-let frameRect = null;
-const frameBox = () => (frameRect || (frameRect = frame.getBoundingClientRect()));
-const dropFrameBox = () => { frameRect = null; };
+// Where the tooltip's coordinates are measured from, cached.
+//
+// Two fixes in one. getBoundingClientRect() forces a layout, and this ran on
+// EVERY mousemove across a 6000-node plan; the box only changes when the window
+// or the side panel does, so it is recomputed then instead.
+//
+// And it is measured from the tooltip's own offsetParent, which is the map
+// PANEL, not the map frame. The frame starts below the toolbar, so subtracting
+// the frame's top from a client coordinate and then using it as an offset
+// inside the panel pushed the tooltip down by the toolbar's height — about 100
+// pixels below the pointer it is meant to be labelling.
+let anchorRect = null;
+const anchorBox = () => {
+  if (!anchorRect) anchorRect = (tooltip.offsetParent || frame).getBoundingClientRect();
+  return anchorRect;
+};
+const dropFrameBox = () => { anchorRect = null; };
 window.addEventListener('resize', dropFrameBox);
 window.addEventListener('scroll', dropFrameBox, true);
 
 function moveTooltip(e) {
-  const r = frameBox();
+  const r = anchorBox();
   tooltip.style.left = (e.clientX - r.left + 14) + 'px';
   tooltip.style.top  = (e.clientY - r.top - 10) + 'px';
 }
@@ -602,6 +612,10 @@ function hideSelection() {
   svgDoc?.querySelectorAll('.booth-selected').forEach(el => el.classList.remove('booth-selected'));
   const panel = document.getElementById('booth-panel');
   if (panel && emptyPanelHTML) { panel.innerHTML = emptyPanelHTML; if (window.lucide) lucide.createIcons(); }
+  // The panel no longer shows any stand, so the "already showing this" marker
+  // renderPanel() skips on has to go with it — otherwise re-opening the SAME
+  // stand would be a no-op and the visitor would be left on the empty prompt.
+  forgetRenderedPanel();
   hideSponsors();
 }
 
@@ -667,7 +681,6 @@ function renderShortlist() {
   box.querySelectorAll('[data-remove-area]').forEach(btn => {
     btn.onclick = () => toggleAreaShortlist(btn.getAttribute('data-remove-area'));
   });
-  matchSponsorHeight();   // the enquiry column height changed; re-level the columns
 }
 
 // ─── Recommended sponsorship ────────────────────────────────────────────────
@@ -721,15 +734,12 @@ function updatePanelWidth() {
   side.classList.toggle('has-selection', showing);
 }
 
-// The whole selection column now scrolls as one (with a fixed action bar below),
-// so the sponsorship no longer needs a height cap to end level with the enquiry —
-// they scroll together. Kept as a no-op-ish hook (clears any stale cap) so the
-// many existing call sites stay valid.
-function matchSponsorHeight() {
-  const sponsors = document.getElementById('fp-sponsors');
-  if (sponsors) sponsors.style.maxHeight = '';
-}
-window.addEventListener('resize', matchSponsorHeight);
+// matchSponsorHeight() used to live here: a hook that capped the sponsorship
+// box's height so it ended level with the enquiry beside it. The selection
+// column scrolls as one now, so nothing sets that cap and the function had
+// become a no-op — one that six call sites and a resize listener still paid
+// for, and that read as if it were doing something. Removed rather than kept
+// "in case": the layout rule it enforced is in the stylesheet.
 
 // Reveal the panel for a given spend. Renders instantly if preloaded.
 async function showSponsorRecos(sqm) {
@@ -805,7 +815,6 @@ function renderSponsors(list) {
     head.append(name, right);
     head.onclick = () => {
       card.classList.toggle('collapsed');
-      matchSponsorHeight();
     };
     card.appendChild(head);
 
@@ -866,7 +875,6 @@ function renderSponsors(list) {
     box.appendChild(card);
   });
   lucide.createIcons();
-  matchSponsorHeight();
 }
 
 function toggleSponsor(key) {
@@ -960,6 +968,19 @@ function panelSig(n) {
           b.status === 'available' ? '' : alternativeKey(n)].join('|');
 }
 let shownPanelSig = '';
+
+/**
+ * Forget what the panel is showing.
+ *
+ * Anything that replaces the panel's contents WITHOUT going through
+ * renderPanel() — the empty prompt, an area — has to call this, or re-opening
+ * the same stand hits the "nothing changed" short-circuit and does nothing.
+ */
+function forgetRenderedPanel() {
+  shownPanelSig = '';
+  const panel = document.getElementById('booth-panel');
+  if (panel) delete panel.dataset.booth;
+}
 
 /**
  * Available stands near a taken one, ranked.
@@ -1168,13 +1189,17 @@ function submitWaitlist(n) {
   btn.disabled = true;
   btn.textContent = 'Sending…';
 
+  // `kind: 'waitlist'` is what lets this go in with no name: the server relaxes
+  // that one rule for a waiting-list request and files the lead as a waitlist
+  // rather than an enquiry, so sales can tell "wants this stand" from "wants to
+  // hear if it frees up". Until that existed this sent the email's local part
+  // as a first name, which put invented names on real leads.
   emitWithTimeout('inquiry:submit', {
-    firstName: email.split('@')[0],
-    lastName: '',
+    kind: 'waitlist',
     email,
     boothNumbers: [n],
     message: `Waiting list: tell me if Stand ${shownN(n)} becomes available. `
-           + 'Submitted from the public floorplan with an email address only — no name was given.',
+           + 'Submitted from the public floorplan with an email address only.',
   }, (res) => {
     btn.disabled = false;
     btn.textContent = 'Notify me';
@@ -1538,6 +1563,9 @@ function renderAreaPanel(key) {
   if (!a) return;
   const panel = document.getElementById('booth-panel');
   panel.classList.remove('hidden');
+  // An area has taken the panel over; whatever stand was in it is no longer
+  // rendered, so renderPanel() must not think it still is.
+  forgetRenderedPanel();
   document.getElementById('empty-state')?.classList.add('hidden');
 
   const taken = a.status === 'taken';
@@ -2240,7 +2268,14 @@ if (document.fonts) document.fonts.ready.then(() => {
 // Fires once on observe and again on every resize, so a frame going from
 // zero-sized to laid out is caught without polling. When nothing was deferred
 // this is a no-op, so an ordinary window resize costs nothing.
-if (window.ResizeObserver && frame) new ResizeObserver(repaintLabels).observe(frame);
+if (window.ResizeObserver && frame) new ResizeObserver(() => {
+  // The frame also moves and resizes without the WINDOW doing either — opening
+  // a stand widens the side panel — so the cached frame box the tooltip is
+  // positioned against has to be dropped here too, or the tooltip sits off the
+  // pointer until the next window resize.
+  dropFrameBox();
+  repaintLabels();
+}).observe(frame);
 
 /**
  * Stand element lookup, memoised.
@@ -2497,6 +2532,11 @@ function toggleDirectory(open) {
   const btn = document.getElementById('directory-toggle');
   if (!panel || !btn) return;
   directoryOpen = open == null ? !directoryOpen : !!open;
+  // Anchored under the toolbar, measured at open time: the toolbar wraps to two
+  // rows on a narrow screen, and a fixed offset covered the search box and the
+  // very button that opens this panel.
+  const bar = document.querySelector('.fp-map-toolbar');
+  if (bar) panel.style.top = bar.offsetHeight + 'px';
   panel.hidden = !directoryOpen;
   btn.setAttribute('aria-expanded', String(directoryOpen));
   if (directoryOpen) {

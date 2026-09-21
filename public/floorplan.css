@@ -507,6 +507,9 @@ body {
 
 .booth-selected {
   stroke: #4f46e5 !important; stroke-width: 8px !important;
+  /* The on-hold hatch above sets a dash pattern; the selection ring is a single
+     solid statement of "this is the one you have open" and must not inherit it. */
+  stroke-dasharray: none !important;
   filter: drop-shadow(0 0 12px rgba(79,70,229,0.7)) !important;
 }
 

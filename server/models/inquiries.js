@@ -20,7 +20,13 @@ const HEARD_OPTIONS = ['Recommendation', 'Google/Bing Search', 'Marketing Email'
  * which those details are actually persisted.
  */
 async function create({ name, firstName, lastName, email, phone, company, jobTitle, heardAbout,
-                        message, boothNumbers = [], sponsorKeys = [], areaKeys = [], sessionId = null }) {
+                        message, boothNumbers = [], sponsorKeys = [], areaKeys = [], sessionId = null,
+                        kind = 'enquiry' }) {
+  // A waiting-list request ("tell me if this stand frees up") asks for an email
+  // and nothing else, because asking a browsing visitor for their full name to
+  // be told about a stand they cannot have yet loses most of them. It is still
+  // a lead and still belongs here, so the only rule that relaxes is the name.
+  const isWaitlist = kind === 'waitlist';
   const first = clean(firstName, 80);
   const last  = clean(lastName, 80);
   // Prefer the split name; fall back to a legacy single `name` field so older
@@ -46,7 +52,7 @@ async function create({ name, firstName, lastName, email, phone, company, jobTit
   const hasAreas    = Array.isArray(areaKeys) && areaKeys.length;
 
   const errors = [];
-  if (!contact.name)                errors.push('Please enter your name.');
+  if (!contact.name && !isWaitlist) errors.push('Please enter your name.');
   if (!EMAIL_RE.test(contact.email)) errors.push('Please enter a valid email address.');
   // A stand or a sponsorship option — either is a valid lead. Requiring a stand
   // meant that removing the last stand while keeping sponsors left the enquiry
@@ -63,6 +69,9 @@ async function create({ name, firstName, lastName, email, phone, company, jobTit
     areasOfInterest: Array.isArray(areaKeys) ? areaKeys.slice(0, 25).map(String) : [],
     message: clean(message, 2000),
     source:  'floorplan',
+    // Sales needs to tell "wants this stand" from "wants to hear if it frees
+    // up" at a glance: the second is a lead to sit on, not one to call today.
+    kind:    isWaitlist ? 'waitlist' : 'enquiry',
     status:  'new',
     createdAt: new Date(),
   };

@@ -291,8 +291,19 @@ function register(io) {
     // Inside this socket's show: track() reads config.showId, which outside a
     // context falls back to the DEFAULT show — so every North America visitor's
     // session was being recorded against Europe.
-    showContext.runAs(socket.data.showId, () =>
-      track({ type: 'session.start', socket, meta: { admin: isAdmin } }));
+    //
+    // Only for an ADMIN, whose access to commercial data is auditable on its own
+    // footing. A visitor's session is recorded when they ACCEPT, not when they
+    // arrive: track() stamps IP, user agent and referrer onto every event, so
+    // firing it here wrote exactly the identifying record the consent bar
+    // promises is not written until it is answered. Worse, the bar is hidden in
+    // embed mode, which is where this page actually lives, so on the marketing
+    // site that record was the only one ever written — no behaviour, just the
+    // identifying part. See session:adopt, which records the session on consent.
+    if (isAdmin) {
+      showContext.runAs(socket.data.showId, () =>
+        track({ type: 'session.start', socket, meta: { admin: true } }));
+    }
     console.log(`+ ${isAdmin ? 'ADMIN' : 'visitor'} ${socket.id} (total: ${connectionsFor(socket.data.showId)})`);
 
     // ── Handlers are bound synchronously, before any await ────────────────────
@@ -381,6 +392,14 @@ function register(io) {
       const { sessionId } = payload || {};
       if (typeof sessionId === 'string' && /^[a-f0-9]{32}$/.test(sessionId)) {
         socket.data.sessionId = sessionId;
+        // The visitor has just accepted, so this is the first moment their
+        // session may be recorded — the connect handler deliberately does not.
+        // Guarded because a reconnect re-sends adopt, and a session that
+        // started three times in one visit is a reconnect, not three visits.
+        if (!socket.data.sessionRecorded) {
+          socket.data.sessionRecorded = true;
+          track({ type: 'session.start', socket, meta: { admin: false } });
+        }
         track({ type: 'consent.granted', socket });
       }
     }, socket));
@@ -414,8 +433,13 @@ function register(io) {
           const booths = res.boothsOfInterest || [];
           // The form now sends first/last separately; build a display name from
           // whatever it provided (falling back to a legacy single `name`).
+          // A waiting-list request carries an email and no name by design, and
+          // "Enquiry from someone" tells the admin nothing they can act on — so
+          // fall back to the address before falling back to "someone".
           const who = [payload.firstName, payload.lastName].map(s => (s || '').trim()).filter(Boolean).join(' ')
-                    || (payload.name || '').trim() || 'someone';
+                    || (payload.name || '').trim()
+                    || (payload.email || '').trim()
+                    || 'someone';
           // Escaped per element, exactly like every other value that reaches the
           // admin log. These originate in the PUBLIC enquiry form and are never
           // checked against real stands, so an unescaped join put attacker-chosen

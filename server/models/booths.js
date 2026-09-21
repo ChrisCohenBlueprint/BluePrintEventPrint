@@ -11,15 +11,24 @@ const col = () => getDb().collection('booths');
 /**
  * Every stand on this show.
  *
- * The merge and split snapshots are deliberately projected away. Each holds a
- * FULL copy of every stand it absorbed, and this query is what warms the
- * in-memory cache every broadcast is built from — so a hall with a handful of
- * merges pushed those copies to every connected browser on every single edit.
- * Nothing outside reset() has ever read them, and reset() reads the stand
- * itself rather than the cache.
+ * `mergeSnapshot.parts` is projected away. It holds a FULL copy of every stand
+ * the merge absorbed — sponsor logo data URIs and all — and this query is what
+ * warms the in-memory cache every broadcast is built from, so a hall with a
+ * handful of merges pushed those copies to every connected browser on every
+ * single edit. reset() reads the stand itself rather than the cache, so nothing
+ * needs the parts here.
+ *
+ * What is NOT projected away, and must not be: the admin projection is the
+ * identity, so whatever survives this query is what the admin console sees. It
+ * decides whether to offer Reset from the presence of `mergeSnapshot` or
+ * `splitSnapshot`, and maps a child cell's reset back to its parent through
+ * `splitSnapshot.created`. Dropping the snapshots wholesale took those buttons
+ * off the page while leaving every test green, because no test opens that menu.
+ * Both remaining objects are small — a geometry, an area, a price, a list of
+ * numbers — so keeping them costs the broadcast almost nothing.
  */
 const all = () => col().find({ showId: config.showId })
-  .project({ mergeSnapshot: 0, splitSnapshot: 0 }).toArray();
+  .project({ 'mergeSnapshot.parts': 0 }).toArray();
 
 const get = (boothNumber) => col().findOne({ showId: config.showId, boothNumber });
 
@@ -36,7 +45,10 @@ const get = (boothNumber) => col().findOne({ showId: config.showId, boothNumber 
 function toPublic(b) {
   return {
     boothNumber: b.boothNumber,
-    svgElementId: b.svgElementId,
+    // svgElementId is deliberately not sent. Stands are bound to the artwork by
+    // geometry, not by element id, and no client has read this since that
+    // changed — it was 273 strings on every broadcast for nobody. It stays on
+    // the document, where the import and the migration scripts still write it.
     status:  b.status,
     company: b.assignment?.company || null,
     sqm:     b.sqm,
@@ -1182,7 +1194,14 @@ async function listSnapshots({ showId = config.showId, limit = 25 } = {}) {
  */
 async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId = config.showId } = {}) {
   const rows = await snapshots().find({ showId, snapshotId, header: { $ne: true } }).toArray();
-  if (!rows.length) return { ok: false, reason: 'no_such_snapshot', snapshotId };
+  if (!rows.length) {
+    // Told apart deliberately. A snapshot taken of an event that had no stands
+    // is a real snapshot of nothing, and restoring it would empty the event —
+    // which is a thing someone might mean, but never by accident, and never in
+    // the belief that they were recovering something.
+    const header = await snapshots().findOne({ showId, snapshotId, header: true });
+    return { ok: false, reason: header ? 'empty_snapshot' : 'no_such_snapshot', snapshotId };
+  }
 
   const stored = rows.map(r => r.booth).filter(Boolean);
   const current = await col().find({ showId }).toArray();
@@ -1474,7 +1493,7 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   const prevByNumber = new Map(existing.map(b => [b.boothNumber, b]));
 
   const ops = [];
-  const created = [], refreshed = [], reshaped = [], untouched = [];
+  const created = [], refreshed = [], reshaped = [], untouched = [], released = [];
   for (const doc of docs) {
     const prev = prevByNumber.get(doc.boothNumber);
     const filter = { showId, boothNumber: doc.boothNumber };
@@ -1501,14 +1520,23 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
       // and that stays true until a person says otherwise. Null (rather than
       // absent) is what tells the expiry sweep to leave it alone for good.
       if (doc.status === 'held') $set.holdExpiresAt = null;
+      // A stand the plan no longer draws as reserved has to lose the hold the
+      // last import gave it, document and all. Left behind, it shows in the
+      // admin's hold list as a reservation on a stand that is plainly for sale.
+      else if (prev.status === 'held') released.push(doc.boothNumber);
       refreshed.push(doc.boothNumber);
     } else {
       reshaped.push(doc.boothNumber);
     }
-    ops.push({ updateOne: { filter, update: { $set } } });
+    ops.push({ updateOne: { filter, update: released.includes(doc.boothNumber)
+      ? { $set, $unset: { holdExpiresAt: '' } } : { $set } } });
   }
 
   if (ops.length) await col().bulkWrite(ops, { ordered: false });
+  if (released.length) {
+    await db.collection('holds').deleteMany(
+      { showId, boothNumber: { $in: released }, source: IMPORT_SOURCE });
+  }
 
   // Stands the plan no longer draws. Left in place and REPORTED rather than
   // removed: an upsert that quietly deleted them would be the destructive
@@ -1522,7 +1550,7 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
 
   return { ...result, created: created.length, refreshed: refreshed.length,
            reshaped: reshaped.length, untouched: untouched.length,
-           orphaned, preserved: reshaped.concat(untouched) };
+           released: released.length, orphaned, preserved: reshaped.concat(untouched) };
 }
 
 /**
