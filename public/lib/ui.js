@@ -133,10 +133,17 @@
    * loops back).
    */
   async function api(url, opts = {}) {
+    // `headers` is pulled out before the spread. Left in, `...opts` put the
+    // caller's own headers back over the merged set, dropping the JSON content
+    // type — so a POST that also sent, say, X-Confirm-Password arrived with no
+    // content type at all and express parsed its body as empty.
+    const { headers, ...rest } = opts;
     const res = await fetch(url, {
-      headers: opts.body ? { 'Content-Type': 'application/json', ...(opts.headers || {}) }
-                         : (opts.headers || {}),
-      ...opts,
+      ...rest,
+      headers: {
+        ...(rest.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(headers || {}),
+      },
     });
     if (res.status === 401) {
       const next = location.pathname + location.search;
@@ -237,9 +244,13 @@
       .bp-dialog-btn.danger  { background: #b91c1c; border-color: #b91c1c; color: #fff; }
       .bp-dialog-btn:hover { filter: brightness(1.12); }
       .is-pending { opacity: .6; cursor: progress !important; }
+      /* A toast is deliberately pass-through so it never swallows a click meant
+         for the page underneath (.admin-toast sets pointer-events:none). A toast
+         carrying an ACTION has to be clickable, though, or the action is
+         decoration — so the button, and only the button, takes them back. */
       .toast-action { margin-left: 12px; border: 1px solid currentColor; background: transparent;
         color: inherit; font-family: inherit; font-size: 12px; font-weight: 700; padding: 3px 10px;
-        border-radius: 6px; cursor: pointer; }
+        border-radius: 6px; cursor: pointer; pointer-events: auto; }
       .toast-count { margin-left: 8px; font-size: 11px; opacity: .7; }
     `;
     document.head.appendChild(style);

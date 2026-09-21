@@ -108,7 +108,7 @@
    * starting again actually starts — and blank the codes, so nobody carries on
    * copying down eight strings that no longer open anything.
    */
-  function enrolExpired() {
+  function enrolExpired(message) {
     stopEnrolCountdown();
     pending = null;
     $('recovery-codes').replaceChildren();
@@ -117,7 +117,9 @@
     $('enrol-code').value = '';
     $('password').value = '';
     showStep('password');
-    showError('That setup window closed before it was confirmed, so those recovery codes are no longer valid. Sign in again and you will be given a fresh QR code and a fresh set of codes to write down.');
+    showError(message ||
+      'That setup window closed before it was confirmed, so those recovery codes are no longer valid. ' +
+      'Sign in again and you will be given a fresh QR code and a fresh set of codes to write down.');
   }
 
   // ── Step 2a: confirm enrolment ────────────────────────────────────────────────
@@ -144,8 +146,8 @@
   // costs first — a reload was doing exactly this, silently.
   $('enrol-restart')?.addEventListener('click', () => {
     if (!confirm('Start the setup again?\n\nYou will get a new QR code and a new set of recovery codes. The eight codes on screen now will stop working.')) return;
-    enrolExpired();
-    clearError();
+    enrolExpired('Starting again — the recovery codes that were on screen are no longer valid. ' +
+                 'Sign in to get a fresh QR code and a fresh set of codes.');
   });
 
   // ── Step 2b: verify code / recovery ───────────────────────────────────────────

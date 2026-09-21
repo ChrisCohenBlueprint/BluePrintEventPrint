@@ -10,7 +10,6 @@
  *   node scripts/admin-account.js role <username> <admin|sales>        change access level
  *   node scripts/admin-account.js reset-2fa <username>                 clear 2FA (re-enrols next login)
  *   node scripts/admin-account.js delete <username>
- *   node scripts/admin-account.js seed-sales                           create a sales login per roster name
  *
  * `role` is admin (default) or sales. A sales account can only reach /sales:
  * remaining sponsorship, available stands and the client proposals built from
@@ -22,7 +21,6 @@
 const crypto = require('crypto');
 const { connect, getDb, close } = require('../server/db');
 const users = require('../server/models/users');
-const { TEAM } = require('../server/data/sales-team');
 
 // Ambiguity-free alphabet: no O/0 or I/l, because these are read aloud or typed
 // from a note when the temporary password is handed over.
@@ -64,30 +62,6 @@ async function main() {
       break;
     }
 
-    /**
-     * One login per name on the sales roster. Idempotent: an existing account is
-     * skipped rather than having its password reset, so re-running after adding
-     * a name to the roster does not lock out everyone already set up.
-     */
-    case 'seed-sales': {
-      const created = [];
-      for (const member of TEAM) {
-        const username = member.name.toLowerCase().replace(/[^a-z0-9._-]/g, '');
-        if (await users.findByUsername(username)) { console.log(`  · ${username} — already exists, skipped`); continue; }
-        const password = genPassword();
-        await users.upsert({ username, password, role: 'sales', displayName: member.name, email: member.email });
-        const claim = await users.issueClaimCode(username);
-        created.push({ username, password, claim });
-      }
-      if (!created.length) { console.log('\nNothing to do — every roster name already has a login.'); break; }
-      console.log(`\n✅ Created ${created.length} sales login(s). Share each ONE-TIME set out of band:\n`);
-      console.log('  USERNAME          TEMP PASSWORD        INVITE CODE');
-      created.forEach(r => console.log(`  ${r.username.padEnd(17)} ${r.password.padEnd(20)} ${r.claim}`));
-      console.log('\nThey sign in at /login, enter the invite code on their FIRST login only,');
-      console.log('set up an authenticator app, and land on /sales.');
-      console.log('This is the only time these are shown — nothing here is recoverable afterwards.\n');
-      break;
-    }
     case 'reset-2fa': {
       if (!a) throw new Error('usage: reset-2fa <username>');
       const r = await db.collection('users').updateOne(
@@ -110,7 +84,6 @@ async function main() {
       console.log('  role <user> <admin|sales>');
       console.log('  reset-2fa <user>');
       console.log('  delete <user>');
-      console.log('  seed-sales                 one sales login per name in server/data/sales-team.js');
   }
 
   await close();

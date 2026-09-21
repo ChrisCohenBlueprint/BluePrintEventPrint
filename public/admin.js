@@ -595,7 +595,13 @@ function showAdminTooltip(e, id) {
   const b = booths[id];
   document.getElementById('att-label').textContent = `Stand ${shownB(b) || id}`;
   document.getElementById('att-status').textContent = cap(b?.status || 'unknown');
-  document.getElementById('att-price').textContent = (b && b.listPrice != null) ? `${CUR}${b.listPrice.toLocaleString()}` : '';
+  document.getElementById('att-price').textContent = (b && b.listPrice != null) ? money(b.listPrice) : '';
+  const hold = document.getElementById('att-hold');
+  if (hold) {
+    const left = b && b.status === 'held' ? holdLeft(id) : null;
+    hold.textContent = left ? `Hold ${left.text}` : '';
+    hold.classList.toggle('urgent', !!(left && left.urgent));
+  }
   adminTooltip.classList.remove('hidden');
   moveAdminTooltip(e);
 }
@@ -857,6 +863,61 @@ function applySplit() {
   });
 })();
 
+/* ---- Closing a panel, and the two keys worth having ------------------- */
+//
+// The stand panel had no close control of any kind. Once open it could only be
+// REPLACED — by clicking another stand — so it sat over the plan covering the
+// corner of the hall you were trying to look at, and the only way out was a
+// reload.
+function closeStandPanel() {
+  if (selectedAdminId) {
+    multiEl(selectedAdminId)?.classList.remove('booth-selected');
+    selectedAdminId = null;
+  }
+  document.getElementById('admin-booth-action')?.classList.add('hidden');
+}
+
+function closeAreaPanel() {
+  if (selectedAreaKey && svgDoc) {
+    svgDoc.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
+  }
+  selectedAreaKey = null;
+  document.getElementById('admin-area-action')?.classList.add('hidden');
+}
+
+document.getElementById('aba-close')?.addEventListener('click', closeStandPanel);
+document.getElementById('ara-close')?.addEventListener('click', closeAreaPanel);
+
+document.addEventListener('keydown', (e) => {
+  // Split mode owns Escape while a divider is placed — see wireSplitBar above.
+  if (splitUI.id) return;
+  const tag = (e.target && e.target.tagName) || '';
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+                 (e.target && e.target.isContentEditable);
+
+  if (e.key === 'Escape' && !typing) {
+    // Whichever panel is open; they share a slot and are mutually exclusive.
+    if (!document.getElementById('admin-booth-action')?.classList.contains('hidden')) {
+      e.preventDefault(); closeStandPanel();
+    } else if (!document.getElementById('admin-area-action')?.classList.contains('hidden')) {
+      e.preventDefault(); closeAreaPanel();
+    } else if (multiSel.size) {
+      e.preventDefault(); clearMultiSelect();
+    }
+    return;
+  }
+
+  // "/" jumps to the stand search, the way it does in every tool that has one.
+  // Finding a stand on a 270-stand plan was a mouse trip to a small box.
+  if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) {
+    const box = document.getElementById('admin-fp-search');
+    if (!box) return;
+    e.preventDefault();
+    showAdminSection('floorplan');
+    setTimeout(() => { box.focus(); box.select(); }, 40);
+  }
+});
+
 // Show-level settings pushed from the server: area unit (m²/ft², a label only)
 // and the rate. All update live via the 'settings' socket event.
 let UNIT = 'm²', RATE = null;
@@ -919,6 +980,7 @@ function renderAdminBoothAction(n) {
 
   renderStandActions(n);
   renderBoothSponsor(n);
+  renderHoldPanel(n);   // the clock on a held stand, and the way to extend it
   document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
 
   renderBoothTags(n);
@@ -926,7 +988,12 @@ function renderAdminBoothAction(n) {
   document.getElementById('aba-actual-price').value = d.actualPrice ?? '';
   document.getElementById('aba-notes').value        = d.notes ?? '';
   document.getElementById('aba-save-deal').onclick  = () => {
-    const actualPrice = parseFloat(document.getElementById('aba-actual-price').value) || null;
+    // Sent as typed (blank → clear). `parseFloat(v) || null` turned a legitimate
+    // zero into null, so a stand genuinely given away free could not be recorded
+    // as free — and it disagreed with the inline path in the bookings table,
+    // which has always preserved "0". The server parses and validates.
+    const raw = document.getElementById('aba-actual-price').value;
+    const actualPrice = String(raw).trim() === '' ? null : raw;
     const notes = document.getElementById('aba-notes').value.trim();
     const btn = document.getElementById('aba-save-deal');
     btn.disabled = true; btn.textContent = 'Saving…';
@@ -984,7 +1051,10 @@ async function loadHolds() {
     // Not fatal: the stand still reads "On hold", it just has no clock on it.
     return;
   }
-  paintHoldClocks();
+  // Guarded too: this runs from the state:full handler, where an uncaught
+  // rejection is invisible — it would not even reach the safely() wrapper,
+  // because that returns before the promise settles.
+  try { paintHoldClocks(); } catch (e) { console.error('Hold clocks:', e); }
 }
 
 /** "3h 12m left" — the unit people actually think in at each scale. */
@@ -1286,13 +1356,17 @@ document.getElementById('bookings-tbody').addEventListener('click', (e) => {
   if (!btn) return;
   const n = btn.dataset.booth;
   if (btn.dataset.action === 'csv') exportSingleCSV(n);
+  else if (btn.dataset.action === 'extend') extendHold(n, btn);
   else adminAction(btn.dataset.action, n);
 });
 
 document.getElementById('bookings-tbody').addEventListener('change', (e) => {
   const input = e.target.closest('input[data-field]');
-  if (!input) return;
-  inlineUpdateDeal(input.dataset.booth, input.dataset.field, input.value);
+  if (!input || input.disabled) return;
+  // Nothing to save if it did not actually change — a blur after a broadcast
+  // patched the value would otherwise fire a pointless write.
+  if (String(input.value) === String(input.dataset.prev ?? '')) return;
+  inlineUpdateDeal(input.dataset.booth, input.dataset.field, input.value, input);
 });
 
 // Pressing Enter should save. A standalone input frequently fires 'change' only
@@ -1460,7 +1534,7 @@ function adminToast(message, kind = 'ok') {
   return window.UI.toast(message, kind, TOAST);
 }
 
-function inlineUpdateDeal(boothNumber, field, value) {
+function inlineUpdateDeal(boothNumber, field, value, input) {
   const b = booths[boothNumber];
   if (!b) return;
   const d = dealOf(b);
@@ -1473,8 +1547,20 @@ function inlineUpdateDeal(boothNumber, field, value) {
   // Ack so a save actually confirms (or surfaces why it didn't) instead of
   // failing silently and reverting on the next broadcast.
   socket.emit('booth:update-deal', { boothNumber, actualPrice, notes }, (res) => {
-    if (res && res.ok) adminToast(`Stand ${boothNumber} ${field} saved.`, 'ok');
-    else adminToast((res && res.error) || `Could not save ${field} for stand ${boothNumber}.`, 'error');
+    if (res && res.ok) {
+      if (input) input.dataset.prev = input.value;
+      adminToast(`Stand ${boothNumber} ${field} saved.`, 'ok');
+      return;
+    }
+    // The typed value used to stay on screen after a refusal, until some later
+    // broadcast happened to overwrite it — so the table showed a price that was
+    // never stored, looking for all the world like it had been.
+    if (input) {
+      input.value = input.dataset.prev ?? '';
+      input.classList.add('save-failed');
+      setTimeout(() => input.classList.remove('save-failed'), 1200);
+    }
+    adminToast((res && res.error) || `Could not save ${field} for stand ${boothNumber}.`, 'error');
   });
 }
 
@@ -1484,8 +1570,12 @@ document.getElementById('bookings-filter').addEventListener('change', renderBook
 
 // ─── CSV Export ───────────────────────────────────────────────────────────────
 function downloadCSV(dataArray, filename) {
-  if (!dataArray || dataArray.length === 0) return;
-  const headers = ['Stand', `Size (${UNIT})`, 'Listed Price (EUR)', 'Deal Price (EUR)', 'Status', 'Company', 'Notes', 'Live Viewers', 'Total Clicks'];
+  if (!dataArray || dataArray.length === 0) return adminToast('Nothing to export with those filters.', 'error');
+  // The price columns were headed "(EUR)" on every show, including the ones
+  // priced in dollars — a spreadsheet that states the wrong currency is worse
+  // than one that states none.
+  const headers = ['Stand', `Size (${UNIT})`, `Listed Price (${CURRENCY})`, `Deal Price (${CURRENCY})`,
+                   'Status', 'Company', 'Notes', 'Hold expires', 'Live Viewers', 'Total Clicks'];
   // Neutralise spreadsheet formula injection: company/notes are free text (often
   // pasted from a customer enquiry). A value like =HYPERLINK(...) or =cmd|... is
   // evaluated when the CSV is opened in Excel/Sheets, so prefix any cell starting
@@ -1503,6 +1593,8 @@ function downloadCSV(dataArray, filename) {
     cell(b.status),
     cell(dealOf(b).company || ''),
     cell(dealOf(b).notes || ''),
+    cell(b.status === 'held' && holdsCache.get(String(b.boothNumber))
+      ? new Date(holdsCache.get(String(b.boothNumber))).toISOString() : ''),
     cell(b.viewers || 0),
     cell(b.clicks || 0)
   ]);
@@ -1530,11 +1622,23 @@ document.getElementById('export-all-csv').onclick = () => {
     return matchFilter && matchSearch;
   });
 
-  downloadCSV(rows, 'blueprint_stands_export.csv');
+  // The filename named neither the event nor the day. Three exports taken from
+  // three events over a week were four identical "blueprint_stands_export.csv"
+  // files in one Downloads folder, distinguishable only by opening them.
+  downloadCSV(rows, `${csvPrefix()}-stands-${csvDate()}.csv`);
 };
 
+/** The event this export came from, as a filename-safe word. */
+function csvPrefix() {
+  const slug = (window.__SHOW && (window.__SHOW.slug || window.__SHOW.id)) || 'blueprint';
+  return String(slug).toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+}
+const csvDate = () => new Date().toISOString().slice(0, 10);
+
 function exportSingleCSV(boothNumber) {
-  if (booths[boothNumber]) downloadCSV([booths[boothNumber]], `stand_${boothNumber}_export.csv`);
+  if (booths[boothNumber]) {
+    downloadCSV([booths[boothNumber]], `${csvPrefix()}-stand-${boothNumber}-${csvDate()}.csv`);
+  }
 }
 window.exportSingleCSV = exportSingleCSV;
 
@@ -1641,10 +1745,17 @@ document.getElementById('fp-sponsor-form')?.addEventListener('submit', e => {
     adminToast(res && res.ok ? 'Floorplan sponsor saved.' : (res && res.error) || 'Could not save.', res && res.ok ? 'ok' : 'error');
   });
 });
-document.getElementById('fp-sponsor-clear')?.addEventListener('click', () => {
-  if (!confirm('Clear the floorplan sponsor colour? Sponsored stands revert to their status colour.')) return;
-  socket.emit('sponsor:set-floorplan', { name: '', color: '' }, () => adminToast('Floorplan sponsor cleared.', 'ok'));
-});
+document.getElementById('fp-sponsor-clear')?.addEventListener('click', (e) => withPending(e.currentTarget, async () => {
+  if (!await confirmDialog(
+    `Clear the floorplan sponsor${sponsorName ? ` (${sponsorName})` : ''}?\n\nEvery sponsored stand goes back to its status colour on both the admin and the public plan.`,
+    { title: 'Clear the floorplan sponsor', confirmLabel: 'Clear it', danger: true })) return;
+  // The acknowledgement was thrown away and success announced unconditionally —
+  // a refused clear (no admin rights, a dropped socket) still said "cleared",
+  // and the colour was still there.
+  const res = await emitAck(socket, 'sponsor:set-floorplan', { name: '', color: '' });
+  if (res && res.ok) adminToast('Floorplan sponsor cleared.', 'ok');
+  else adminToast((res && res.error) || 'Could not clear the floorplan sponsor.', 'error');
+}));
 document.getElementById('fp-sponsor-add')?.addEventListener('click', () => {
   const boothNumber = document.getElementById('fp-sponsor-stand').value;
   if (!boothNumber) return adminToast('Pick a stand to mark.', 'error');
@@ -1708,16 +1819,25 @@ document.getElementById('move-from')?.addEventListener('change', updateMovePrevi
 document.getElementById('move-to')?.addEventListener('change', updateMovePreview);
 
 // ─── Move Form ────────────────────────────────────────────────────────────────
-document.getElementById('move-form')?.addEventListener('submit', e => {
+// Every form below is wrapped in withPending. None of them had any guard, and
+// the second half of a double-click was genuinely sent: Split answered "done"
+// and then "already split — reset it first", which reads as the first one
+// having failed.
+document.getElementById('move-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
-  const from = document.getElementById('move-from').value;
-  const to   = document.getElementById('move-to').value;
-  if (!from || !to) return adminToast('Pick the booked stand and the destination.', 'error');
-  if (from === to) return adminToast('Pick two different stands.', 'error');
-  const co = dealOf(booths[from]).company || 'this booking';
-  const fSqm = booths[from]?.sqm, tSqm = booths[to]?.sqm;
-  if (!confirm(`Move ${co} from Stand ${from} (${fSqm} ${UNIT}) to Stand ${to} (${tSqm} ${UNIT})? Stand ${from} will be freed.`)) return;
-  socket.emit('booth:move', { from, to }, (res) => {
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    const from = document.getElementById('move-from').value;
+    const to   = document.getElementById('move-to').value;
+    if (!from || !to) return adminToast('Pick the booked stand and the destination.', 'error');
+    if (from === to) return adminToast('Pick two different stands.', 'error');
+    const co = dealOf(booths[from]).company || 'this booking';
+    const price = dealOf(booths[from]).actualPrice;
+    const fSqm = booths[from]?.sqm, tSqm = booths[to]?.sqm;
+    if (!await confirmDialog(
+      `Move ${co}${price != null ? ` (${money(price)})` : ''} from stand ${shownN(from)} (${fSqm} ${UNIT}) ` +
+      `to stand ${shownN(to)} (${tSqm} ${UNIT})?\n\nStand ${shownN(from)} is freed and goes back on sale.`,
+      { title: `Move ${co}`, confirmLabel: 'Move it' })) return;
+    const res = await emitAck(socket, 'booth:move', { from, to });
     if (res && res.ok) {
       adminToast(`${res.company || 'Booking'} moved to Stand ${to} — now ${res.toSqm} ${UNIT}.`, 'ok');
       document.getElementById('move-from').value = '';
@@ -1728,25 +1848,40 @@ document.getElementById('move-form')?.addEventListener('submit', e => {
 });
 
 // ─── Consolidation Form ───────────────────────────────────────────────────────
-document.getElementById('consolidation-form').addEventListener('submit', e => {
+document.getElementById('consolidation-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
-  const p = document.getElementById('merge-1').value;
-  const s = document.getElementById('merge-2').value;
-  if (!p || !s || p === s) return adminToast('Select two different stands to merge.', 'error');
-  socket.emit('booth:consolidate', { primary: p, secondary: s }, (res) => {
-    adminToast(res && res.ok ? `Stand ${s} merged into ${p}.` : (res && res.error) || 'Merge failed.',
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    const p = document.getElementById('merge-1').value;
+    const sec = document.getElementById('merge-2').value;
+    if (!p || !sec || p === sec) return adminToast('Select two different stands to merge.', 'error');
+    // Reshaping the plan happened with no confirmation at all.
+    const area = (booths[p]?.sqm || 0) + (booths[sec]?.sqm || 0);
+    if (!await confirmDialog(
+      `Merge stand ${shownN(sec)} into stand ${shownN(p)}, making one stand of about ${area} ${UNIT}?\n\n` +
+      `Stand ${shownN(sec)} disappears from the plan, the bookings table and every dropdown. Tools → Reset undoes it.`,
+      { title: `Merge ${shownN(sec)} into ${shownN(p)}`, confirmLabel: 'Merge them' })) return;
+    const res = await emitAck(socket, 'booth:consolidate', { primary: p, secondary: sec });
+    adminToast(res && res.ok ? `Stand ${sec} merged into ${p}.` : (res && res.error) || 'Merge failed.',
                res && res.ok ? 'ok' : 'error');
   });
 });
 
 // ─── Split Form ───────────────────────────────────────────────────────────────
-document.getElementById('split-form').addEventListener('submit', e => {
+document.getElementById('split-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
-  const boothNumber = document.getElementById('split-stand').value;
-  const parts = parseInt(document.getElementById('split-parts').value, 10);
-  const axis = document.getElementById('split-axis').value;
-  if (!boothNumber) return adminToast('Select a stand to split.', 'error');
-  socket.emit('booth:split', { boothNumber, parts, axis }, (res) => {
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    const boothNumber = document.getElementById('split-stand').value;
+    const parts = parseInt(document.getElementById('split-parts').value, 10);
+    const axis = document.getElementById('split-axis').value;
+    if (!boothNumber) return adminToast('Select a stand to split.', 'error');
+    const b = booths[boothNumber];
+    const each = b && parts > 0 ? Math.round(b.sqm / parts) : null;
+    if (!await confirmDialog(
+      `Split stand ${shownN(boothNumber)} (${b?.sqm} ${UNIT}) into ${parts} parts` +
+      `${each ? ` of about ${each} ${UNIT} each` : ''}?\n\n` +
+      'New stand numbers are created on the plan and each part is priced from its own size. Tools → Reset undoes it.',
+      { title: `Split stand ${shownN(boothNumber)}`, confirmLabel: 'Split it' })) return;
+    const res = await emitAck(socket, 'booth:split', { boothNumber, parts, axis });
     adminToast(res && res.ok ? `Stand ${boothNumber} split into ${(res.created || []).length + 1} — added ${(res.created || []).join(', ')}.`
                              : (res && res.error) || 'Split failed.',
                res && res.ok ? 'ok' : 'error');
@@ -1784,60 +1919,86 @@ if (csplitRows) {
 
   document.getElementById('csplit-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    const boothNumber = document.getElementById('csplit-stand').value;
-    const axis = document.getElementById('csplit-axis').value;
-    if (!boothNumber) return adminToast('Select a stand to split.', 'error');
-    const parts = [];
-    csplitRows.querySelectorAll('.csplit-row').forEach(r => {
-      const number = r.querySelector('.csplit-num').value.trim();
-      const sqm = Number(r.querySelector('.csplit-size').value);
-      if (number && sqm > 0) parts.push({ number, sqm });
-    });
-    if (parts.length < 2) return adminToast('Enter at least two parts, each with a number and a size.', 'error');
-    const total = csplitTotal(), sum = parts.reduce((s, p) => s + p.sqm, 0);
-    if (Math.abs(sum - total) > 1) return adminToast(`Sizes must add up to ${total} ${UNIT} — you have ${sum}.`, 'error');
-    socket.emit('booth:split-custom', { boothNumber, axis, parts }, (res) => {
+    return withPending(e.target.querySelector('button[type=submit]'), async () => {
+      const boothNumber = document.getElementById('csplit-stand').value;
+      const axis = document.getElementById('csplit-axis').value;
+      if (!boothNumber) return adminToast('Select a stand to split.', 'error');
+      const parts = [];
+      csplitRows.querySelectorAll('.csplit-row').forEach(r => {
+        const number = r.querySelector('.csplit-num').value.trim();
+        const sqm = Number(r.querySelector('.csplit-size').value);
+        if (number && sqm > 0) parts.push({ number, sqm });
+      });
+      if (parts.length < 2) return adminToast('Enter at least two parts, each with a number and a size.', 'error');
+      const total = csplitTotal(), sum = parts.reduce((acc, p) => acc + p.sqm, 0);
+      if (Math.abs(sum - total) > 1) return adminToast(`Sizes must add up to ${total} ${UNIT} — you have ${sum}.`, 'error');
+      if (!await confirmDialog(
+        `Split stand ${shownN(boothNumber)} (${total} ${UNIT}) into:\n\n` +
+        parts.map(p => `    ${p.number} — ${p.sqm} ${UNIT}`).join('\n') +
+        '\n\nTools → Reset undoes it.',
+        { title: `Split stand ${shownN(boothNumber)} into ${parts.length}`, confirmLabel: 'Split it' })) return;
+      const res = await emitAck(socket, 'booth:split-custom', { boothNumber, axis, parts });
       if (res && res.ok) {
         adminToast(`Stand ${boothNumber} split into ${(res.created || []).length + 1}.`, 'ok');
-        csplitRows.innerHTML = ''; csplitAddRow(); csplitAddRow(); csplitUpdateTally();
+        csplitRows.replaceChildren(); csplitAddRow(); csplitAddRow(); csplitUpdateTally();
       } else adminToast((res && res.error) || 'Custom split failed.', 'error');
     });
   });
 }
 
 // ─── Reset Form (undo a merge or split) ───────────────────────────────────────
-document.getElementById('reset-form')?.addEventListener('submit', e => {
+document.getElementById('reset-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
   const boothNumber = document.getElementById('reset-stand').value;
   if (!boothNumber) return adminToast('Select a stand to reset.', 'error');
-  if (!confirm(`Reset stand ${boothNumber}? This undoes its merge or split.`)) return;
-  socket.emit('booth:reset', { boothNumber }, (res) => {
+  if (!await confirmDialog(
+    `Undo the merge or split on stand ${shownN(boothNumber)}?\n\nThe stands it was made from come back, and this stand's own number may disappear.`,
+    { title: `Reset stand ${shownN(boothNumber)}`, confirmLabel: 'Reset it' })) return;
+  const res = await emitAck(socket, 'booth:reset', { boothNumber });
+  {
     if (res && res.ok) {
       const msg = res.type === 'unmerge' ? `Stand ${boothNumber} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
                 : res.type === 'unsplit' ? `Stand ${boothNumber} un-split — removed ${(res.removed || []).join(', ')}.`
                 : `Removed leftover cell ${boothNumber}.`;
       adminToast(msg, 'ok');
     } else adminToast((res && res.error) || 'Reset failed.', 'error');
+  }
   });
 });
 
 // ─── Status Form ──────────────────────────────────────────────────────────────
-document.getElementById('status-form').addEventListener('submit', e => {
+document.getElementById('status-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
-  const boothNumber = document.getElementById('status-stand').value;
-  const status = document.getElementById('status-new').value;
-  const company = document.getElementById('status-company').value.trim();
-  if (!boothNumber) return;
-  // Forcing a booked/held stand back to Available un-books it — gate with the
-  // recovery key when the failsafe is on.
-  const cur = booths[boothNumber];
-  let key;
-  if (status === 'available' && cur && cur.status !== 'available' && recoveryRequired) {
-    key = prompt(`Enter your RECOVERY KEY to set stand ${boothNumber} back to Available.\nThis clears its booking.`);
-    if (key === null) return;
-    if (!key) return adminToast('Recovery key required.', 'error');
-  }
-  socket.emit('admin:setStatus', { boothNumber, status, company, key }, (res) => {
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    const boothNumber = document.getElementById('status-stand').value;
+    const status = document.getElementById('status-new').value;
+    const company = document.getElementById('status-company').value.trim();
+    if (!boothNumber) return;
+
+    // Forcing a booked/held stand back to Available un-books it, and the server
+    // now gates that exactly as Release is gated: the recovery key when the
+    // failsafe is on, the admin's own password when it is NOT. This only ever
+    // asked in the recovery case, so with the failsafe off (the default) it sent
+    // an empty secret and every un-booking from here was simply refused.
+    const cur = booths[boothNumber];
+    const unbooking = status === 'available' && cur && cur.status !== 'available';
+    let key;
+    if (unbooking) {
+      const co = dealOf(cur).company;
+      const price = dealOf(cur).actualPrice;
+      key = await askSecret(
+        `Setting stand ${shownN(boothNumber)} back to Available${co ? `, clearing ${co}` : ''}` +
+        `${price != null ? ` (${money(price)})` : ''}.\n\nIts company, price and notes are cleared.`,
+        { title: `Un-book stand ${shownN(boothNumber)}`,
+          label: recoveryRequired ? 'Recovery key' : 'Your admin password',
+          confirmLabel: 'Set it available' });
+      if (key === null) return;
+      if (!key) return adminToast(`A ${secretNoun()} is required to un-book a stand.`, 'error');
+    }
+    // Sent under both names: the handler accepts either, and the recovery path
+    // has always read `key`.
+    const res = await emitAck(socket, 'admin:setStatus', { boothNumber, status, company, key, password: key });
     if (res && res.ok) adminToast(`Stand ${boothNumber} set to ${status}.`, 'ok');
     else adminToast((res && res.error) || 'Status update failed.', 'error');
   });
@@ -1851,8 +2012,12 @@ document.getElementById('status-form').addEventListener('submit', e => {
 document.getElementById('reset-btn')?.remove();
 
 // ─── Clear Log ────────────────────────────────────────────────────────────────
-document.getElementById('clear-log').addEventListener('click', () => {
-  document.getElementById('admin-log').innerHTML = '<div class="log-entry system"><span class="log-time">Now</span> Log cleared.</div>';
+// Clears only what has arrived live since the page loaded. The stored history
+// is not the console's to delete, and "Clear" wiping an audit trail from the
+// screen is exactly the sort of thing that makes people distrust one.
+document.getElementById('clear-log')?.addEventListener('click', () => {
+  document.querySelectorAll('#admin-log .log-entry.is-live').forEach(n => n.remove());
+  adminToast('Live lines cleared — the stored history is still below.', 'ok');
 });
 
 // ─── Socket Events ────────────────────────────────────────────────────────────
@@ -1992,7 +2157,7 @@ socket.on('settings', (s) => {
   // The colours this event's plan is drawn in.
   if (window.BoothPalette) BoothPalette.apply(s && s.palette);
   if (s && s.unit) UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
-  if (s && s.currencySymbol) CUR = s.currencySymbol;
+  if (s && s.currencySymbol) { CUR = s.currencySymbol; window.UI.setCurrency(CUR); }
   if (s && s.currency) CURRENCY = s.currency;
   if (s && s.ratePerSqm != null) RATE = s.ratePerSqm;
   if (s && s.recoveryRequired !== undefined) recoveryRequired = !!s.recoveryRequired;
@@ -2080,8 +2245,8 @@ socket.on('viewers:count', (n) => {
   document.getElementById('conn-count').textContent = n;
 });
 
-socket.on('log:entry', ({ msg, type, time }) => {
-  addLog(msg, type, time);
+socket.on('log:entry', ({ msg, type, time, boothNumber }) => {
+  addLog(msg, type, time, boothNumber || null);
 });
 
 // ─── Update Overview KPIs ─────────────────────────────────────────────────────
@@ -2142,14 +2307,183 @@ function updateOverviewFromStats(s) {
 }
 
 // ─── Activity Log ─────────────────────────────────────────────────────────────
-function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB')) {
-  const log = document.getElementById('admin-log');
-  const entry = document.createElement('div');
-  entry.className = `log-entry ${type}`;
-  entry.innerHTML = `<span class="log-time">${time}</span> ${msg}`;
-  log.prepend(entry);
-  while (log.children.length > 100) log.removeChild(log.lastChild);
+//
+// Two halves: the stored history (GET /api/audit), loaded when the tab opens,
+// and the live socket lines that append on top of it. It used to be the live
+// half ALONE, held in the DOM and nowhere else, so refreshing the page — the
+// exact moment an operator wants to check what just happened — emptied it.
+
+// Only these tags survive from a server-composed line. The messages arrive with
+// <strong> in them for emphasis and every interpolation escaped, and this used
+// to be written straight to innerHTML — which made the whole log safe only for
+// as long as every one of those interpolations stayed escaped, forever, in a
+// file nobody reads while writing a log line. Parsing and rebuilding from an
+// allow-list moves that from a promise to a property.
+const LOG_TAGS = { strong: 'strong', b: 'strong', em: 'em', i: 'em' };
+
+function logMessageNodes(msg) {
+  const frag = document.createDocumentFragment();
+  // DOMParser neither runs scripts nor fetches anything, and nothing is copied
+  // across except text and the four tags above — no attributes at all, so an
+  // onerror= or an href= cannot survive the trip.
+  const doc = new DOMParser().parseFromString(String(msg ?? ''), 'text/html');
+  const copy = (src, dest) => {
+    src.childNodes.forEach(node => {
+      if (node.nodeType === Node.TEXT_NODE) { dest.appendChild(document.createTextNode(node.nodeValue)); return; }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const tag = LOG_TAGS[node.tagName.toLowerCase()];
+      if (!tag) { copy(node, dest); return; }      // unknown element: keep its words, drop it
+      const el = document.createElement(tag);
+      copy(node, el);
+      dest.appendChild(el);
+    });
+  };
+  copy(doc.body, frag);
+  return frag;
 }
+
+function logEntry({ msg, type = 'info', time, boothNumber = null, live = false }) {
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${type}` + (live ? ' is-live' : '');
+  const t = document.createElement('span');
+  t.className = 'log-time';
+  t.textContent = time;
+  entry.append(t, document.createTextNode(' '), logMessageNodes(msg));
+  if (boothNumber && booths[boothNumber]) {
+    // A log line names a stand; clicking it should take you to that stand.
+    entry.classList.add('log-linked');
+    entry.tabIndex = 0;
+    entry.setAttribute('role', 'button');
+    entry.title = `Open stand ${shownN(boothNumber)} on the plan`;
+    const go = () => {
+      showAdminSection('floorplan');
+      setTimeout(() => { selectAdminBooth(boothNumber); focusAdminBooth(boothNumber); }, 60);
+    };
+    entry.addEventListener('click', go);
+    entry.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+    });
+  }
+  return entry;
+}
+
+function addLog(msg, type = 'info', time = new Date().toLocaleTimeString('en-GB'), boothNumber = null) {
+  const log = document.getElementById('admin-log');
+  if (!log) return;
+  log.prepend(logEntry({ msg, type, time, boothNumber, live: true }));
+  while (log.children.length > 300) log.removeChild(log.lastChild);
+}
+
+// ── The stored history ──────────────────────────────────────────────────────
+const AUDIT_CLASS = {
+  'booth.status_change': 'admin', 'deal.update': 'admin',
+  'hold.create': 'hold', 'hold.extend': 'hold', 'hold.release': 'release', 'hold.expire': 'release',
+  'booth.restore': 'booking', 'security.denied': 'error', 'security.secret_failed': 'error',
+};
+
+/** One stored event, as a sentence. */
+function auditText(r) {
+  const m = r.meta || {};
+  const n = r.boothNumber ? `stand ${shownN(r.boothNumber)}` : '';
+  const co = m.company ? ` (${m.company})` : '';
+  switch (r.type) {
+    case 'booth.status_change': return `${cap(n)} ${m.from || '?'} → ${m.to || '?'}${co}${m.forced ? ' (forced)' : ''}`;
+    case 'deal.update':         return `Deal updated on ${n}${m.toPrice != null ? ` — ${money(m.toPrice)}` : ''}${m.notesChanged ? ', notes changed' : ''}`;
+    case 'hold.create':         return `${cap(n)} put on hold${co}${m.expiresAt ? ` until ${new Date(m.expiresAt).toLocaleString('en-GB')}` : ''}`;
+    case 'hold.extend':         return `Hold on ${n} extended${m.expiresAt ? ` to ${new Date(m.expiresAt).toLocaleString('en-GB')}` : ''}`;
+    case 'hold.release':        return `${cap(n)} released`;
+    case 'hold.expire':         return `Hold on ${n} expired — back on sale`;
+    case 'booth.restore':       return `${cap(n)} restored${co}`;
+    case 'booth.consolidate':   return `${cap(n)} absorbed ${(m.many || [m.secondary]).filter(Boolean).join(', ') || 'another stand'}`;
+    case 'booth.split':         return `${cap(n)} split into ${(m.created || []).length + 1}`;
+    case 'booth.reset':
+    case 'unmerge':
+    case 'unsplit':             return `${cap(n)} reset — ${r.type === 'unmerge' ? 'un-merged' : r.type === 'unsplit' ? 'un-split' : 'restored'}`;
+    case 'booth.move':          return `Booking moved ${m.from ? `from ${m.from} ` : ''}to ${n || m.to || '?'}`;
+    case 'booth.set_number':    return `${cap(n)} shown as ${m.displayNumber || 'its own number'}`;
+    case 'booth.set_tags':      return `Activities set on ${n}`;
+    case 'booth.set_country':   return `Country set on ${n}`;
+    case 'booth.set_logo':      return `Sponsor logo ${m.logo === '' ? 'removed from' : 'set on'} ${n}`;
+    case 'floorplan.upload':    return `Floorplan uploaded${m.bytes ? ` (${Math.round(m.bytes / 1024)} KB)` : ''}`;
+    case 'floorplan.revert':    return 'Floorplan reverted to the shipped plan';
+    case 'stands.import':       return `Stands imported from the artwork${m.imported ? ` — ${m.imported}` : ''}`;
+    case 'sponsor.create':      return `Sponsorship package added${m.name ? `: ${m.name}` : ''}`;
+    case 'sponsor.delete':      return `Sponsorship package deleted${m.name ? `: ${m.name}` : ''}`;
+    case 'sponsor.import':      return 'Sponsorship catalogue imported';
+    case 'enquiry.forward':     return `Enquiry forwarded${m.to ? ` to ${m.to}` : ''}`;
+    case 'lead.admin':          return `Lead ${m.action || 'changed'}`;
+    case 'admin.team':          return `Team: ${m.action || 'changed'}${m.target ? ` ${m.target}` : ''}`;
+    case 'security.denied':     return `Refused: ${m.event || 'an admin action'} from an unauthenticated connection`;
+    case 'security.secret_failed': return `Wrong ${m.what ? 'confirmation' : 'password'}${m.failures ? ` (attempt ${m.failures})` : ''}${m.what ? ` — ${m.what}` : ''}`;
+    default: return `${r.type}${n ? ` — ${n}` : ''}`;
+  }
+}
+
+let auditRows = [];
+
+async function loadAuditLog() {
+  const log = document.getElementById('admin-log');
+  if (!log) return;
+  const params = new URLSearchParams({ limit: '200' });
+  const q = document.getElementById('log-q')?.value.trim();
+  const type = document.getElementById('log-type')?.value;
+  const actor = document.getElementById('log-actor')?.value;
+  if (q) params.set('q', q);
+  if (type) params.set('type', type);
+  if (actor) params.set('actor', actor);
+
+  log.replaceChildren(logEntry({ msg: 'Loading history…', type: 'system', time: 'Now' }));
+  try {
+    auditRows = await api(`/api/audit?${params}`) || [];
+  } catch (e) {
+    log.replaceChildren(logEntry({ msg: `Could not load the history — ${esc(e.message)}`, type: 'error', time: 'Now' }));
+    return;
+  }
+  renderAuditLog();
+  loadAuditActors();
+}
+
+function renderAuditLog() {
+  const log = document.getElementById('admin-log');
+  const count = document.getElementById('log-count');
+  if (!log) return;
+  if (count) count.textContent = auditRows.length ? `${auditRows.length} entries` : '';
+
+  if (!auditRows.length) {
+    log.replaceChildren(logEntry({ msg: 'Nothing recorded for those filters.', type: 'system', time: 'Now' }));
+    return;
+  }
+  log.replaceChildren(...auditRows.map(r => logEntry({
+    msg: esc(auditText(r)) + (r.actor?.userId ? ` <em>— ${esc(r.actor.userId)}</em>` : ''),
+    type: AUDIT_CLASS[r.type] || 'info',
+    time: new Date(r.ts).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
+    boothNumber: r.boothNumber || null,
+  })));
+}
+
+let auditActorsLoaded = false;
+async function loadAuditActors() {
+  if (auditActorsLoaded) return;
+  const sel = document.getElementById('log-actor');
+  if (!sel) return;
+  try {
+    const names = await api('/api/audit/actors') || [];
+    auditActorsLoaded = true;
+    const cur = sel.value;
+    sel.replaceChildren(Object.assign(document.createElement('option'), { value: '', textContent: 'Anyone' }),
+      ...names.map(nm => Object.assign(document.createElement('option'), { value: nm, textContent: nm })));
+    sel.value = cur;
+  } catch { /* the filter simply stays at "Anyone" */ }
+}
+
+let auditDebounce = null;
+document.getElementById('log-q')?.addEventListener('input', () => {
+  clearTimeout(auditDebounce);
+  auditDebounce = setTimeout(loadAuditLog, 300);
+});
+document.getElementById('log-type')?.addEventListener('change', loadAuditLog);
+document.getElementById('log-actor')?.addEventListener('change', loadAuditLog);
+document.getElementById('log-refresh')?.addEventListener('click', (e) => withPending(e.currentTarget, loadAuditLog));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 // esc / cap / money live in lib/ui.js now (destructured at the top of this
@@ -3766,15 +4100,30 @@ async function previewStands(row) {
   go.className = 'admin-btn primary';
   if (p.committed > 0) {
     // Never offer a button that is going to be refused. Europe has stands sold
-    // and on hold, and an import replaces every stand on the event.
+    // and on hold, and re-reading the plan would move stands already spoken for.
     go.disabled = true;
     go.textContent = `Cannot import — ${p.committed} sold or on hold`;
-    go.title = 'Importing replaces every stand, so it is refused on an event that has started selling.';
+    go.title = 'Re-reading the plan is refused on an event that has started selling.';
   } else {
+    // The ordinary import keeps everything it can: it re-reads geometry, size
+    // and price, and leaves shown numbers, logos, tags and countries alone.
     go.textContent = `Import ${p.stands} stands`;
-    go.onclick = () => importStands(row, p, box);
+    go.title = 'Re-reads each stand\u2019s shape, size and list price from the plan. Anything set by hand is kept.';
+    go.onclick = () => importStands(row, p, box, { replace: false });
   }
-  head.append(go, close);
+
+  // Kept well apart from the button above, and named for what it destroys.
+  // Making "import" mean "throw the inventory away" was the original problem;
+  // this is the same power, asked for explicitly.
+  const wipe = document.createElement('button');
+  wipe.type = 'button';
+  wipe.className = 'admin-btn danger stand-report-wipe';
+  wipe.textContent = 'Replace everything';
+  wipe.title = 'Throws away this event\u2019s stands and rebuilds them from the plan. Bookings and anything set by hand are lost.';
+  wipe.disabled = p.committed > 0;
+  wipe.onclick = () => importStands(row, p, box, { replace: true });
+
+  head.append(go, wipe, close);
 
   box.append(head, note, pre);
   document.getElementById('section-settings')?.prepend(box);
@@ -3782,34 +4131,79 @@ async function previewStands(row) {
 }
 
 /** Import the stands, once the password is given. */
-async function importStands(row, preview, box) {
+async function importStands(row, preview, box, { replace = false } = {}) {
+  const where = row.name || row.showId;
+
+  if (replace && !await confirmDialog(
+    `Throw away ${where}'s ${preview.existing || 0} stands and rebuild them from the plan?\n\n` +
+    'Every booking, deal price, note, shown number, sponsor logo, tag and country on this event is destroyed. ' +
+    'A recovery snapshot is taken first, but restoring it is a manual job.\n\n' +
+    'The ordinary Import keeps all of that and only re-reads each stand\u2019s shape, size and price.',
+    { title: `Replace every stand on ${where}`, confirmLabel: 'Replace everything', danger: true })) return;
+
   // Was a window.prompt(), which shows the admin password in clear text and
   // leaves it in the browser's dialog history.
   const pw = await askSecret(
-    `Import ${preview.stands} stands into ${row.name || row.showId}?\n\n` +
-    (preview.existing ? `This replaces the ${preview.existing} stands already there (a snapshot is kept).\n\n` : '') +
-    'Enter your admin password to confirm.',
-    { title: `Import stands into ${row.name || row.showId}`, confirmLabel: 'Import them' });
+    replace
+      ? `Replacing every stand on ${where} from its artwork.`
+      : `Reading ${preview.stands} stands into ${where}.\n\n` +
+        'Each stand\u2019s shape, size and list price are re-read from the plan. Shown numbers, sponsor logos, tags and countries are kept.',
+    { title: replace ? `Replace every stand on ${where}` : `Import stands into ${where}`,
+      confirmLabel: replace ? 'Replace them' : 'Import them' });
   if (!pw) return;
 
-  adminToast('Importing…');
+  adminToast(replace ? 'Replacing…' : 'Importing…');
   let r;
   try {
-    r = await api('/api/stands/import', {
+    r = await api(`/api/stands/import${replace ? '?replace=1' : ''}`, {
       method: 'POST',
       headers: { 'X-Show': row.slug, 'X-Confirm-Password': pw },
     });
   } catch (e) {
-    return adminToast(e.message || 'The import could not be completed.', 'error');
+    // A refusal now explains itself, and the explanation is a paragraph with a
+    // next step in it — too long and too important to flash past in a toast.
+    showImportRefusal(where, e.message);
+    return adminToast('The import was refused — see the note on the page.', 'error');
   }
 
   adminToast(
-    `${row.name || row.showId}: ${r.imported} stands imported — ` +
+    `${where}: ${r.imported} stands ${r.mode === 'replace' ? 'replaced' : 'updated from the plan'} — ` +
     `${r.available} available, ${r.sold} sold, ${r.held || 0} on hold` +
-    (r.sponsored ? `, ${r.sponsored} sponsorable areas` : '') +
+    (r.areasImported ? `, ${r.areasImported} sponsorable areas read from this plan` : '') +
     (r.namesRemoved ? `, ${r.namesRemoved} printed names taken out of the artwork.` : '.'), 'ok');
   box?.remove();
   loadPlans();
+}
+
+/**
+ * Why an import was refused, left on the page to be read and acted on.
+ *
+ * All three refusals used to arrive as the same "The stands could not be
+ * imported", which told an organiser nothing. Each one now names what is in the
+ * way — bookings, hand-work, or artwork the reader cannot interpret — and what
+ * to do about it, which is a paragraph, not a toast.
+ */
+function showImportRefusal(where, message) {
+  document.getElementById('import-refusal')?.remove();
+  const boxEl = document.createElement('div');
+  boxEl.id = 'import-refusal';
+  boxEl.className = 'spec-report import-refusal';
+
+  const head = document.createElement('div');
+  head.className = 'spec-report-head';
+  head.append(Object.assign(document.createElement('strong'), { textContent: `${where} — import refused` }));
+  const close = document.createElement('button');
+  close.type = 'button'; close.className = 'admin-btn'; close.textContent = 'Close';
+  close.onclick = () => boxEl.remove();
+  head.appendChild(close);
+
+  const p = document.createElement('p');
+  p.className = 'spec-report-note';
+  p.textContent = message;
+
+  boxEl.append(head, p);
+  document.getElementById('section-settings')?.prepend(boxEl);
+  boxEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /** Upload or replace ONE event's plan, named explicitly rather than implied. */

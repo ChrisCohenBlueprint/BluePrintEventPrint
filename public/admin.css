@@ -406,21 +406,6 @@ body {
   cursor: pointer;
 }
 
-/* Floorplan artwork card. */
-.artwork-meta { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
-.artwork-warn {
-  margin-bottom: 10px; padding: 10px 12px; border-radius: 8px;
-  background: rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.35);
-  color: var(--orange); font-size: 12px; line-height: 1.5;
-}
-.artwork-warn[hidden] { display: none; }
-/* A <button> sizes to its content; this one is a drop target for the whole
-   card, so it needs the width stated. */
-#artwork-drop { width: 100%; min-height: 96px; }
-.artwork-actions { display: flex; gap: 8px; margin-top: 10px; }
-.artwork-actions .admin-btn { flex: 1; justify-content: center; text-decoration: none; font-size: 12px; }
-.artwork-actions .admin-btn[hidden] { display: none; }
-
 .show-links { display: flex; gap: 6px; }
 .show-link {
   flex: 1; justify-content: center; text-align: center;
@@ -544,7 +529,6 @@ body {
 
 /* SVG booth styles (same as floorplan) */
 .booth-interactive { cursor: pointer; transition: fill 0.2s, filter 0.2s; }
-.booth-taken-orig  { cursor: default; opacity: 0.85; }
 /* Status FILLS come from booth-colours.css — the same file the public plan and
    the printed proposal load, so an admin is never looking at different colours
    from the client. Only the admin's own behaviour is added here. */
@@ -817,10 +801,9 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
   padding: 22px; margin-bottom: 24px; }
 .partners-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
 .partners-card p { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-bottom: 16px; max-width: 70ch; }
-.partner-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .partner-form .admin-input { padding: 8px 11px; font-size: 12.5px; background: var(--bg); flex: 1; min-width: 150px; }
 /* Pricing & unit settings (Bookings) */
-.settings-card { display: flex; flex-wrap: wrap; gap: 28px; background: var(--card); border: 1px solid var(--border);
+.settings-card { display: flex; flex-wrap: wrap; gap: 28px; background: var(--panel); border: 1px solid var(--border);
   border-radius: 12px; padding: 18px 20px; margin-bottom: 18px; }
 .settings-block { flex: 1; min-width: 260px; }
 .settings-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 8px; }
@@ -862,26 +845,17 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .nav-partners.hidden { display: none; }
 .nav-partners-label { display: block; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase;
   color: var(--muted); margin-bottom: 8px; padding: 0 2px; }
-.nav-partners-logos { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* Sponsorship logo boxes in the sidebar — one per row, each a fixed 16:9 frame
+   so any logo sits consistently. */
+.nav-partners-logos { display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .nav-partners-logos a, .nav-partners-logos span {
   display: flex; align-items: center; justify-content: center;
+  width: 100%; aspect-ratio: 16 / 9; padding: 6px;
   background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 6px;
-  padding: 5px 7px; opacity: .8; transition: opacity .15s, border-color .15s;
+  opacity: .8; transition: opacity .15s, border-color .15s;
 }
 .nav-partners-logos a:hover { opacity: 1; border-color: rgba(255,255,255,.2); }
-/* A definite height, not just max-height: an SVG data URI carries no intrinsic
-   size, so max-* alone collapses it to nothing. */
-.nav-partners-logos img { height: 20px; width: auto; max-width: 76px; object-fit: contain; display: block; }
-
-/* Sponsorship logo box in the sidebar — fixed 16:9 so any logo sits in a
-   consistent frame. */
-.nav-partners-logos { flex-direction: column; }
-.nav-partners-logos a, .nav-partners-logos span {
-  width: 100%; aspect-ratio: 16 / 9; padding: 6px;
-}
-.nav-partners-logos img { height: auto; width: 100%; max-width: 100%; max-height: 100%; object-fit: contain; }
-.partner-file, .partner-file-row { font-size: 11.5px; color: var(--muted); padding: 6px; }
-.partner-file-row { width: 190px; }
+.nav-partners-logos img { height: auto; width: 100%; max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
 
 /* ─── Sponsorship logo drop zone ──────────────────────────────────────────── */
 /* Kept in the DOM (not display:none) so click-to-browse and form semantics
@@ -892,12 +866,16 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-.partner-form { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
-.partner-fields { display: flex; flex-direction: column; gap: 8px; min-width: 260px; }
+/* One declaration each. The drop zone fills the card rather than sitting as a
+   small square beside it — the logo is the point of this panel, so it gets the
+   room. */
+.partner-form { display: flex; gap: 14px; align-items: stretch; flex-wrap: nowrap; margin-bottom: 18px; }
+.partner-fields { display: flex; flex-direction: column; justify-content: center;
+  gap: 8px; width: 300px; flex-shrink: 0; }
 
 .dropzone {
   position: relative; flex-shrink: 0;
-  width: 232px; aspect-ratio: 16 / 9;      /* the shape the logo should be */
+  width: auto; flex: 1; min-width: 240px; min-height: 190px;
   display: flex; align-items: center; justify-content: center;
   border: 1.5px dashed rgba(255,255,255,.16); border-radius: var(--radius);
   background: rgba(255,255,255,.02);
@@ -914,7 +892,9 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .dropzone-prompt svg { width: 22px; height: 22px; color: var(--accent); }
 .dropzone-prompt strong { font-size: 12.5px; font-weight: 600; }
 .dropzone-prompt span { font-size: 10.5px; color: var(--muted); line-height: 1.4; }
-.dropzone-preview { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; }
+/* The preview keeps the 16:9 shape the logo is meant to be. */
+.dropzone-preview { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none;
+  aspect-ratio: 16 / 9; width: auto; }
 .dropzone-preview.hidden, .dropzone-prompt.hidden { display: none; }
 
 /* Each row's thumbnail is itself a drop target for replacing that logo. */
@@ -939,14 +919,6 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
    without hunting for the tickbox. */
 .sponsor-soldout td { opacity: .6; }
 .sponsor-soldout input[type="checkbox"]:disabled { cursor: not-allowed; }
-
-/* The drop zone fills the card rather than sitting as a small square beside it
-   — the logo is the point of this panel, so it gets the room. */
-.partner-form { flex-wrap: nowrap; align-items: stretch; }
-.dropzone { width: auto; flex: 1; min-width: 240px; aspect-ratio: auto; min-height: 190px; }
-.partner-fields { justify-content: center; width: 300px; flex-shrink: 0; }
-/* The preview still shows in the 16:9 shape the logo is meant to be. */
-.dropzone-preview { aspect-ratio: 16 / 9; width: auto; max-height: 100%; }
 
 @media (max-width: 900px) {
   .partner-form { flex-wrap: wrap; }
@@ -1122,3 +1094,69 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .sponsor-add-hint { font-size: 11.5px; color: var(--muted); }
 
 .sponsors-admin-table .sp-del { padding: 5px 10px; font-size: 11.5px; }
+
+
+/* ─── Hold countdowns ───────────────────────────────────────────────────────
+   A held stand is on a clock the console never showed, so a hold lapsing read
+   as the stand mysteriously going back on sale. */
+.hold-clock { display: block; margin-top: 3px; font-size: 10.5px; color: var(--muted); letter-spacing: .01em; }
+.hold-clock.hidden { display: none; }
+.hold-clock.urgent { color: var(--orange); font-weight: 600; }
+
+.aba-hold {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 12px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(249,115,22,.10); border: 1px solid rgba(249,115,22,.3);
+}
+.aba-hold.hidden { display: none; }
+.aba-hold-left { font-size: 11.5px; color: var(--text); line-height: 1.4; }
+.aba-hold-left.urgent { color: var(--orange); font-weight: 600; }
+.aba-hold-extend { font-size: 11px; padding: 5px 10px; flex-shrink: 0; }
+.tt-hold { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+.tt-hold.urgent { color: var(--orange); }
+
+/* ─── Closing a panel ───────────────────────────────────────────────────────
+   There was no close control at all; the panel could only be replaced. */
+.aba-close {
+  margin-left: auto; background: none; border: none; color: var(--muted);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 2px;
+  font-family: inherit; border-radius: 4px;
+}
+.aba-close:hover, .aba-close:focus-visible { color: var(--text); outline: none; background: rgba(255,255,255,.07); }
+
+/* A deal field the server will refuse is shown as refused, rather than offered
+   and then rejected. */
+.bookings-table input.admin-input:disabled { opacity: .35; cursor: not-allowed; }
+.bookings-table input.save-failed { border-color: var(--red); animation: dealReject .35s ease-in-out 2; }
+@keyframes dealReject { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-3px); } }
+@media (prefers-reduced-motion: reduce) { .bookings-table input.save-failed { animation: none; } }
+
+/* ─── Activity log: filters and history ─────────────────────────────────── */
+.log-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.log-filters .admin-input { flex: 1; min-width: 200px; padding: 7px 11px; font-size: 12.5px; background: var(--bg); }
+.log-filters .admin-select { padding: 7px 10px; font-size: 12.5px; }
+.log-count { font-size: 11.5px; color: var(--muted); margin-left: auto; }
+.log-entry.log-linked { cursor: pointer; border-radius: 4px; }
+.log-entry.log-linked:hover, .log-entry.log-linked:focus-visible {
+  background: rgba(255,255,255,.05); outline: none;
+}
+/* Lines that arrived live, so "Clear" can take them away without touching the
+   stored history underneath. */
+.log-entry.is-live { border-left: 2px solid var(--accent); padding-left: 6px; }
+.log-entry.error { color: var(--red); }
+
+/* Keyboard focus was invisible on the nav, which made tabbing through it
+   pointless even once the tab stops existed. */
+.nav-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
+.zoom-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The live-viewer badge, once the socket has confirmed our first state. */
+.conn-badge.is-live .conn-dot { box-shadow: 0 0 8px var(--green); }
+
+/* The destructive half of the stand import, kept visibly apart from the
+   ordinary one — "import" used to mean "throw the inventory away", and the two
+   must never read as the same button. */
+.stand-report-wipe { margin-left: 18px; }
+.stand-report-wipe:disabled { opacity: .35; cursor: not-allowed; }
+.import-refusal { border-color: rgba(248,113,113,.35); }
+.import-refusal .spec-report-note { color: var(--text); max-width: 80ch; }

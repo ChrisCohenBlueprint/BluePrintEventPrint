@@ -70,7 +70,7 @@
       m: `${b.small}–${b.large} ${AREA_UNIT}`,
       l: `Over ${b.large} ${AREA_UNIT}`,
     };
-    $('#size-filters .chip').forEach(chip => {
+    $$('#size-filters .chip').forEach(chip => {
       const t = text[chip.dataset.size];
       if (t) chip.textContent = t;
     });
@@ -84,18 +84,18 @@
   };
 
   function showSection(name) {
-    $('.nav-link').forEach(l => {
+    $$('.nav-link').forEach(l => {
       const on = l.dataset.section === name;
       l.classList.toggle('active', on);
       l.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    $('.admin-section').forEach(s => s.classList.toggle('active', s.id === `section-${name}`));
+    $$('.admin-section').forEach(s => s.classList.toggle('active', s.id === `section-${name}`));
     $('section-title').textContent = TITLES[name] || name;
   }
 
   // Click AND Enter/Space: these are tabs, not text. With a click handler alone
   // the whole dashboard was unreachable without a mouse.
-  $('.nav-link').forEach(link => {
+  $$('.nav-link').forEach(link => {
     link.addEventListener('click', () => showSection(link.dataset.section));
     link.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showSection(link.dataset.section); }

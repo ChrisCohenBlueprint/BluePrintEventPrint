@@ -214,17 +214,66 @@ router.post('/stands/import', async (req, res, next) => {
     // sellable stands, so they are left in the artwork rather than becoming
     // inventory with a status and a price.
     const sellable = r.stands.filter(s => !s.sponsored);
+    // Upsert by default: geometry, area and price are re-read from the plan and
+    // everything else the stand carries is kept. The old throw-it-all-away
+    // behaviour is still reachable, but it now has to be ASKED for — "import"
+    // meaning "destroy the inventory" is not a default anyone would choose.
+    const replace = req.query.replace === '1';
     const out = await booths.importFromArtwork(sellable, {
       actor: req.admin?.user || null,
       force: req.query.force === '1',
+      replace,
     });
     if (!out.ok) {
+      // Each refusal says what is in the way and what to do about it. All three
+      // used to collapse into "The stands could not be imported", which tells
+      // an organiser nothing they can act on — and two of them are situations
+      // where the right next step is quite different from the others.
       if (out.reason === 'has_bookings') {
         return res.status(409).json({
-          error: `This event already has ${out.committed} stands sold or on hold. Importing replaces every stand, so it is refused here — bookings would be lost.`,
+          reason: out.reason,
+          error: `This event has ${out.committed} stands sold or on hold. Re-reading the plan would move stands that are already spoken for, so it is refused — release those stands first, or take a copy of the plan onto a new event.`,
         });
       }
-      return res.status(400).json({ error: 'The stands could not be imported.' });
+      if (out.reason === 'has_customisations') {
+        return res.status(409).json({
+          reason: out.reason,
+          error: `${out.customised} stands here carry work the artwork cannot recreate — shown numbers, sponsor logos, activity tags, countries, or a merge or split. An import would read straight over it, so it is refused. Undo those changes (Tools → Reset) or use Replace everything if you genuinely want the plan to win.`,
+        });
+      }
+      if (out.reason === 'fills_unreadable') {
+        return res.status(400).json({
+          reason: out.reason,
+          error: `${out.unreadable} of ${out.of} stands are drawn in a fill this reader cannot interpret, so what the plan says is sold cannot be trusted — importing would guess at the state of the whole hall. Ask for the artwork with flat fills on the stand shapes (specification BEC-FP-01), then read it again.`,
+        });
+      }
+      if (out.reason === 'snapshot_failed') {
+        return res.status(500).json({
+          reason: out.reason,
+          error: 'A recovery snapshot of the current stands could not be stored, so nothing was imported — the import is not run without one.',
+        });
+      }
+      return res.status(400).json({ reason: out.reason || 'unknown', error: 'The stands could not be imported.' });
+    }
+
+    /**
+     * The plan's own sponsorable areas.
+     *
+     * The extractor has always found these — lounges, theatres, conference
+     * tracks — and every caller then dropped them on the floor, which is why
+     * every event was drawing EUROPE's lounge and theatre geometry over its own
+     * hall. This is the last place that discarded them. Best-effort: the stands
+     * are already in, and a failure here means the areas are stale, not wrong.
+     */
+    let areasImported = 0;
+    try {
+      const fromPlan = r.stands.filter(st => st.sponsored);
+      const ar = await planAreas.replaceFromArtwork(fromPlan, { actor: req.admin?.user || null });
+      areasImported = (ar && (ar.imported ?? ar.count)) ?? fromPlan.length;
+      try { await sockets.notifyAreas(); }
+      catch (e) { console.error('Stand import: areas not broadcast —', e.message); }
+    } catch (e) {
+      console.error('Stand import: sponsorable areas not stored —', e.message);
     }
 
     // The unit follows the plan: it printed ft² or m², and that is the truth
@@ -263,9 +312,13 @@ router.post('/stands/import', async (req, res, next) => {
     try { await sockets.notifyStands(); }
     catch (e) { console.error('Stand import: viewers not refreshed —', e.message); }
 
+    // Which mode ran is part of the record: "imported 96 stands" means two very
+    // different things depending on whether the previous inventory survived.
     track({ type: 'stands.import', boothNumber: null, actor: req.admin?.user || 'unknown',
-            meta: { imported: out.imported, sold: out.sold, replaced: out.replaced } });
-    res.json({ ok: true, ...out, namesRemoved, unit: r.unit,
+            meta: { imported: out.imported, sold: out.sold, replaced: out.replaced,
+                    mode: out.mode || (replace ? 'replace' : 'upsert'),
+                    forced: req.query.force === '1', areasImported } });
+    res.json({ ok: true, ...out, namesRemoved, unit: r.unit, areasImported,
                areasSkipped: r.stands.length - sellable.length, warnings: r.warnings });
   } catch (e) { next(e); }
 });

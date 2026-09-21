@@ -80,7 +80,12 @@ const PLANS = [
 
   // The part that matters: uploading from this page must target the card's
   // event, not whichever event the page is scoped to.
-  page.on('dialog', d => d.accept('my-password'));
+  //
+  // The password is typed into an in-page <dialog>, not window.prompt. Chrome's
+  // native prompt renders the value in clear text and keeps it in dialog
+  // history, which is no way to collect a password — so the console asks for it
+  // with a real password field instead. A page.on('dialog') handler no longer
+  // fires for it, because there is no native dialog to fire for.
   await page.evaluate(() => {
     const btns = [...document.querySelectorAll('.plan-card')][2]
       .querySelectorAll('.plan-actions .admin-btn');
@@ -100,7 +105,11 @@ const PLANS = [
     };
     btns[0].click();
   });
-  await page.waitForTimeout(1500);
+  // Wait for the dialog, fill it, confirm — then give the upload time to post.
+  await page.waitForSelector('dialog.bp-dialog input[type=password]', { timeout: 5000 });
+  await page.fill('dialog.bp-dialog input[type=password]', 'my-password');
+  await page.click('dialog.bp-dialog .bp-dialog-btn.primary');
+  await page.waitForTimeout(1200);
   const posted = uploads.find(u => u.method === 'POST');
   check('uploading from a card targets THAT event', posted && posted.show === 'lme',
         JSON.stringify(posted));
