@@ -271,6 +271,17 @@ body {
 .admin-booth-action.hidden { display: none; }
 .aba-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .aba-header span:first-child { font-family: 'Raleway', sans-serif; font-size: 16px; font-weight: 700; }
+/* The stand number, editable in place. The button looks like the plain title it
+   replaced; the pencil beside it says the title can be changed. */
+.aba-id-wrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.aba-id-btn { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: text; text-align: left; border-radius: 4px; }
+.aba-id-btn:hover, .aba-id-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(56,189,248,0.45); }
+.aba-id-btn small { font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 6px; }
+.aba-id-pencil { background: none; border: 0; padding: 2px; cursor: pointer; color: var(--muted); display: inline-flex; border-radius: 4px; }
+.aba-id-pencil:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+.aba-id-pencil svg { width: 14px; height: 14px; }
+.aba-id-input { font-family: 'Raleway', sans-serif; font-size: 15px; font-weight: 700; width: 9em; padding: 3px 8px; }
+.aba-id-input[hidden], .aba-id-btn[hidden], .aba-id-pencil[hidden] { display: none; }
 .aba-badge { padding: 3px 10px; border-radius: 20px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .aba-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
 .aba-stats > div { display: flex; flex-direction: column; gap: 2px; }
