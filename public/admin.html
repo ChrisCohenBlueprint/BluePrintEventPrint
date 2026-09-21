@@ -235,7 +235,13 @@
       <!-- Admin booth action panel -->
       <div class="admin-booth-action hidden" id="admin-booth-action">
         <div class="aba-header">
-          <span id="aba-id">Stand —</span>
+          <!-- The number is editable in place: click it (or the pencil), type,
+               Enter saves. Clearing it puts the stand's own number back. -->
+          <span class="aba-id-wrap">
+            <button type="button" class="aba-id-btn" id="aba-id" title="Click to change the number shown for this stand">Stand —</button>
+            <input type="text" id="aba-id-input" class="admin-input aba-id-input" maxlength="20" spellcheck="false" hidden aria-label="Number shown for this stand">
+            <button type="button" class="aba-id-pencil" id="aba-id-edit" title="Change the number shown for this stand"><i data-lucide="pencil"></i></button>
+          </span>
           <span class="aba-badge" id="aba-status">Available</span>
         </div>
         <div class="aba-stats">

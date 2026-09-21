@@ -47,6 +47,21 @@
     return { x: minx, y: miny, w: Math.max.apply(null, xs) - minx, h: Math.max.apply(null, ys) - miny };
   }
 
+  /** A rectangle put through an element's own transform: the box it is drawn in. */
+  function mapThrough(el, g) {
+    var list = el.transform && el.transform.baseVal;
+    var m = (list && list.numberOfItems) ? list.consolidate() : null;
+    if (!m) return g;
+    m = m.matrix;
+    var xs = [], ys = [], X = [g.x, g.x + g.w], Y = [g.y, g.y + g.h];
+    for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) {
+      xs.push(m.a * X[i] + m.c * Y[j] + m.e);
+      ys.push(m.b * X[i] + m.d * Y[j] + m.f);
+    }
+    var minx = Math.min.apply(null, xs), miny = Math.min.apply(null, ys);
+    return { x: minx, y: miny, w: Math.max.apply(null, xs) - minx, h: Math.max.apply(null, ys) - miny };
+  }
+
   function rectGeom(el) {
     var x = parseFloat(el.getAttribute('x'));
     var y = parseFloat(el.getAttribute('y'));
@@ -272,6 +287,36 @@
       cur.w = x2 - cur.x; cur.h = y2 - cur.y;
     });
 
+    // Split cells carved before the server learned about rotated stands.
+    //
+    // Illustrator writes a rotated stand as a rectangle plus a transform, and
+    // a stand's stored geometry is that rectangle as written. Splits used to
+    // carve the written box, so their cells are fractions of it — and a cell
+    // is drawn here as a plain rectangle with no transform, so on a rotated
+    // stand it landed where the written box is, not where the stand is: a
+    // white mask sticking out above and beside the artwork (339-2). The
+    // server now carves the footprint, but the cells already stored are as
+    // they were. Such a group is recognised by its cells tiling exactly the
+    // WRITTEN box of an artwork rectangle whose drawn box differs, and each
+    // cell is put through that rectangle's own transform, which is precisely
+    // what the artwork does to the rectangle. Nothing is written back: the
+    // stored cells stay as they are and a reset still restores the stand.
+    var drawnGeom = {};
+    Object.keys(groupBoxByPrimary).forEach(function (key) {
+      var gb = groupBoxByPrimary[key], hostEl = null;
+      for (var ai = 0; ai < artwork.length; ai++) {
+        if (geoms[ai] && sameGeom(geoms[ai], gb, 2)) { hostEl = artwork[ai]; break; }
+      }
+      if (!hostEl) return;
+      var drawn = visualBox(hostEl);
+      if (!drawn || sameGeom(drawn, gb, 1)) return;      // not rotated: as written is as drawn
+      booths.forEach(function (b) {
+        if (!b.geometry) return;
+        if (b.splitFrom === key || b.boothNumber === key) drawnGeom[b.boothNumber] = mapThrough(hostEl, b.geometry);
+      });
+      groupBoxByPrimary[key] = { x: drawn.x, y: drawn.y, w: drawn.w, h: drawn.h };
+    });
+
     // Every split cell's outline and lettering, lifted above ALL the masks once
     // the loop is done. Each was inserted just after its own cell's mask, so a
     // neighbouring cell's mask, appended later, painted over it: the first
@@ -279,7 +324,7 @@
     // cell, and the shared edge lost one of its two strokes.
     var splitDecor = [];
     booths.forEach(function (b) {
-      var g = b.geometry;
+      var g = drawnGeom[b.boothNumber] || b.geometry;
       // Reject missing or non-positive geometry: a zero/negative rect renders
       // nothing and takes no clicks, yet would otherwise count as "placed" and
       // hide a real problem behind the all-clear.

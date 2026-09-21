@@ -667,6 +667,76 @@ function relabelSplitSizes() {
   });
 }
 
+/* ---- The stand number, edited in the panel itself -------------------------- */
+//
+// Changing what a stand is called meant Tools → Shown Number: pick the stand
+// from a list of every stand, type, save. The panel already has the stand in
+// front of the admin, so its title is now the place to do it: click the
+// number or the pencil, type, Enter. Escape or clicking away abandons the
+// edit; saving an empty box puts the stand's own number back. The identity
+// (boothNumber) never changes — this is the shown number, as in Tools.
+function renderPanelNumber(b) {
+  const btn = document.getElementById('aba-id');
+  if (!btn) return;
+  btn.replaceChildren();
+  btn.append(`Stand ${shownB(b)}`);
+  if (b.displayNumber && b.displayNumber !== b.boothNumber) {
+    const small = document.createElement('small');
+    small.textContent = `(${b.boothNumber})`;
+    btn.append(small);
+  }
+  panelNumberEdit(false);
+}
+
+function panelNumberEdit(on) {
+  const btn = document.getElementById('aba-id'), input = document.getElementById('aba-id-input'), pencil = document.getElementById('aba-id-edit');
+  if (!btn || !input) return;
+  btn.hidden = on; input.hidden = !on; if (pencil) pencil.hidden = on;
+  if (on) {
+    const b = booths[selectedAdminId];
+    input.value = (b && (b.displayNumber || b.boothNumber)) || '';
+    input.dataset.for = selectedAdminId || '';
+    input.focus(); input.select();
+  }
+}
+
+function savePanelNumber() {
+  const input = document.getElementById('aba-id-input');
+  const boothNumber = input.dataset.for;
+  const b = booths[boothNumber];
+  if (!b) return panelNumberEdit(false);
+  const value = input.value.trim();
+  const current = b.displayNumber || '';
+  // Typing the stand's own number, or nothing, means "no shown number".
+  const displayNumber = value === b.boothNumber ? '' : value;
+  if (displayNumber === current) return panelNumberEdit(false);
+  input.disabled = true;
+  socket.emit('booth:set-number', { boothNumber, displayNumber }, (res) => {
+    input.disabled = false;
+    if (res && res.ok) {
+      adminToast(res.cleared ? `Stand ${boothNumber} shows its own number again.` : `Stand ${boothNumber} now shown as ${res.value}.`, 'ok');
+      panelNumberEdit(false);            // the state broadcast repaints the title
+    } else {
+      adminToast((res && res.error) || 'Could not change the number.', 'error');
+      input.focus(); input.select();     // keep what was typed so it can be fixed
+    }
+  });
+}
+
+(function wirePanelNumber() {
+  const btn = document.getElementById('aba-id'), input = document.getElementById('aba-id-input'), pencil = document.getElementById('aba-id-edit');
+  if (!btn || !input) return;
+  btn.addEventListener('click', () => { if (selectedAdminId) panelNumberEdit(true); });
+  pencil?.addEventListener('click', () => { if (selectedAdminId) panelNumberEdit(true); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); savePanelNumber(); }
+    else if (e.key === 'Escape') { e.preventDefault(); panelNumberEdit(false); }
+  });
+  // Clicking away saves what was typed, as a spreadsheet cell does — unless
+  // the box was left untouched, in which case nothing is sent.
+  input.addEventListener('blur', () => { if (!input.hidden && !input.disabled) savePanelNumber(); });
+})();
+
 // Commercial fields now live under `assignment` on the booth document.
 const dealOf = (b) => (b && b.assignment) || {};
 
@@ -899,7 +969,7 @@ function renderAdminBoothAction(n) {
   const panel = document.getElementById('admin-booth-action');
   panel.classList.remove('hidden');
 
-  document.getElementById('aba-id').textContent      = `Stand ${shownB(b)}`;
+  renderPanelNumber(b);
   document.getElementById('aba-status').textContent  = cap(b.status);
   document.getElementById('aba-sqm').textContent     = `${b.sqm} ${UNIT}`;
   document.getElementById('aba-price').textContent   = `${CUR}${(b.listPrice || 0).toLocaleString()}`;
@@ -1613,6 +1683,11 @@ socket.on('state:full', (serverBooths) => {
     renderBoothTags(selectedAdminId);
     renderStandActions(selectedAdminId);
     renderBoothSponsor(selectedAdminId);
+    // The title follows a rename from anywhere (this panel, Tools, another
+    // admin) — unless the number is being typed here right now, in which case
+    // the admin's keystrokes are not thrown away for a broadcast.
+    const numberInput = document.getElementById('aba-id-input');
+    if (numberInput && numberInput.hidden) renderPanelNumber(booths[selectedAdminId]);
   }
 
   // Tag on the first state if the floorplan tab is already open; otherwise
