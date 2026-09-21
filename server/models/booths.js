@@ -3,6 +3,8 @@ const config    = require('../config');
 const countries = require('../data/countries');
 const settings  = require('./settings');
 const { safeImage } = require('../lib/safe-url');
+const { readRects } = require('../lib/extract-stands');
+const floorplans = require('./floorplans');
 const fs        = require('fs');
 const path      = require('path');
 
@@ -414,6 +416,59 @@ async function stats() {
 }
 
 /**
+ * Where a stand actually sits on the plan.
+ *
+ * A stand's stored geometry is its artwork rectangle's x/y/width/height AS
+ * WRITTEN, because that is what the page reads when it binds a stand to its
+ * shape. Illustrator writes a rotated stand as a rectangle plus a
+ * `translate(…) rotate(90)` transform, so for those the written box is not
+ * where the shape appears: it is the shape turned on its side about another
+ * origin. Europe's plan has whole rows of them — 649, 750, 651 and 653 among
+ * them. Every merge and split used to reason about the written boxes, so two
+ * stands drawn flush side by side (651 and 653) were refused as "not next to
+ * each other with no gaps", and a split of such a stand carved a rectangle
+ * that was not where the stand is.
+ *
+ * The footprint comes from the artwork itself: the current plan's rectangles
+ * are read with their rotation resolved, and the stand's written box is
+ * matched to one of them. A geometry that matches no rectangle — a merged
+ * block, a split cell — was produced by this code in footprint space already
+ * and is used as it is. Snapshots keep the written box, so a reset puts back
+ * exactly what the artwork binds to.
+ */
+let artworkRectCache = { key: null, rects: [] };
+async function artworkRects() {
+  const stored = await floorplans.get();
+  let key, read;
+  if (stored && stored.svg) {
+    key = `${config.showId}:${stored.version || stored.svg.length}`;
+    read = () => stored.svg;
+  } else {
+    const file = path.join(__dirname, '..', '..', 'public', String(config.floorplanSvg).replace(/^\//, ''));
+    key = `${config.showId}:shipped:${file}`;
+    read = () => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { return ''; } };
+  }
+  if (artworkRectCache.key !== key) {
+    const svg = read();
+    artworkRectCache = { key, rects: svg ? readRects(svg) : [] };
+  }
+  return artworkRectCache.rects;
+}
+
+function footprintOf(geometry, rects) {
+  if (!geometry) return geometry;
+  const near = (a, b) => Math.abs(a - b) < 0.05;
+  const hit = rects.find(r => near(r.raw.x, geometry.x) && near(r.raw.y, geometry.y) &&
+                              near(r.raw.w, geometry.w) && near(r.raw.h, geometry.h));
+  return hit ? { x: hit.x, y: hit.y, w: hit.w, h: hit.h } : geometry;
+}
+
+async function footprints(docs) {
+  const rects = await artworkRects();
+  return docs.map(d => footprintOf(d && d.geometry, rects));
+}
+
+/**
  * Do two stand rectangles share an edge (touch), within a small tolerance?
  *
  * Merge only makes sense for stands that are actually next to each other. If it
@@ -467,13 +522,16 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
   if (!a || !b) return { ok: false, reason: 'missing_booth' };
   if (primaryNum === secondaryNum) return { ok: false, reason: 'same_booth' };
 
+  // Where the two stands actually are on the plan (see footprintOf).
+  let [fa, fb] = await footprints([a, b]);
+
   // Always keep the TOP-LEFT stand as the survivor (its number stays) — the
   // natural "keep the top / first" expectation — regardless of which stand was
   // picked as Primary. Compare top edge first, then left edge.
-  if (a.geometry && b.geometry &&
-      (((b.geometry.y - a.geometry.y) || (b.geometry.x - a.geometry.x)) < 0)) {
+  if (fa && fb && (((fb.y - fa.y) || (fb.x - fa.x)) < 0)) {
     [primaryNum, secondaryNum] = [secondaryNum, primaryNum];
     [a, b] = [b, a];
+    [fa, fb] = [fb, fa];
   }
 
   // Only merge available stands. Consolidating a sold or held stand would delete
@@ -496,12 +554,14 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
 
   // The two stands must actually touch AND tile a contiguous rectangle —
   // otherwise the merged bounding box swallows everything between/around them.
-  if (a.geometry && b.geometry &&
-      (!adjacent(a.geometry, b.geometry) || !contiguousMerge(a.geometry, b.geometry))) {
+  if (fa && fb && (!adjacent(fa, fb) || !contiguousMerge(fa, fb))) {
     return { ok: false, reason: 'not_adjacent' };
   }
 
-  const g1 = a.geometry, g2 = b.geometry;
+  // The merged block is stored where it appears: the page draws it as its own
+  // shape at exactly this box, so it has to be the footprint, not the written
+  // one.
+  const g1 = fa, g2 = fb;
   const box = (g1 && g2) ? {
     x: Math.min(g1.x, g2.x), y: Math.min(g1.y, g2.y),
     w: Math.max(g1.x + g1.w, g2.x + g2.w) - Math.min(g1.x, g2.x),
@@ -575,17 +635,25 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
     if (d.splitSnapshot || d.splitFrom || d.mergeSnapshot) return { ok: false, reason: 'reset_first' };
     if (!d.geometry) return { ok: false, reason: 'no_geometry' };
   }
-  const geoms = docs.map(d => d.geometry);
+  const geoms = await footprints(docs);   // where they are on the plan, not as written
   const box = { x: Math.min(...geoms.map(g => g.x)), y: Math.min(...geoms.map(g => g.y)) };
   box.w = Math.max(...geoms.map(g => g.x + g.w)) - box.x;
   box.h = Math.max(...geoms.map(g => g.y + g.h)) - box.y;
-  // Two checks together. (1) Connectivity: a pair is an edge if it would merge on
-  // its own (aligned shared edge AND compact box). BFS from node 0 — every stand
-  // must be reachable, so a selection split by an aisle (two separate blocks,
-  // whose within-block overlaps can mask the aisle in the overall area test) is
-  // refused. (2) The parts must fill the bounding box, so an L-shape / gap inside
-  // the box is refused.
-  const edge = (i, j) => adjacent(geoms[i], geoms[j]) && contiguousMerge(geoms[i], geoms[j]);
+  // Two checks together. (1) Connectivity: a pair is an edge if the two share
+  // an aligned edge. BFS from node 0 — every stand must be reachable, so a
+  // selection split by an aisle (two separate blocks, whose within-block
+  // overlaps can mask the aisle in the overall area test) is refused. (2) The
+  // parts must fill the bounding box, so an L-shape / gap inside the box is
+  // refused.
+  //
+  // An edge is adjacency ALONE. It used to also demand that the pair would
+  // merge on its own (a compact box for just the two), which no pair in a
+  // T-shaped tiling can satisfy: two stands side by side over one wide stand
+  // beneath them — 651 and 653 over 649 — tile a perfect rectangle, yet each
+  // top stand with the wide one below makes an L, so the selection was refused
+  // as "not next to each other". Check (2) already rejects any selection that
+  // leaves a gap or corner, and it judges the whole.
+  const edge = (i, j) => adjacent(geoms[i], geoms[j]);
   const seen = new Set([0]), queue = [0];
   while (queue.length) {
     const i = queue.pop();
@@ -596,7 +664,7 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
   if (box.w * box.h > sumArea * 1.15) return { ok: false, reason: 'not_contiguous' };
 
   let si = 0;
-  docs.forEach((d, i) => { if (((d.geometry.y - docs[si].geometry.y) || (d.geometry.x - docs[si].geometry.x)) < 0) si = i; });
+  docs.forEach((d, i) => { if (((geoms[i].y - geoms[si].y) || (geoms[i].x - geoms[si].x)) < 0) si = i; });
   const survivorNum = nums[si], survivor = docs[si];
   const others = docs.filter((_, i) => i !== si);
   const totalSqm   = docs.reduce((s, d) => s + (d.sqm || 0), 0);
@@ -649,7 +717,9 @@ async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, 
   // so grandchildren can't be orphaned.)
   if (b.mergeSnapshot || b.splitSnapshot) return { ok: false, reason: 'reset_first' };
   const n = Math.max(2, Math.min(6, parts | 0));
-  const g = b.geometry;
+  // Carve the stand where it appears on the plan (see footprintOf): the cells
+  // are drawn by the page at exactly the boxes stored here.
+  const [g] = await footprints([b]);
   if (!g) return { ok: false, reason: 'no_geometry' };
   // Below this every cell would round to <1 m², so refuse rather than emit
   // zero-size stands or inflate the total with a Math.max(1,…) floor.
@@ -715,7 +785,9 @@ async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, 
   // Snapshot for a later reset: the primary's footprint before the split and
   // the numbers of the cells it created, so Reset can delete the cells and
   // restore the parent exactly.
-  const splitSnapshot = { self: { geometry: g, sqm: totalSqm, listPrice: totalPrice }, created: nums };
+  // The snapshot keeps the box AS WRITTEN (b.geometry, not the footprint): it
+  // is what a reset puts back, and what binds the stand to its artwork shape.
+  const splitSnapshot = { self: { geometry: b.geometry, sqm: totalSqm, listPrice: totalPrice }, created: nums };
 
   // Conditional on the stand still being available: if it was booked between
   // the read above and here, matchedCount is 0 and nothing else is touched, so
@@ -767,7 +839,7 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
   if (!b) return { ok: false, reason: 'missing_booth' };
   if (b.status !== 'available' || (b.assignment && b.assignment.company)) return { ok: false, reason: 'not_available' };
   if (b.splitSnapshot) return { ok: false, reason: 'reset_first' };   // already split; a MERGED block is fine
-  const g = b.geometry;
+  const [g] = await footprints([b]);   // carve where it appears on the plan (see footprintOf)
   if (!g) return { ok: false, reason: 'no_geometry' };
 
   const clean = (parts || []).map(p => ({
@@ -826,7 +898,7 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
   // displayNumber and splitAxis, so it is the only one whose reset must put them
   // back. The prior values are recorded for exactly that.
   const splitSnapshot = { custom: true,
-                          self: { geometry: g, sqm: totalSqm, listPrice: totalPrice,
+                          self: { geometry: b.geometry, sqm: totalSqm, listPrice: totalPrice,   // as written — what a reset puts back
                                   displayNumber: b.displayNumber ?? null, splitAxis: b.splitAxis ?? null },
                           created: nums };
   const p0 = cells[0];
