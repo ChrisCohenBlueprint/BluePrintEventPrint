@@ -11,7 +11,7 @@
 process.env.SHOWS = 'lex:LEX,lna:LNA,lme:LME';
 process.env.SHOW_ID = 'LEX';
 
-const { chromium } = require('playwright-core');
+const { launch, listen } = require('./harness');
 const path = require('path');
 const express = require('express');
 const { sendPage } = require('../server/lib/send-page');
@@ -42,19 +42,19 @@ const ART = {
   app.get('/socket.io/socket.io.js', (_q, res) => res.type('application/javascript')
     .send('window.io=function(){return{on(){},emit(){},off(){},get connected(){return true}}};'));
   app.use(express.static(path.join(__dirname, '..', 'public')));
-  const server = app.listen(3334);
+  const { server, base } = await listen(app);
 
-  const br = await chromium.launch({ channel: 'chrome', headless: true });
+  const br = await launch();
   const page = await br.newPage();
 
   // Europe first, so its plan is the one a cache would hold.
-  await page.goto('http://127.0.0.1:3334/floorplan', { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(`${base}/floorplan`, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(1500);
   let drawn = await page.evaluate(() => document.querySelector('#svg-mount svg')?.innerHTML || '');
   check('Europe draws Europe', /EUROPE/.test(drawn) && !/NORTHAMERICA/.test(drawn));
 
   // Then North America, in the SAME browser — the case that failed.
-  await page.goto('http://127.0.0.1:3334/floorplan/lna', { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(`${base}/floorplan/lna`, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(1500);
   drawn = await page.evaluate(() => document.querySelector('#svg-mount svg')?.innerHTML || '');
   check('North America draws North America, not the cached Europe',

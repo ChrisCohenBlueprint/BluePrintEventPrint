@@ -116,8 +116,10 @@ database up and 503 without it.
 3. **Import** replaces that event's inventory from the artwork. It refuses
    outright on an event that has sold or held stands.
 
-`npm run migrate` still exists and seeds stands from `public/booth_data.json`;
-it predates artwork import and is only for the original Europe data.
+`npm run migrate` still exists and seeds stands from `server/data/booth_data.json`;
+it predates artwork import and is only for the original Europe data. That file
+lives under `server/` deliberately — it carries a list price for every stand,
+and while it sat in `public/` express served it to anyone who asked.
 
 ### Useful scripts
 

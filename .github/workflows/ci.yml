@@ -1,0 +1,48 @@
+name: CI
+
+# Every push and every pull request. The suite needs no database — the model
+# tests run against a fake, and the browser tests drive static files — so there
+# is no service container here and nothing to provision.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # playwright-core ships no browser of its own. An empty PW_CHANNEL tells
+      # test/harness.js to use the Chromium installed below, instead of the
+      # Chrome that exists on the developer's laptop and nowhere else.
+      PW_CHANNEL: ''
+      # Belt to test/run-all.js's braces: nothing here may reach a real database.
+      MONGO_URI: 'mongodb://127.0.0.1:1'
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Only the browser binary and its system libraries. --with-deps covers the
+      # shared libraries a headless Chromium needs on a bare runner.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Fails the build on a high or critical advisory in what actually ships.
+      # Dev dependencies are excluded: a flaw in a test tool is not a flaw in the
+      # deployed site, and treating it as one trains people to ignore this step.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Test
+        run: npm test

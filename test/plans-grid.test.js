@@ -1,6 +1,6 @@
 // Settings shows every event side by side, each with its own plan preview and
 // its own upload/download/remove — targeting that event, not the one on screen.
-const { chromium } = require('playwright-core');
+const { launch, listen } = require('./harness');
 const { app } = require('./serve-pages');
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`); };
@@ -16,8 +16,8 @@ const PLANS = [
 ];
 
 (async () => {
-  const server = app.listen(3333);
-  const br = await chromium.launch({ channel: 'chrome', headless: true });
+  const { server, base } = await listen(app);
+  const br = await launch();
   const page = await br.newPage({ viewport: { width: 1500, height: 1000 }, deviceScaleFactor: 2 });
   await page.route('**/api/shows', r => r.fulfill({ status: 200, contentType: 'application/json',
     body: JSON.stringify(PLANS.map(p => ({ slug: p.slug, showId: p.showId, name: p.name, active: true }))) }));
@@ -32,7 +32,7 @@ const PLANS = [
     r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, removed: [] }) });
   });
 
-  await page.goto('http://127.0.0.1:3333/admin', { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(`${base}/admin`, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(800);
   await page.click('[data-section="settings"]');
   await page.waitForTimeout(1200);

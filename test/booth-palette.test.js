@@ -5,7 +5,7 @@
  * light blue for sold, burgundy for its lounges — came out entirely yellow and
  * stopped looking like the plan that was approved.
  */
-const { chromium } = require('playwright-core');
+const { launch, listen } = require('./harness');
 const path = require('path');
 const fs = require('fs');
 
@@ -17,7 +17,7 @@ const CSS = fs.readFileSync(path.join(__dirname, '..', 'public', 'booth-colours.
 const NA = { available: '#fffcf8', sold: '#689abb', sponsored: '#7c1315' };
 
 (async () => {
-  const br = await chromium.launch({ channel: 'chrome', headless: true });
+  const br = await launch();
   const page = await br.newPage();
   await page.setContent(`<style>${CSS}</style>
     <svg><rect id="a" class="booth-available"/><rect id="s" class="booth-sold"/>

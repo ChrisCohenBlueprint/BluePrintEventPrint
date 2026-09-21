@@ -141,8 +141,9 @@ the consent gate, stand selection, the shortlist and enquiry submission,
 including the XSS assertions. Both **refuse to run against an Atlas URI** — they
 seed and mutate data.
 
-`scripts/persistence-check.js` still sends HTTP Basic auth and therefore no
-longer works against the current login; fix or delete it before relying on it.
+`scripts/persistence-check.js` has been deleted. It authenticated with HTTP
+Basic, which this app stopped using when real accounts and 2FA arrived, so it
+could not have proved anything about persistence for some time.
 
 ## 7. Still open
 
@@ -150,7 +151,6 @@ longer works against the current login; fix or delete it before relying on it.
   flow.
 * **Horizontal scaling.** Needs `@socket.io/redis-adapter` and a shared store for
   the caches and limiters (§3, and the README table).
-* **`scripts/persistence-check.js`** — stale auth, as above.
 * **Stand numbering** is the business key now, but some events were imported
   before artwork extraction existed; check `boothNumber` before trusting a
   cross-event comparison.

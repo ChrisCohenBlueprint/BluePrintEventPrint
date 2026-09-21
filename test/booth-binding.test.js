@@ -7,7 +7,7 @@
  * to North America: BoothMap's selector names the fill classes EUROPE's plan
  * uses, and in North America's plan those same class names are text styles.
  */
-const { chromium } = require('playwright-core');
+const { launch, listen } = require('./harness');
 const path = require('path');
 
 const out = [];
@@ -54,7 +54,7 @@ async function bind(br, svg, booths) {
 }
 
 (async () => {
-  const br = await chromium.launch({ channel: 'chrome', headless: true });
+  const br = await launch();
 
   console.log('\nEurope binds exactly as it did');
   const eu = await bind(br, EUROPE, BOOTHS);

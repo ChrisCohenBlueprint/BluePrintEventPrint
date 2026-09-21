@@ -24,6 +24,9 @@ const planAreas    = require('./server/models/plan-areas');
 const showsModel   = require('./server/models/shows');
 const floorplansModel = require('./server/models/floorplans');
 const menus        = require('./server/models/menus');
+const booths       = require('./server/models/booths');
+const sponsors     = require('./server/models/sponsors');
+const holdsSvc     = require('./server/services/holds');
 const tracking   = require('./server/services/tracking');
 
 // Last-resort safety net: an unhandled promise rejection anywhere (a stray
@@ -55,6 +58,23 @@ async function start() {
   // editable alongside any new ones rather than living only in config.
   await showsModel.ensureSeeded();
   await planAreas.ensureIndexes();
+  // These three guarantee uniqueness rather than just speed, so a missing one is
+  // a correctness hole, not a slow query: two live holds on one stand, two
+  // stands sharing a display number, or a duplicate sponsorship package. They
+  // were defined on their models but never called from here, so they existed
+  // only where a seed script had happened to run. Each reports rather than
+  // throws — an index that cannot be built (pre-existing duplicates, say) must
+  // be visible in the logs, but it must not stop the site coming up.
+  for (const [what, run] of [
+    ['booths',   () => booths.ensureIndexes()],
+    ['holds',    () => holdsSvc.ensureIndexes()],
+    ['sponsors', () => sponsors.ensureIndexes()],
+  ]) {
+    try {
+      const r = await run();
+      if (r && r.ok === false) console.warn(`⚠  ${what} indexes: ${r.error || 'not created'}`);
+    } catch (e) { console.warn(`⚠  ${what} indexes: ${e.message}`); }
+  }
   await users.bootstrap({ username: config.adminUser, password: config.adminPass });
   // Promote the configured bootstrap account to owner (team-management tier).
   // Idempotent, and safe on an already-seeded database.

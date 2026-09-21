@@ -35,8 +35,15 @@ async function ensureIndexes() {
   // This is what makes "Hold (24h)" real rather than cosmetic. No cron needed.
   await db.collection('holds').createIndexes([
     { key: { expiresAt: 1 }, expireAfterSeconds: 0, name: 'hold_ttl' },
-    { key: { showId: 1, boothNumber: 1 },            name: 'show_booth' },
   ]);
+  // The lookup index on (showId, boothNumber) is created by
+  // services/holds.ensureIndexes() as a UNIQUE one, so a stand can never end up
+  // with two live hold documents. Mongo refuses a second index over the same key
+  // pattern, so the non-unique `show_booth` that used to be created here made
+  // that unique index impossible — holds.ensureIndexes() reported the conflict
+  // instead of throwing, which is why it went unnoticed. Drop the old one if a
+  // database still carries it; the unique index serves exactly the same reads.
+  await dropLegacyIndex('holds', 'show_booth');
 
   // ── inquiries ───────────────────────────────────────────────────────────────
   await db.collection('inquiries').createIndexes([
@@ -111,6 +118,26 @@ async function ensureTtl(collection, name, key, seconds, fallbackSeconds = 730 *
     console.warn(`⚠  collMod on ${collection}.${name} failed (${e.message}) — recreating the index`);
     await db.collection(collection).dropIndex(name).catch(() => {});
     await db.collection(collection).createIndex(key, { name, expireAfterSeconds });
+  }
+}
+
+/**
+ * Drop an index this codebase no longer wants, if the database still has it.
+ *
+ * Used where an index was REPLACED by one over the same keys with different
+ * options — Mongo will not hold both, so the old one has to go before the new
+ * one can be created. Missing index (code 27) is the normal case on any
+ * database created after the change, so it is not an error. Anything else is
+ * reported and swallowed: an index that could not be dropped is a degraded
+ * constraint, not a reason to refuse to serve the site.
+ */
+async function dropLegacyIndex(collection, name) {
+  try {
+    await db.collection(collection).dropIndex(name);
+    console.log(`✅ dropped superseded index ${collection}.${name}`);
+  } catch (e) {
+    if (e?.code === 27 || /index not found/i.test(e?.message || '')) return;
+    console.warn(`⚠  could not drop ${collection}.${name}: ${e.message}`);
   }
 }
 

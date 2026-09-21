@@ -7,7 +7,7 @@
  * about the rendered page: styles applied, scripts running, no asset missing,
  * and nothing served as the wrong content type.
  */
-const { chromium } = require('playwright-core');
+const { launch, listen } = require('./harness');
 const { app } = require('./serve-pages');
 
 const out = [];
@@ -39,12 +39,12 @@ async function health(br, url) {
 }
 
 (async () => {
-  const server = app.listen(3333);
-  const br = await chromium.launch({ channel: 'chrome', headless: true });
+  const { server, base } = await listen(app);
+  const br = await launch();
   // Every URL shape the app answers on. The trailing-slash forms are here
   // because relative asset paths broke exactly those, live.
   for (const p of ['/floorplan', '/floorplan/', '/floorplan/lex26', '/admin', '/admin/']) {
-    const h = await health(br, `http://127.0.0.1:3333${p}`);
+    const h = await health(br, `${base}${p}`);
     check(`${p.padEnd(18)} styles load`, h.styled);
     check(`${p.padEnd(18)} scripts run`, h.scriptsRan);
     check(`${p.padEnd(18)} no asset 404s`, h.bad.length === 0, h.bad.join(', '));
