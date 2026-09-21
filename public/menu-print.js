@@ -154,6 +154,7 @@
     const mine = new Set(plan.highlight || []);
 
     BoothMap.attach(svgDoc, plan.booths, {
+      unit: AREA_UNIT,   // printed on a split cell's size, the way the plan prints its own
       onTag(el, n, b) {
         // The SAME class names the public floorplan uses, resolved by the same
         // shared stylesheet — so a stand is the identical colour whether the

@@ -73,12 +73,120 @@
            pt.y >= outer.y - pad && pt.y <= outer.y + outer.h + pad;
   }
 
+  // The typeface the plan's own live text is set in (booth-artwork.css) and
+  // the share of the font size a capital takes in it — what turns a measured
+  // cap height back into a font-size.
+  var LABEL_FAMILY = "'Raleway', 'Helvetica Neue', Arial, sans-serif";
+  var CAP_RATIO = 0.71;
+
+  /**
+   * How the artwork lettered THIS stand: the cap height of its number and
+   * where it sits from the top-left corner, and the same for the size figure
+   * at the bottom-right. Cached per stand box — the artwork does not move.
+   *
+   * Europe's plan carries no text, only outlines, so its lettering is found
+   * the way printedNameIn finds an area's name: every glyph inside the box,
+   * the ones in the upper half being the number and the lower half the size.
+   * Digits share one cap height, so the tallest glyph of a group is a digit
+   * (the ² is shorter), and the group's extremes give the corner offsets. A
+   * plan that kept its text is read directly from its <text> elements.
+   *
+   * The fallbacks are Europe's measured figures, used only where a box holds
+   * no lettering at all.
+   */
+  var labelMetricsCache = {};
+  var LABEL_FALLBACK = { numCap: 7.6, numLeft: 3, numTop: 3.5, numWeight: '400',
+                         sizeCap: 4.6, sizeRight: 5.5, sizeBottom: 1.2, sizeWeight: '400' };
+
+  function bakedLabelMetrics(svgDoc, box) {
+    if (!box) return LABEL_FALLBACK;
+    var key = [box.x, box.y, box.w, box.h].join(',');
+    if (Object.prototype.hasOwnProperty.call(labelMetricsCache, key)) return labelMetricsCache[key];
+
+    var inside = function (b) {
+      return b && b.w > 0 && b.h > 0 &&
+             b.x >= box.x - 1 && b.y >= box.y - 1 &&
+             b.x + b.w <= box.x + box.w + 1 && b.y + b.h <= box.y + box.h + 1 &&
+             b.w * b.h < box.w * box.h * 0.5;
+    };
+    var out = null;
+
+    // A plan with live text: copy the text's own size and weight.
+    var texts = svgDoc.querySelectorAll('text');
+    var live = [];
+    for (var t = 0; t < texts.length; t++) {
+      if (texts[t].hasAttribute('data-split-label') || texts[t].hasAttribute('data-split-size')) continue;
+      var tb = visualBox(texts[t]);
+      if (!inside(tb)) continue;
+      var cs = global.getComputedStyle ? global.getComputedStyle(texts[t]) : null;
+      var fs = cs ? parseFloat(cs.fontSize) : 0;
+      live.push({ b: tb, font: fs > 0 ? fs : tb.h / CAP_RATIO, weight: (cs && cs.fontWeight) || '400' });
+    }
+    if (live.length) {
+      live.sort(function (a, c) { return a.b.y - c.b.y; });
+      var first = live[0], last = live[live.length - 1];
+      out = {
+        numCap: first.font * CAP_RATIO, numLeft: first.b.x - box.x, numTop: first.b.y - box.y, numWeight: first.weight,
+        sizeCap: last.font * CAP_RATIO, sizeRight: box.x + box.w - (last.b.x + last.b.w),
+        sizeBottom: box.y + box.h - (last.b.y + last.b.h), sizeWeight: last.weight,
+      };
+    } else {
+      // Outlined lettering.
+      var glyphs = svgDoc.querySelectorAll('path, polygon');
+      var top = [], bottom = [];
+      for (var i = 0; i < glyphs.length; i++) {
+        var gb = visualBox(glyphs[i]);
+        if (!inside(gb)) continue;
+        (gb.y + gb.h / 2 < box.y + box.h / 2 ? top : bottom).push(gb);
+      }
+      var extent = function (list) {
+        var e = { cap: 0, minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
+        for (var k = 0; k < list.length; k++) {
+          var q = list[k];
+          if (q.h > e.cap) e.cap = q.h;
+          if (q.x < e.minx) e.minx = q.x;
+          if (q.y < e.miny) e.miny = q.y;
+          if (q.x + q.w > e.maxx) e.maxx = q.x + q.w;
+          if (q.y + q.h > e.maxy) e.maxy = q.y + q.h;
+        }
+        return e;
+      };
+      if (top.length || bottom.length) {
+        var tn = extent(top), ts = extent(bottom);
+        out = {
+          numCap: top.length ? tn.cap : LABEL_FALLBACK.numCap,
+          numLeft: top.length ? tn.minx - box.x : LABEL_FALLBACK.numLeft,
+          numTop: top.length ? tn.miny - box.y : LABEL_FALLBACK.numTop,
+          numWeight: '400',
+          sizeCap: bottom.length ? ts.cap : LABEL_FALLBACK.sizeCap,
+          sizeRight: bottom.length ? box.x + box.w - ts.maxx : LABEL_FALLBACK.sizeRight,
+          sizeBottom: bottom.length ? box.y + box.h - ts.maxy : LABEL_FALLBACK.sizeBottom,
+          sizeWeight: '400',
+        };
+      }
+    }
+    // Guard against a measurement that makes no sense (a stray mark read as
+    // the number): anything outside a sane range takes the fallback figure.
+    if (out) {
+      var sane = function (v, lo, hi, fb) { return (v >= lo && v <= hi) ? v : fb; };
+      out.numCap     = sane(out.numCap, 2, box.h / 2, LABEL_FALLBACK.numCap);
+      out.sizeCap    = sane(out.sizeCap, 1.5, box.h / 3, LABEL_FALLBACK.sizeCap);
+      out.numLeft    = sane(out.numLeft, 0, box.w / 2, LABEL_FALLBACK.numLeft);
+      out.numTop     = sane(out.numTop, 0, box.h / 2, LABEL_FALLBACK.numTop);
+      out.sizeRight  = sane(out.sizeRight, 0, box.w / 2, LABEL_FALLBACK.sizeRight);
+      out.sizeBottom = sane(out.sizeBottom, -2, box.h / 2, LABEL_FALLBACK.sizeBottom);
+    }
+    labelMetricsCache[key] = out || LABEL_FALLBACK;
+    return labelMetricsCache[key];
+  }
+
   /**
    * Attach every booth to the SVG, returning the count actually placed.
    *
    * @param svgDoc  the inlined <svg> element
    * @param booths  array of server booths, each with { boothNumber, geometry }
-   * @param opts    { onTag(el, boothNumber) } called once per clickable element
+   * @param opts    { onTag(el, boothNumber) } called once per clickable element;
+   *                { unit } the size unit printed on a split cell ('m²' unless given)
    */
   function attach(svgDoc, booths, opts) {
     opts = opts || {};
@@ -128,7 +236,30 @@
     booths.forEach(function (b) {
       if (b.splitFrom) splitAxisByPrimary[b.splitFrom] = b.splitAxis || 'vertical';
     });
+    // The footprint each split group tiles — the stand as it was before the
+    // split, and so the box its baked lettering was printed in. That is where
+    // a cell's own lettering is measured against (see bakedLabelMetrics). The
+    // artwork rectangle found to HOST a cell is not used for this: on Europe's
+    // plan the first rectangle containing a stand's centre can be a hall-sized
+    // background panel, and measuring inside that read the biggest shape in
+    // half the hall as the stand number.
+    var groupBoxByPrimary = {};
+    booths.forEach(function (b) {
+      var key = b.splitFrom || (Object.prototype.hasOwnProperty.call(splitAxisByPrimary, b.boothNumber) ? b.boothNumber : null);
+      if (!key || !b.geometry) return;
+      var gb = b.geometry, cur = groupBoxByPrimary[key];
+      if (!cur) { groupBoxByPrimary[key] = { x: gb.x, y: gb.y, w: gb.w, h: gb.h }; return; }
+      var x2 = Math.max(cur.x + cur.w, gb.x + gb.w), y2 = Math.max(cur.y + cur.h, gb.y + gb.h);
+      cur.x = Math.min(cur.x, gb.x); cur.y = Math.min(cur.y, gb.y);
+      cur.w = x2 - cur.x; cur.h = y2 - cur.y;
+    });
 
+    // Every split cell's outline and lettering, lifted above ALL the masks once
+    // the loop is done. Each was inserted just after its own cell's mask, so a
+    // neighbouring cell's mask, appended later, painted over it: the first
+    // cell's number was cut off at the divider wherever it ran past a narrow
+    // cell, and the shared edge lost one of its two strokes.
+    var splitDecor = [];
     booths.forEach(function (b) {
       var g = b.geometry;
       // Reject missing or non-positive geometry: a zero/negative rect renders
@@ -244,40 +375,66 @@
         box.setAttribute('data-split-box', b.boothNumber);
         box.style.pointerEvents = 'none';
         overlay.parentNode.insertBefore(box, overlay.nextSibling);
+        splitDecor.push(box);
 
         // Every split cell — primary and secondary alike — gets its own number
         // top-left and size bottom-right, matching the plan's convention. The
         // overlay above masked the stale baked figures, so these are the only
         // ones now visible, and they carry each cell's real (divided) values.
-        var makeText = function (x, y, str, anchor) {
+        //
+        // They are set the way the plan sets its own: the artwork's figure in
+        // this very stand is measured — how tall, how far from each corner —
+        // and ours is drawn to the same size in the same place, at regular
+        // weight, with the unit on the size. Before this the cells were
+        // lettered at 12px/9px bold with a bare number for the size, so a
+        // split stand read as a different document to its neighbours.
+        var lm = bakedLabelMetrics(svgDoc, groupBoxByPrimary[b.splitFrom || b.boothNumber] || g);
+        // The plan prints every figure at one size, and so do we — except in a
+        // cell too narrow to hold its own number, where the figure is stepped
+        // down to fit rather than run into the neighbour. Width is estimated
+        // (digits in this face are about 0.6em) because the plan may be laid
+        // out in a hidden tab, where nothing can be measured.
+        var makeText = function (x, y, str, anchor, cap, weight, room) {
           var t = document.createElementNS(SVG_NS, 'text');
+          var font = cap / CAP_RATIO;
+          var need = 0.6 * font * String(str).length;
+          if (room > 0 && need > room) font = Math.max(2, font * room / need);
           t.setAttribute('x', x);
           t.setAttribute('y', y);
           if (anchor) t.setAttribute('text-anchor', anchor);
           t.setAttribute('fill', '#111827');
-          t.setAttribute('font-family', 'Raleway, sans-serif');
-          t.setAttribute('font-weight', '700');
+          t.setAttribute('font-family', LABEL_FAMILY);
+          t.setAttribute('font-weight', weight);
+          t.setAttribute('font-size', font.toFixed(2) + 'px');
           t.style.pointerEvents = 'none';
           t.textContent = str;
           return t;
         };
 
-        var num = makeText(x1 + 5, y1 + 14, b.displayNumber || b.boothNumber);
-        num.setAttribute('font-size', '12px');
+        var num = makeText(x1 + lm.numLeft, y1 + lm.numTop + lm.numCap,
+                           b.displayNumber || b.boothNumber, null, lm.numCap, lm.numWeight,
+                           (x2 - x1) - lm.numLeft - 1);
         num.setAttribute('data-split-label', b.boothNumber);
         overlay.parentNode.insertBefore(num, overlay.nextSibling);
+        splitDecor.push(num);
 
         if (b.sqm) {
-          var size = makeText(x2 - 4, y2 - 5, b.sqm, 'end');
-          size.setAttribute('font-size', '9px');
+          var size = makeText(x2 - lm.sizeRight, y2 - lm.sizeBottom,
+                              b.sqm + (opts.unit || 'm²'), 'end', lm.sizeCap, lm.sizeWeight,
+                              (x2 - x1) - lm.sizeRight - 1);
           size.setAttribute('data-split-size', b.boothNumber);
           overlay.parentNode.insertBefore(size, overlay.nextSibling);
+          splitDecor.push(size);
         }
       }
 
       placed[b.boothNumber] = overlay;
       if (opts.onTag) opts.onTag(overlay, b.boothNumber, b);
     });
+
+    // Outlines first, then lettering, all above every mask (see splitDecor).
+    splitDecor.forEach(function (el) { if (el.tagName === 'rect') svgDoc.appendChild(el); });
+    splitDecor.forEach(function (el) { if (el.tagName !== 'rect') svgDoc.appendChild(el); });
 
     // Artwork rectangles with no matching booth are hall furniture — catering,
     // toilets, logo boxes. Make sure they never look interactive.
