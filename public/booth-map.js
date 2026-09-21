@@ -131,13 +131,31 @@
         sizeBottom: box.y + box.h - (last.b.y + last.b.h), sizeWeight: last.weight,
       };
     } else {
-      // Outlined lettering.
+      // Outlined lettering. The glyphs are clustered into rows by vertical
+      // position (as printedNameIn does): the highest row is the number, the
+      // lowest the size. Halving the box was not enough — a merged block's
+      // lower half also holds the absorbed stands' numbers, and one of those
+      // read as the size made the figure the height of a number.
       var glyphs = svgDoc.querySelectorAll('path, polygon');
-      var top = [], bottom = [];
+      var marks = [], hs = [];
       for (var i = 0; i < glyphs.length; i++) {
         var gb = visualBox(glyphs[i]);
         if (!inside(gb)) continue;
-        (gb.y + gb.h / 2 < box.y + box.h / 2 ? top : bottom).push(gb);
+        marks.push(gb); hs.push(gb.h);
+      }
+      var top = [], bottom = [];
+      if (marks.length) {
+        hs.sort(function (a, c) { return a - c; });
+        var gapLimit = (hs[Math.floor(hs.length / 2)] || 1) * 0.9;
+        marks.sort(function (a, c) { return a.y - c.y; });
+        var rows = [], row = null;
+        for (var m = 0; m < marks.length; m++) {
+          var q = marks[m];
+          if (row && q.y <= row.bottom + gapLimit) { row.list.push(q); if (q.y + q.h > row.bottom) row.bottom = q.y + q.h; }
+          else { row = { list: [q], bottom: q.y + q.h }; rows.push(row); }
+        }
+        top = rows[0].list;
+        if (rows.length > 1) bottom = rows[rows.length - 1].list;
       }
       var extent = function (list) {
         var e = { cap: 0, minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
@@ -326,7 +344,14 @@
       // Is this cell part of a split stand — either a secondary (has splitFrom)
       // or the primary the secondaries point back at?
       var isPrimarySplit = Object.prototype.hasOwnProperty.call(splitAxisByPrimary, b.boothNumber);
-      var isSplitCell = !!b.splitFrom || isPrimarySplit;
+      // …or a MERGED block: one stand the artwork still draws as several. It
+      // is treated exactly like a split cell — masked, boxed and lettered as
+      // one stand — because otherwise the merge changed nothing anyone could
+      // see: the transparent hit area sat beneath the artwork's own strokes
+      // and figures, so the dividing lines and the old numbers stayed, and the
+      // block looked as if the consolidation had simply not happened.
+      var isMerged = b.merged === true || (Array.isArray(b.mergedFrom) && b.mergedFrom.length > 0);
+      var isSplitCell = !!b.splitFrom || isPrimarySplit || isMerged;
       var splitAxis = b.splitAxis || splitAxisByPrimary[b.boothNumber] || 'vertical';
       // A split overlay doubles as the mask hiding the artwork's stale baked
       // number/size, so its fill must stay opaque even when shortlisted.
