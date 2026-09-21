@@ -549,19 +549,24 @@ function register(io) {
 
     // Divide one stand into equal parts — the inverse of consolidate, and the
     // manual fix for stands the artwork drew as a single block.
-    socket.on('booth:split', requireAdmin(socket, 'booth:split', async ({ boothNumber, parts, axis }) => {
+    // `firstSqm` (optional, two parts only) makes the split uneven: the size the
+    // original keeps, from the divider the admin dragged on the plan.
+    socket.on('booth:split', requireAdmin(socket, 'booth:split', async ({ boothNumber, parts, axis, firstSqm }) => {
       const n = stand(boothNumber);
-      const r = await booths.split(n, { parts, axis, actor: socket.data.user });
+      const r = await booths.split(n, { parts, axis, firstSqm, actor: socket.data.user });
       if (!r.ok) {
         const why = r.reason === 'reset_first' ? 'it was already merged or split — reset it first'
                   : r.reason === 'not_available' ? 'the stand must be available'
                   : r.reason === 'too_small' ? 'the stand is too small to divide that many ways'
+                  : r.reason === 'bad_ratio' ? 'each side must keep at least 1 m²'
+                  : r.reason === 'uneven_needs_two' ? 'an uneven split makes exactly two stands'
                   : r.reason;
         return { ok: false, error: `Could not split — ${why}.` };
       }
-      track({ type: 'booth.split', boothNumber: n, socket, meta: { parts, axis, created: r.created } });
+      track({ type: 'booth.split', boothNumber: n, socket, meta: { parts, axis, firstSqm: firstSqm ?? null, created: r.created } });
       await refresh(); broadcastState(io);
-      log(io, `✂️ Stand ${escapeHtml(n)} split into ${r.created.length + 1} — added ${r.created.map(escapeHtml).join(', ')}`, 'admin');
+      const sizes = firstSqm != null ? ` (${r.sizes.join(' + ')} m²)` : '';
+      log(io, `✂️ Stand ${escapeHtml(n)} split into ${r.created.length + 1}${sizes} — added ${r.created.map(escapeHtml).join(', ')}`, 'admin');
       return { ok: true, created: r.created };
     }));
 

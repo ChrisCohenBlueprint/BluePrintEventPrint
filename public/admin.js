@@ -157,10 +157,26 @@ function consolidateMultiSelect() {
     if (res && res.ok) {
       adminToast(`${ids.length} stands merged into ${res.primary}.`, 'ok');
       clearMultiSelect();
-      if (res.primary) selectAdminBooth(res.primary);
+      if (res.primary) { selectAdminBooth(res.primary); nameMergedStand(res.primary); }
     } else {
       adminToast((res && res.error) || 'Could not consolidate those stands.', 'error');
     }
+  });
+}
+
+// A merged block keeps the top-left stand's number, which is rarely what the
+// admin wants it called — so the name is asked for as the last step of the
+// merge rather than left to a separate trip through the Shown Number tool.
+// Leaving it as offered (or cancelling) keeps the number it already has.
+function nameMergedStand(primary) {
+  const current = shownN(primary);
+  const name = prompt(`Merged into stand ${current}. Number to show for the merged stand:`, current);
+  if (name === null) return;
+  const displayNumber = name.trim();
+  if (!displayNumber || displayNumber === current) return;
+  socket.emit('booth:set-number', { boothNumber: primary, displayNumber }, (res) => {
+    if (res && res.ok) adminToast(`Merged stand now shown as ${displayNumber}.`, 'ok');
+    else adminToast((res && res.error) || 'Could not rename the merged stand.', 'error');
   });
 }
 
@@ -500,6 +516,7 @@ function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 // ─── Admin Select Booth ───────────────────────────────────────────────────────
 function selectAdminBooth(id) {
   clearMultiSelect();                              // a plain click abandons any shift-selection
+  if (splitUI.id && splitUI.id !== id) exitSplitMode();   // …and a half-placed divider on another stand
   if (selectedAreaKey) {
     svgDoc.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
     selectedAreaKey = null;
@@ -523,6 +540,7 @@ function multiEl(id) { return svgDoc.querySelector(`[data-booth="${CSS.escape(id
 
 function toggleMultiSelect(id) {
   if (!id || !booths[id]) return;
+  if (splitUI.id) exitSplitMode();                 // one thing at a time on the plan
   // Seed the set with the current single selection so shift-clicking a second
   // stand grows the pair the admin already had focused.
   if (!multiSel.size && selectedAdminId && selectedAdminId !== id) multiSel.add(selectedAdminId);
@@ -551,6 +569,200 @@ function clearMultiSelect() {
 
 // Commercial fields now live under `assignment` on the booth document.
 const dealOf = (b) => (b && b.assignment) || {};
+
+/* ---- Drag-to-split: one divider across a stand, two cells, live sizes ---- */
+//
+// The admin presses Split on a stand, a divider appears across its middle, and
+// dragging it moves the split point with both sizes updating as whole m². The
+// server carves the geometry in the same proportion, so the line lands on the
+// plan where it was dragged. One divider makes exactly two stands; a third
+// part is a second split of one of the halves.
+const splitUI = { id: null, axis: 'vertical', first: 0, total: 0, g: null, group: null, parts: null, dragging: false };
+const SPLIT_NS = 'http://www.w3.org/2000/svg';
+
+// Mirrors the server's rules for booth:split, so the button is only offered
+// where the split would be accepted: available, unsold, not already a merge or
+// a split parent, and big enough to leave 1 m² on each side.
+function canSplitOnMap(b) {
+  return !!b && b.status === 'available' && !dealOf(b).company
+      && !b.mergeSnapshot && !b.splitSnapshot && !!b.geometry && (b.sqm || 0) >= 2;
+}
+
+function enterSplitMode(id) {
+  const b = booths[id];
+  if (!svgDoc || !canSplitOnMap(b)) return;
+  if (splitUI.id) exitSplitMode();
+  clearMultiSelect();
+  const g = b.geometry;
+  splitUI.id = id;
+  splitUI.g = g;
+  splitUI.total = Math.round(b.sqm);
+  splitUI.first = Math.max(1, Math.min(splitUI.total - 1, Math.floor(splitUI.total / 2)));
+  // Default to the direction that leaves the squarer cells: a wide stand is
+  // cut left/right, a tall one top/bottom.
+  splitUI.axis = g.w >= g.h ? 'vertical' : 'horizontal';
+  buildSplitPreview();
+  const bar = document.getElementById('split-bar');
+  if (bar) bar.hidden = false;
+  const idEl = document.getElementById('split-bar-id');
+  if (idEl) idEl.textContent = shownN(id);
+  renderSplitPreview();
+}
+
+function exitSplitMode() {
+  if (splitUI.group && splitUI.group.parentNode) splitUI.group.parentNode.removeChild(splitUI.group);
+  splitUI.group = null; splitUI.parts = null; splitUI.id = null; splitUI.g = null; splitUI.dragging = false;
+  const bar = document.getElementById('split-bar');
+  if (bar) bar.hidden = true;
+}
+
+function setSplitAxis(axis) {
+  if (!splitUI.id) return;
+  splitUI.axis = axis === 'horizontal' ? 'horizontal' : 'vertical';
+  renderSplitPreview();
+}
+
+function setSplitFirst(first) {
+  if (!splitUI.id) return;
+  splitUI.first = Math.max(1, Math.min(splitUI.total - 1, Math.round(first)));
+  renderSplitPreview();
+}
+
+// Build the preview once per split; renderSplitPreview() moves the pieces.
+// Appended at the very end of the SVG so it sits above every stand overlay
+// and split box, which are themselves appended last.
+function buildSplitPreview() {
+  const mk = (tag, cls) => { const el = document.createElementNS(SPLIT_NS, tag); if (cls) el.setAttribute('class', cls); return el; };
+  const group = mk('g'); group.id = 'split-preview';
+  const cellA = mk('rect', 'split-cell'), cellB = mk('rect', 'split-cell');
+  cellA.setAttribute('fill', 'rgba(56,189,248,0.22)');
+  cellB.setAttribute('fill', 'rgba(16,185,129,0.22)');
+  const line = mk('line', 'split-line');
+  line.setAttribute('stroke', '#f43f5e');
+  line.setAttribute('stroke-linecap', 'round');
+  const handle = mk('rect', 'split-handle');
+  const textA = mk('text'), textB = mk('text');
+  [textA, textB].forEach(t => { t.setAttribute('text-anchor', 'middle'); t.setAttribute('dominant-baseline', 'central'); t.setAttribute('fill', '#0f172a'); });
+  group.append(cellA, cellB, line, textA, textB, handle);
+  svgDoc.appendChild(group);
+  splitUI.group = group;
+  splitUI.parts = { cellA, cellB, line, handle, textA, textB };
+
+  // Pointer events drive the drag; the plain mouse/touch events are stopped
+  // here so panzoom (listening on the map frame) doesn't pan the plan too.
+  handle.addEventListener('mousedown', e => e.stopPropagation());
+  handle.addEventListener('touchstart', e => { e.stopPropagation(); }, { passive: true });
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    splitUI.dragging = true;
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    splitFromPointer(e);
+  });
+  handle.addEventListener('pointermove', (e) => { if (splitUI.dragging) splitFromPointer(e); });
+  const stop = () => { splitUI.dragging = false; };
+  handle.addEventListener('pointerup', stop);
+  handle.addEventListener('pointercancel', stop);
+  handle.addEventListener('lostpointercapture', stop);
+}
+
+// Where along the stand the pointer is, as a share of its area. Measured
+// against the stand's own on-screen box, so pan and zoom fall out naturally.
+function splitFromPointer(e) {
+  const el = multiEl(splitUI.id);
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const frac = splitUI.axis === 'vertical' ? (e.clientX - r.left) / r.width : (e.clientY - r.top) / r.height;
+  if (!Number.isFinite(frac)) return;
+  setSplitFirst(frac * splitUI.total);
+}
+
+function renderSplitPreview() {
+  const P = splitUI.parts, g = splitUI.g;
+  if (!P || !g) return;
+  const vertical = splitUI.axis === 'vertical';
+  const frac = splitUI.first / splitUI.total;
+  const len = vertical ? g.w : g.h;
+  const a = len * frac;
+  const shorter = Math.min(g.w, g.h);
+  const sw = Math.max(1, Math.min(4, shorter * 0.05));       // divider stroke
+  const hw = Math.max(8, Math.min(24, shorter * 0.3));       // grab width around it
+  const setRect = (el, x, y, w, h) => { el.setAttribute('x', x); el.setAttribute('y', y); el.setAttribute('width', Math.max(0, w)); el.setAttribute('height', Math.max(0, h)); };
+
+  if (vertical) {
+    setRect(P.cellA, g.x, g.y, a, g.h);
+    setRect(P.cellB, g.x + a, g.y, g.w - a, g.h);
+    P.line.setAttribute('x1', g.x + a); P.line.setAttribute('x2', g.x + a);
+    P.line.setAttribute('y1', g.y);     P.line.setAttribute('y2', g.y + g.h);
+    setRect(P.handle, g.x + a - hw / 2, g.y, hw, g.h);
+  } else {
+    setRect(P.cellA, g.x, g.y, g.w, a);
+    setRect(P.cellB, g.x, g.y + a, g.w, g.h - a);
+    P.line.setAttribute('x1', g.x);     P.line.setAttribute('x2', g.x + g.w);
+    P.line.setAttribute('y1', g.y + a); P.line.setAttribute('y2', g.y + a);
+    setRect(P.handle, g.x, g.y + a - hw / 2, g.w, hw);
+  }
+  P.line.setAttribute('stroke-width', sw);
+  P.handle.setAttribute('class', 'split-handle ' + (vertical ? 'vertical' : 'horizontal'));
+
+  // Each cell's size sits in its centre, sized to fit that cell — a thin
+  // sliver gets a small figure rather than one spilling over the line.
+  const second = splitUI.total - splitUI.first;
+  const label = (t, str, x, y, w, h) => {
+    t.textContent = str;
+    t.setAttribute('x', x); t.setAttribute('y', y);
+    const fs = Math.max(4, Math.min(12, w / (0.62 * str.length), h / 1.6));
+    t.setAttribute('font-size', fs);
+  };
+  if (vertical) {
+    label(P.textA, `${splitUI.first} ${UNIT}`, g.x + a / 2, g.y + g.h / 2, a, g.h);
+    label(P.textB, `${second} ${UNIT}`, g.x + a + (g.w - a) / 2, g.y + g.h / 2, g.w - a, g.h);
+  } else {
+    label(P.textA, `${splitUI.first} ${UNIT}`, g.x + g.w / 2, g.y + a / 2, g.w, a);
+    label(P.textB, `${second} ${UNIT}`, g.x + g.w / 2, g.y + a + (g.h - a) / 2, g.w, g.h - a);
+  }
+
+  const aEl = document.getElementById('split-bar-a'), bEl = document.getElementById('split-bar-b');
+  if (aEl) aEl.textContent = `${splitUI.first} ${UNIT}`;
+  if (bEl) bEl.textContent = `${second} ${UNIT}`;
+  document.getElementById('split-bar-vertical')?.classList.toggle('active', vertical);
+  document.getElementById('split-bar-horizontal')?.classList.toggle('active', !vertical);
+}
+
+function applySplit() {
+  if (!splitUI.id) return;
+  const { id, axis, first, total } = splitUI;
+  const btn = document.getElementById('split-bar-apply');
+  if (btn) btn.disabled = true;
+  socket.emit('booth:split', { boothNumber: id, parts: 2, axis, firstSqm: first }, (res) => {
+    if (btn) btn.disabled = false;
+    if (res && res.ok) {
+      adminToast(`Stand ${shownN(id)} split into ${first} + ${total - first} ${UNIT} — added ${(res.created || []).join(', ')}.`, 'ok');
+      exitSplitMode();
+    } else {
+      adminToast((res && res.error) || 'Could not split that stand.', 'error');
+    }
+  });
+}
+
+// Bar buttons and keys. Wired once; the bar is a fixed part of the page.
+(function wireSplitBar() {
+  document.getElementById('split-bar-vertical')?.addEventListener('click', () => setSplitAxis('vertical'));
+  document.getElementById('split-bar-horizontal')?.addEventListener('click', () => setSplitAxis('horizontal'));
+  document.getElementById('split-bar-apply')?.addEventListener('click', applySplit);
+  document.getElementById('split-bar-cancel')?.addEventListener('click', exitSplitMode);
+  document.addEventListener('keydown', (e) => {
+    if (!splitUI.id) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+    const vertical = splitUI.axis === 'vertical';
+    const back = vertical ? 'ArrowLeft' : 'ArrowUp', fwd = vertical ? 'ArrowRight' : 'ArrowDown';
+    if (e.key === 'Enter' && tag === 'BUTTON') return;   // the focused button already handles Enter
+    if (e.key === 'Escape') { e.preventDefault(); exitSplitMode(); }
+    else if (e.key === back) { e.preventDefault(); setSplitFirst(splitUI.first - 1); }
+    else if (e.key === fwd)  { e.preventDefault(); setSplitFirst(splitUI.first + 1); }
+    else if (e.key === 'Enter') { e.preventDefault(); applySplit(); }
+  });
+})();
 
 // Show-level settings pushed from the server: area unit (m²/ft², a label only)
 // and the rate. All update live via the 'settings' socket event.
@@ -811,6 +1023,13 @@ function renderStandActions(n) {
   book.onclick    = () => adminAction('book', n);
   hold.onclick    = () => adminAction('hold', n);
   release.onclick = () => adminAction('release', n);
+
+  // Drag-to-split, offered only where the server would accept the split.
+  const split = document.getElementById('aba-split');
+  if (split) {
+    split.hidden = !canSplitOnMap(b);
+    split.onclick = () => enterSplitMode(n);
+  }
 }
 
 function adminAction(action, boothNumber) {
@@ -1267,6 +1486,10 @@ socket.on('state:full', (serverBooths) => {
   // cell) so the tools, tables and overview counts don't show ghosts.
   Object.keys(booths).forEach(n => { if (!incoming.has(n)) delete booths[n]; });
   if (selectedAdminId && !booths[selectedAdminId]) selectedAdminId = null;
+  // Someone else booked or reshaped the stand under the divider: the split the
+  // admin is lining up can no longer happen, so take the divider away rather
+  // than let it be submitted and refused.
+  if (splitUI.id && !canSplitOnMap(booths[splitUI.id])) exitSplitMode();
 
   updateOverview();
   renderBookingsTable();
@@ -1297,6 +1520,7 @@ socket.on('state:full', (serverBooths) => {
 // Re-run the SVG↔booth mapping from a clean slate after a structural change.
 function retagAdminMap() {
   if (!svgDoc) return;
+  if (splitUI.id) exitSplitMode();   // the stand under the divider may be gone or reshaped
   BoothMap.clear(svgDoc);
   adminTagged = false;
   tagAdminBooths();

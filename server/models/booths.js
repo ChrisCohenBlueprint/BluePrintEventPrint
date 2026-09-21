@@ -634,7 +634,7 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
  * first cell and its commercial state; the rest become new available stands
  * numbered `<n>-2`, `<n>-3`, … The area and list price divide evenly.
  */
-async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = {}) {
+async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, actor = null } = {}) {
   const b = await get(boothNum);
   if (!b) return { ok: false, reason: 'missing_booth' };
   // Splitting is a pre-sale layout operation. On a sold/held stand it would
@@ -658,22 +658,49 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
   const vertical = axis === 'vertical';   // side by side
   const cellW = vertical ? g.w / n : g.w;
   const cellH = vertical ? g.h : g.h / n;
+  const totalSqm = b.sqm || 0, totalPrice = b.listPrice || 0;
+
+  // An UNEVEN two-way split: `firstSqm` is how much the original keeps, the
+  // new cell takes the rest — what the admin's draggable divider sends. Whole
+  // m² only, and neither side may be emptied. Three or more parts stay equal:
+  // one divider makes exactly two cells.
+  let first = null;
+  if (firstSqm != null) {
+    if (n !== 2) return { ok: false, reason: 'uneven_needs_two' };
+    first = Math.round(Number(firstSqm));
+    if (!Number.isFinite(first) || first < 1 || first > totalSqm - 1) return { ok: false, reason: 'bad_ratio' };
+  }
 
   // Distribute sqm and list price so the parts sum EXACTLY to the original:
   // each cell gets floor(total/n), and the first `remainder` cells get one
   // more. Previously every cell (primary included) took round(total/n), so
-  // n×part ≠ whole and the headline stats drifted on every split.
+  // n×part ≠ whole and the headline stats drifted on every split. An uneven
+  // split gives the first cell its chosen share (of the price, pro rata) and
+  // the second the remainder, so the pair still sums exactly.
   const share = (total, i) => {
+    if (first != null) {
+      const a = total === totalSqm ? first : Math.round(total * first / totalSqm);
+      return i === 0 ? a : total - a;
+    }
     const base = Math.floor(total / n), rem = total - base * n;
     return base + (i < rem ? 1 : 0);
   };
-  const totalSqm = b.sqm || 0, totalPrice = b.listPrice || 0;
 
-  const cellGeom = (i) => ({
-    x: vertical ? g.x + i * cellW : g.x,
-    y: vertical ? g.y : g.y + i * cellH,
-    w: cellW, h: cellH,
-  });
+  // The footprint divides in the same proportion as the area, so the divider
+  // sits on the plan exactly where the admin dragged it.
+  const cellGeom = (i) => {
+    if (first != null) {
+      const len = vertical ? g.w : g.h;
+      const a = len * (first / totalSqm);
+      return vertical ? { x: g.x + (i ? a : 0), y: g.y, w: i ? len - a : a, h: g.h }
+                      : { x: g.x, y: g.y + (i ? a : 0), w: g.w, h: i ? len - a : a };
+    }
+    return {
+      x: vertical ? g.x + i * cellW : g.x,
+      y: vertical ? g.y : g.y + i * cellH,
+      w: cellW, h: cellH,
+    };
+  };
 
   // Check every new suffix for a collision BEFORE mutating anything. The old
   // order mutated the primary and inserted some cells first, so a collision on
@@ -712,7 +739,7 @@ async function split(boothNum, { parts = 2, axis = 'vertical', actor = null } = 
     });
     created.push(nums[i - 1]);
   }
-  return { ok: true, created };
+  return { ok: true, created, sizes: Array.from({ length: n }, (_, i) => share(totalSqm, i)) };
 }
 
 /**

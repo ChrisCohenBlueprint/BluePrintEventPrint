@@ -200,6 +200,19 @@
           <button id="multi-consolidate" class="admin-btn success"><i data-lucide="combine"></i> Consolidate</button>
           <button id="multi-clear" class="admin-btn">Clear</button>
         </div>
+        <!-- Split bar — shown while a divider is being dragged across a stand.
+             One divider, two cells: the sizes here follow the line live. -->
+        <div id="split-bar" hidden>
+          <span>Splitting <strong id="split-bar-id">—</strong></span>
+          <div class="split-axis-toggle" role="group" aria-label="Divider direction">
+            <button type="button" class="admin-btn" id="split-bar-vertical" title="A vertical line: left and right">Left / right</button>
+            <button type="button" class="admin-btn" id="split-bar-horizontal" title="A horizontal line: top and bottom">Top / bottom</button>
+          </div>
+          <span class="split-bar-sizes"><strong id="split-bar-a">—</strong> + <strong id="split-bar-b">—</strong></span>
+          <span class="split-bar-hint">Drag the line · arrow keys nudge 1 m²</span>
+          <button id="split-bar-apply" class="admin-btn success"><i data-lucide="scissors"></i> Split</button>
+          <button id="split-bar-cancel" class="admin-btn">Cancel</button>
+        </div>
       </div>
       <!-- Admin tooltip -->
       <div id="admin-tooltip" class="fp-tooltip hidden">
@@ -239,6 +252,7 @@
           <button class="admin-btn success" id="aba-book">✅ Mark Sold</button>
           <button class="admin-btn warning" id="aba-hold">⏳ Put on Hold</button>
           <button class="admin-btn" id="aba-release">🔓 Release</button>
+          <button class="admin-btn" id="aba-split" title="Drag a divider across this stand to split it in two">✂️ Split</button>
         </div>
         <!-- Exhibitor profile: where they are from and what they do. Only
              meaningful once a stand is booked or held, and it is what the
@@ -586,7 +600,7 @@
             <i data-lucide="split"></i>
             <h3>Split Stand</h3>
           </div>
-          <p>Divide one stand into equal parts — the manual fix where the artwork drew several stands as a single block.</p>
+          <p>Divide one stand into equal parts — the manual fix where the artwork drew several stands as a single block. For an uneven two-way split, select the stand on the plan and press Split to drag the divider.</p>
           <form id="split-form" class="tool-form">
             <div class="tool-field">
               <label>Stand</label>
