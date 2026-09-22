@@ -140,9 +140,11 @@ if (live) {
   // Every extracted stand has a number by construction; what can be missing is
   // the printed area, and what can be astray is a number outside every shape.
   const noArea = read.issues.noArea, astray = read.issues.orphans;
+  const boxed = read.issues.implausible || [];
   const detail = [];
   if (noArea.length) detail.push(`${noArea.length} stands print no area (${noArea.slice(0, 8).join(', ')})`);
   if (astray.length) detail.push(`${astray.length} stand numbers sit outside any shape (${astray.slice(0, 8).join(', ')})`);
+  if (boxed.length) detail.push(`${boxed.length} stand numbers sit inside a shape that cannot be a stand — a backing box behind the number, or the hall outline (${boxed.slice(0, 8).join(', ')})`);
   detail.length === 0
     ? pass('R10', 'Every stand has a number and an area label', `${stands.length} stands`)
     : fail('R10', 'Every stand has a number and an area label', detail.join('; '));
@@ -204,8 +206,16 @@ if (live) {
 if (scheduleText) {
   const rows = String(scheduleText).trim().split(/\r?\n/);
   const header = (rows[0] || '').toLowerCase();
-  const need = ['stand_number', 'area_sqm', 'status'];
-  const missing = need.filter(c => !header.includes(c));
+  // Each column, and the spellings a schedule actually arrives with. Requiring
+  // the single spelling "area_sqm" failed a schedule that was correct in every
+  // other respect — including one written exactly as the designer brief's own
+  // checklist asks for it — and a designer cannot act on a clause that
+  // contradicts the document they were given. A plan measured in square feet
+  // has no "area_sqm" column to offer either.
+  const need = [['stand_number', 'stand', 'number'],
+                ['area_sqm', 'area_sqft', 'area'],
+                ['status']];
+  const missing = need.filter(alts => !alts.some(c => header.includes(c))).map(a => a[0]);
   const count = rows.length - 1;
   missing.length === 0
     ? pass('R15', 'Schedule has required columns')

@@ -258,6 +258,63 @@ router.get('/stands/preview', async (_req, res, next) => {
 });
 
 /**
+ * The event's stands as they are NOW, as a schedule to hand a designer.
+ *
+ * A re-issued plan is drawn from the designer's last file, and that file does
+ * not know what has happened to the layout since: stands merged into a block,
+ * a stand split into cells, a number changed. A designer working from it
+ * redraws the old layout in good faith, and every one of those changes then
+ * comes back through the re-issue diff as a stand that has moved, resized or
+ * gone missing — with a sold stand under it. Sending this first is what stops
+ * that, and it is the file specification BEC-FP-01 asks to come BACK with the
+ * drawing (clause R15), in the columns it asks for.
+ *
+ * Deliberately not the sales view: no price, no deal notes, no contact. A
+ * schedule goes outside the company, and what a designer needs is the number,
+ * the size and whether the stand is spoken for.
+ */
+const SCHEDULE_HEADERS = ['stand_number', 'area', 'unit', 'status', 'exhibitor', 'note'];
+
+router.get('/stands/schedule.csv', async (_req, res, next) => {
+  try {
+    const st = await settings.get();
+    const unit = st.unit === 'ft' ? 'sqft' : 'sqm';
+    const list = (await booths.all())
+      .slice()
+      .sort((a, b) => String(a.boothNumber).localeCompare(String(b.boothNumber),
+                                                          undefined, { numeric: true }));
+    const rows = list.map((b) => {
+      // What the artwork must not quietly undo. A merged block and a split cell
+      // exist in our data and not in the designer's file, so they are said out
+      // loud in a column rather than left for the diff to discover.
+      const note = Array.isArray(b.mergedFrom) && b.mergedFrom.length
+        ? `merged from ${b.mergedFrom.join(' + ')} — draw as ONE stand`
+        : b.splitFrom
+          ? `split from ${b.splitFrom} — not on the previous drawing`
+          : b.displayNumber && b.displayNumber !== b.boothNumber
+            ? `shown on the plan as ${b.displayNumber}`
+            : '';
+      return [
+        b.boothNumber,
+        b.sqm ?? '',
+        unit,
+        // "taken" rather than "sold" because that is the word the spec's status
+        // column uses, and a held stand is taken as far as a drawing is
+        // concerned: it must keep its number.
+        b.status === 'sold' ? 'taken' : b.status === 'held' ? 'reserved' : 'available',
+        (b.assignment && b.assignment.company) || '',
+        note,
+      ];
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition',
+                  `attachment; filename="${config.showId}-stand-schedule-${stamp}.csv"`);
+    res.send(csv.toCsv(SCHEDULE_HEADERS, rows));
+  } catch (e) { next(e); }
+});
+
+/**
  * Read the stands out of this event's artwork and make them its inventory.
  *
  * Two writes, in this order, so a failure cannot leave names shown twice:

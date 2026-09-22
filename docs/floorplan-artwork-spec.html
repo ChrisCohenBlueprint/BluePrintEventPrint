@@ -190,9 +190,9 @@
     <h1>Floorplan artwork specification</h1>
     <p class="sub">Mandatory requirements for exhibition floorplan files supplied to Blueprint Event Company. Files that do not meet these requirements cannot be used in the interactive floorplan and will be returned.</p>
     <div class="issue">
-      <span><b>Issue</b>1.1</span>
+      <span><b>Issue</b>1.2</span>
       <span><b>Applies to</b>All halls, all shows</span>
-      <span><b>Supersedes</b>Issue 1.0 (R12 relaxed: colours are chosen per meaning, not fixed)</span>
+      <span><b>Supersedes</b>Issue 1.1 (R13 and R17 relaxed to match what is actually read; R16 is SVG only; R19–R20 added)</span>
       <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
     </div>
   </header>
@@ -323,7 +323,7 @@
 
     <!-- 4 -->
     <section id="labels">
-      <h2>4 — Label placement <em>Clauses R9–R11</em></h2>
+      <h2>4 — Label placement <em>Clauses R9–R11, R19–R20</em></h2>
       <p class="lead">Label position is how software works out which text belongs to which stand. The convention below is already used on your plans and must be applied consistently.</p>
 
       <div class="diagram">
@@ -340,6 +340,7 @@
         <div>
           <h3><span class="kw must">Must</span> place each label in its fixed position</h3>
           <p>Stand number in the top-left. Area figure in the bottom-right. Exhibitor name centred. No other text may appear inside a stand.</p>
+          <p>Any text inside a stand that is neither a stand number nor an area is taken as the exhibitor's name, and only one such text object is read. A second — <em>Shell scheme</em>, <em>Space only</em>, a stand's own sub-caption — is discarded without warning.</p>
         </div>
       </div>
 
@@ -349,6 +350,25 @@
           <h3><span class="kw must">Must</span> keep every label inside its own stand</h3>
           <p>A label must sit fully within the boundary of the stand it describes. Where a stand is too small, use a leader line to a label outside the plan area rather than letting text spill into a neighbour.</p>
           <div class="why"><b>Because</b>Software assigns text to a stand by asking which stand it sits inside. A number that overhangs is assigned to the wrong stand or to none.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R19</div>
+        <div>
+          <h3><span class="kw never">Never</span> place another shape inside a stand</h3>
+          <p>No backing box behind a stand number, no panel behind an exhibitor name, no icon or badge drawn inside the stand outline. A stand contains its labels and nothing else.</p>
+          <div class="why"><b>Because</b>A label belongs to the smallest shape that contains it, which is how a number is matched to its stand in the first place. A box tucked behind the number is smaller than the stand, so it takes the number — and the stand is then recorded as a shape a few centimetres across, drawn in the right place, impossible to click.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R20</div>
+        <div>
+          <h3><span class="kw must">Must</span> write each label in the form given</h3>
+          <p>A stand number is two to five digits, with up to two letters before and one after: <code>142</code>, <code>1249</code>, <code>P014</code>, <code>A12</code>. Letters are <strong>capitals</strong>. Nothing else belongs in the text object — no <em>Stand</em>, no full stop.</p>
+          <p>An area is the figure, a space, then the unit: <code>30 m²</code>, <code>300 ft²</code>. <code>sqm</code>, <code>sqft</code>, <code>m2</code> and a bare <code>m</code> read the same, the ² may be a superscript within the same text object, and a decimal is accepted. One unit for the whole plan.</p>
+          <div class="why"><b>Because</b>A text object is recognised as a number or an area by its shape alone; there is nothing else to go on. A lower-case prefix or a number written <code>Stand 142</code> is read as an exhibitor's name, and the stand is then a stand with no number, which is to say not a stand.</div>
         </div>
       </div>
 
@@ -369,27 +389,29 @@
         <div class="cid">R12</div>
         <div>
           <h3><span class="kw must">Must</span> use exactly one flat fill per meaning</h3>
-          <p>Every stand of the same status is filled with the same flat colour, and no two meanings share a colour. The hues themselves are the designer's to choose — the software is told what each colour on the plan means when the file is received, and the colours shown on screen are set there — with two fixed rules: an <strong>available</strong> stand is white or near-white and nothing else on the plan is, and a <strong>sponsorable area</strong> (a lounge, a theatre, a conference track) is a dark fill used for those shapes only. The values below are the house defaults, and what to use if in doubt.</p>
+          <p>Every stand of the same status is filled with the same flat colour, and no two meanings share a colour. The hues themselves are the designer's to choose — the software is told what each colour on the plan means when the file is received, and the colours shown on screen are set there — with three fixed rules: an <strong>available</strong> stand is white or near-white and nothing else on the plan is; a <strong>sponsorable area</strong> (a lounge, a theatre, a conference track) is a dark fill used for those shapes only; and a <strong>taken</strong> stand is a mid-tone — neither near-white, which reads as available, nor dark, which on an early issue with few stands sold reads as a sponsorable area. The values below are the house defaults, and what to use if in doubt.</p>
           <div class="tscroll" style="margin-top:12px">
             <table>
               <thead><tr><th>Meaning</th><th>Fill</th><th>Notes</th></tr></thead>
               <tbody>
-                <tr><td>Available stand</td><td class="k"><span class="swatch" style="background:#ffffff"></span>#FFFFFF</td><td>Pure white only</td></tr>
-                <tr><td>Taken stand</td><td class="k"><span class="swatch" style="background:#fcdf6d"></span>#FCDF6D</td><td></td></tr>
-                <tr><td>Facility (catering, toilets, lounges)</td><td class="k"><span class="swatch" style="background:#60abbf"></span>#60ABBF</td><td>Must never be white</td></tr>
-                <tr><td>Structure (walls, conference rooms)</td><td class="k"><span class="swatch" style="background:#122830"></span>#122830</td><td></td></tr>
+                <tr><td>Available stand</td><td class="k"><span class="swatch" style="background:#ffffff"></span>#FFFFFF</td><td>The only near-white on the plan</td></tr>
+                <tr><td>Taken stand</td><td class="k"><span class="swatch" style="background:#fcdf6d"></span>#FCDF6D</td><td>A mid-tone, and the most-used fill on the plan</td></tr>
+                <tr><td>Reserved stand</td><td class="k">taken fill, different stroke</td><td>A different stroke <em>colour</em>. A thicker line or a glow is not read</td></tr>
+                <tr><td>Sponsorable area</td><td class="k"><span class="swatch" style="background:#122830"></span>#122830</td><td>One dark fill, on a handful of shapes only</td></tr>
+                <tr><td>Everything else</td><td class="k">any</td><td>Scenery: catering, toilets, structure. Carries no stand number</td></tr>
               </tbody>
             </table>
           </div>
           <div class="why"><b>Because</b>LEX26 used three different near-whites for stands (#FFFFFF, #FBFBF7, #FAFBFB) and also used pure white for logo boxes. Three real stands were invisible to the software, and facility boxes were nearly sold as stands.</div>
+          <div class="why"><b>Note</b>Fill and stroke may be set on the shape, on its layer or in the file's own stylesheet; all three are read, and a layer colour is inherited by the stands on it. What is not read is a fill of <code>none</code>: an outline-only stand has no colour to report and is treated as available.</div>
         </div>
       </div>
 
       <div class="clause">
         <div class="cid">R13</div>
         <div>
-          <h3><span class="kw must">Must</span> separate content onto named layers</h3>
-          <p>Minimum layer set, named exactly:</p>
+          <h3><span class="kw should">Should</span> separate content onto named layers</h3>
+          <p>Layer names are not read by the software — a shape is a stand because a stand number sits inside it, whatever layer either is on — so this clause is advisory, and a file is never returned for it alone. It is worth doing because it makes a correction request actionable: an instruction to fix three stands is followed in seconds on a layered file and takes an afternoon on a flat one. Suggested layer set:</p>
           <pre><b>STANDS</b>        <i>stand outlines only</i>
 <b>STAND-NUMBERS</b> <i>number text only</i>
 <b>STAND-AREAS</b>   <i>area text only</i>
@@ -398,7 +420,7 @@
 <b>STRUCTURE</b>     <i>walls, halls, conference space</i>
 <b>LOGOS</b>         <i>placed images</i>
 <b>ANNOTATION</b>    <i>titles, keys, arrows</i></pre>
-          <p>Nothing else may sit on <code>STANDS</code>. In particular, facility boxes and logo backing boxes must not.</p>
+          <p>Nothing else should sit on <code>STANDS</code>. In particular, facility boxes and logo backing boxes should not — and a backing box inside a stand outline is forbidden outright by R19, whatever layer it is on.</p>
         </div>
       </div>
 
@@ -424,7 +446,8 @@
 412,30,1,available,
 414,30,1,taken,Acme Lubricants Ltd
 416,24,1,taken,Northern Oils BV</pre>
-          <p><code>status</code> is one of <code>available</code>, <code>taken</code>, <code>reserved</code>. <code>exhibitor</code> may be blank.</p>
+          <p><code>status</code> is one of <code>available</code>, <code>taken</code>, <code>reserved</code>. <code>exhibitor</code> may be blank. The area column may be named <code>area</code>, <code>area_sqm</code> or <code>area_sqft</code>, and <code>hall</code> is optional.</p>
+          <p>For a revision of a plan that is already selling, ask for the current schedule before you begin. It is exported from the live event and is the authority on what each stand now is — including stands merged into a block or split into cells since the last drawing, which the previous file cannot know about.</p>
           <div class="why"><b>Why this matters more than anything else here</b>The schedule is the authoritative record. With it, stand numbers and areas are read directly and no interpretation of the drawing is required. It takes minutes to export and removes every remaining risk in this document.</div>
         </div>
       </div>
@@ -437,12 +460,9 @@
       <div class="clause">
         <div class="cid">R16</div>
         <div>
-          <h3><span class="kw must">Must</span> deliver in one of these formats</h3>
-          <ul class="list">
-            <li><strong>SVG</strong> — with live text. In Illustrator's SVG export set <em>Type</em> to <strong>SVG</strong>, never <em>Convert to outline</em>. Do not tick <em>Preserve Illustrator Editing Capabilities</em>.</li>
-            <li><strong>DWG or DXF</strong> — with text as <code>TEXT</code> or <code>MTEXT</code> entities, never exploded to geometry.</li>
-            <li><strong>PDF</strong> — with embedded fonts and selectable text, as a secondary format only.</li>
-          </ul>
+          <h3><span class="kw must">Must</span> deliver as SVG, under 8 MB</h3>
+          <p><strong>SVG</strong>, with live text, is the only format that can be loaded. In Illustrator's SVG export set <em>Type</em> to <strong>SVG</strong>, never <em>Convert to outline</em>, and do not tick <em>Preserve Illustrator Editing Capabilities</em>. Work drawn in AutoCAD is delivered via DWG or PDF with text as <code>TEXT</code> or <code>MTEXT</code>, converted to SVG as the last step, with the text surviving as text at every stage.</p>
+          <p>The file must be under <strong>8 MB</strong>. What pushes a plan over it is embedded logo bitmaps; place them at the size they are drawn rather than embedding a print-resolution original.</p>
           <p>A flattened PNG or JPEG is not an acceptable delivery format under any circumstances.</p>
         </div>
       </div>
@@ -450,8 +470,9 @@
       <div class="clause">
         <div class="cid">R17</div>
         <div>
-          <h3><span class="kw must">Must</span> keep geometry untransformed</h3>
-          <p>Apply no scaling, rotation or group transforms to stand shapes at export. Coordinates must be baked into the geometry so a stand's position can be read directly.</p>
+          <h3><span class="kw must">Must</span> keep the drawing frame stable between issues</h3>
+          <p>Groups, nested groups, transforms and rotated stands are all resolved on receipt and need no special handling — an earlier issue of this clause asked for geometry to be baked flat, which is neither necessary nor how any of these tools export.</p>
+          <p>What must not change is the frame. Across issues of the same plan, keep the artboard, the origin and the scale identical, so a stand that has not moved is drawn at the same coordinates as before. A re-issue drawn on a shifted or rescaled artboard reports every stand on the plan as having moved.</p>
         </div>
       </div>
 
@@ -483,7 +504,9 @@ LEX26_StandSchedule_v03.csv</pre>
             <tr><td class="box">☐</td><td>Labels inside stands</td><td>Every number and area sits within its own stand</td></tr>
             <tr><td class="box">☐</td><td>Numbers unique</td><td>No stand number appears twice</td></tr>
             <tr><td class="box">☐</td><td>Colours consistent</td><td>One flat fill per meaning; one near-white, on available stands only</td></tr>
-            <tr><td class="box">☐</td><td>Layers correct</td><td>Nothing but stands on the <code>STANDS</code> layer</td></tr>
+            <tr><td class="box">☐</td><td>Nothing inside a stand</td><td>No backing box or panel within a stand outline</td></tr>
+            <tr><td class="box">☐</td><td>Labels in form</td><td>Numbers in capitals; one unit across the plan</td></tr>
+            <tr><td class="box">☐</td><td>Frame unchanged</td><td>Same artboard, origin and scale as the previous issue</td></tr>
             <tr><td class="box">☐</td><td>Schedule supplied</td><td>CSV present, same version, row count matches stand count</td></tr>
             <tr><td class="box">☐</td><td>Schedule agrees with drawing</td><td>Every number and area matches</td></tr>
           </tbody>

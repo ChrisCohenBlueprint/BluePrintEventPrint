@@ -237,10 +237,18 @@
     // rect in the plan becomes a SECOND-CHANCE pool, reached only by a stand
     // that finds nothing in the primary. Binding is by geometry, so a wider
     // pool cannot mis-bind anything that already had a match.
+    //
+    // <polygon> is in the spare pool because the spec allows a corner stand to
+    // be a closed polygon and the reader now extracts them. Without it such a
+    // stand still binds, but only to a transparent rectangle laid over its
+    // BOUNDING BOX — which on an L-shaped stand covers part of its neighbour
+    // and swallows the neighbour's clicks. With it, the stand is its own shape.
+    // <path> is deliberately not here: on a plan whose text was outlined every
+    // glyph is a path, and a pool of thousands would be searched once per stand.
     var primary = Array.prototype.slice.call(svgDoc.querySelectorAll(ARTWORK_SELECTOR));
     var seen = [];
     for (var pi = 0; pi < primary.length; pi++) seen.push(primary[pi]);
-    var spare = Array.prototype.slice.call(svgDoc.querySelectorAll('rect'))
+    var spare = Array.prototype.slice.call(svgDoc.querySelectorAll('rect, polygon'))
       .filter(function (el) { return seen.indexOf(el) === -1; });
 
     var artwork = primary.concat(spare);

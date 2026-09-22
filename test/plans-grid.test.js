@@ -52,6 +52,17 @@ const PLANS = [
             summary: { added: 3, moved: 1, resized: 0, unchanged: 89, missing: 2, committedMissing: 1 } },
   }) }));
 
+  // The stand schedule handed to a designer before a re-issue. Fetched rather
+  // than linked, because the event is named in a header an <a href> cannot
+  // send — so what this asserts is that the right event's schedule is asked
+  // for, not merely that a button exists.
+  const schedules = [];
+  await page.route('**/api/stands/schedule.csv', r => {
+    schedules.push({ show: r.request().headers()['x-show'] });
+    r.fulfill({ status: 200, contentType: 'text/csv; charset=utf-8',
+                body: 'stand_number,area,unit,status,exhibitor,note\r\n101,30,sqm,taken,Acme,\r\n' });
+  });
+
   const uploads = [];
   await page.route('**/api/floorplan', r => {
     const req = r.request();
@@ -183,6 +194,28 @@ const PLANS = [
   check('sends the chosen colour and leaves the rest unset',
         w && w.body.palette.sold === '#112233' && w.body.palette.held === null && w.body.palette.available === null,
         JSON.stringify(w && w.body));
+
+  console.log('\nThe stand schedule, for a plan that is already selling');
+  const schedButtons = await page.evaluate(() => [...document.querySelectorAll('.plan-card')].map(c => ({
+    name: c.querySelector('.plan-name')?.textContent,
+    offered: [...c.querySelectorAll('.plan-actions .admin-btn')]
+      .some(b => !b.hidden && b.textContent.trim() === 'Stand schedule'),
+  })));
+  check('offered on the event that has stands positioned against its plan',
+        schedButtons.find(c => /Europe/.test(c.name)).offered,
+        JSON.stringify(schedButtons));
+  check('and not on an event with no stands yet — there is nothing to schedule',
+        !schedButtons.find(c => /North America/.test(c.name)).offered);
+
+  await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.plan-card')]
+      .find(c => /Europe/.test(c.querySelector('.plan-name')?.textContent || ''));
+    [...card.querySelectorAll('.plan-actions .admin-btn')]
+      .find(b => b.textContent.trim() === 'Stand schedule').click();
+  });
+  await page.waitForTimeout(600);
+  check('downloading it asks for THAT event\'s stands',
+        schedules.length === 1 && schedules[0].show === 'lex', JSON.stringify(schedules));
 
   await br.close();
   server.close();

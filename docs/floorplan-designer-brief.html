@@ -210,9 +210,9 @@
     <h1>How to draw a floorplan the interactive plan can read</h1>
     <p class="sub">The plan you draw is not printed. It is loaded into software that finds every stand, reads its number, its size and its name, colours it by whether it is sold, and lets visitors click it. This brief is how to draw so that all of that happens on its own — and how to re-issue a plan once a show has started selling.</p>
     <div class="issue">
-      <span><b>Issue</b>1.0</span>
+      <span><b>Issue</b>1.1</span>
       <span><b>Applies to</b>Every new plan and every revision</span>
-      <span><b>Goes with</b>Specification BEC-FP-01 (issue 1.1)</span>
+      <span><b>Goes with</b>Specification BEC-FP-01 (issue 1.2)</span>
       <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
     </div>
   </header>
@@ -253,12 +253,15 @@
           <p>Draw every stand as its own rectangle, even where a row of stands shares a wall.</p>
           <p>Draw to true scale, so a 30 m² stand is drawn as 30 m² of hall.</p>
           <p>Delete construction lines, guides and collapsed rectangles before exporting.</p>
+          <p>Use the rectangle, polygon or pen tool. Rounded corners are fine, and a closed polygon is fine for a corner stand.</p>
+          <p>Expand symbols, instances and clones into real shapes before exporting.</p>
         </div>
         <div class="dont">
           <h4>Don't</h4>
           <p>Draw a block for a row of stands and divide it with lines on top — that is one stand to the software, with several numbers in it.</p>
           <p>Leave an older rectangle underneath a newer one. Two shapes on one footprint is two stands, or a stand the software cannot choose.</p>
           <p>Build a stand from four separate lines. An open path has no inside, so no number can sit in it.</p>
+          <p>Leave a stand as a symbol or a linked instance. It exports as a reference to a shape drawn elsewhere, and the plan has no stand where you drew one.</p>
         </div>
       </div>
     </section>
@@ -289,13 +292,18 @@
         <table>
           <thead><tr><th>Label</th><th>Where</th><th>Write it as</th><th>Notes</th></tr></thead>
           <tbody>
-            <tr><td>Stand number</td><td>Top-left corner</td><td class="k">142 · 1249 · P014 · A12</td><td>Two to five digits, with up to two letters in front and one after if the show uses them. Nothing else in the text object — no "Stand", no full stop.</td></tr>
-            <tr><td>Size</td><td>Bottom-right corner</td><td class="k">30 m² · 300 ft²</td><td>The number, a space, then <span class="mono">m²</span> or <span class="mono">ft²</span> (<span class="mono">sqm</span> and <span class="mono">sqft</span> also read). One unit for the whole plan. The ² may be its own superscript run inside the same text object; that is fine.</td></tr>
-            <tr><td>Exhibitor name</td><td>Centred</td><td class="k">Acme Lubricants Ltd</td><td>Optional. One text object; two lines inside it are fine. Any text that is not a number or a size is taken as the name, so nothing else goes inside a stand.</td></tr>
+            <tr><td>Stand number</td><td>Top-left corner</td><td class="k">142 · 1249 · P014 · A12</td><td>Two to five digits, with up to two letters in front and one after if the show uses them. Letters in <strong>capitals</strong>. Nothing else in the text object — no "Stand", no full stop.</td></tr>
+            <tr><td>Size</td><td>Bottom-right corner</td><td class="k">30 m² · 300 ft²</td><td>The number, a space, then <span class="mono">m²</span> or <span class="mono">ft²</span>. <span class="mono">sqm</span>, <span class="mono">sqft</span>, <span class="mono">m2</span> and a bare <span class="mono">m</span> read the same, the ² may be a superscript run inside the same text object, and a decimal is fine. One unit for the whole plan.</td></tr>
+            <tr><td>Exhibitor name</td><td>Centred</td><td class="k">Acme Lubricants Ltd</td><td>Optional. <strong>One</strong> text object; two lines inside it are fine. Any text that is not a number or a size is taken as the name, and only the first such text object is read — so a second caption inside the stand ("Shell scheme", "Space only") is lost.</td></tr>
           </tbody>
         </table>
       </div>
       <p>A small stand whose number does not fit: shrink the type, never let it spill. If it truly cannot fit, leave the size off (the software works it out from the drawing) and keep the number.</p>
+
+      <div class="callout warn">
+        <h4>Nothing else goes inside a stand</h4>
+        <p>No backing box behind the number, no panel behind the name, no icon or badge within the stand outline. A label belongs to the <em>smallest</em> shape it sits in, so a box tucked behind a number takes that number for itself — and the stand is then recorded as a shape a few centimetres across. It looks perfect on the plan and cannot be clicked. If a number needs to be legible over busy artwork, set it in a darker weight rather than boxing it.</p>
+      </div>
     </section>
 
     <section id="areas">
@@ -312,14 +320,15 @@
           <thead><tr><th>Meaning</th><th>How it is recognised</th><th>House default</th></tr></thead>
           <tbody>
             <tr><td>Available stand</td><td>White or near-white. The <strong>only</strong> near-white on the plan — a white logo box or a pale facility reads as a stand for sale.</td><td class="k"><span class="swatch" style="background:#ffffff"></span>#FFFFFF</td></tr>
-            <tr><td>Taken stand</td><td>One mid-tone fill, the most-used colour on the plan.</td><td class="k"><span class="swatch" style="background:#fcdf6d"></span>#FCDF6D</td></tr>
-            <tr><td>Reserved stand</td><td>The taken fill with a <strong>different outline</strong> — a red stroke, a glow. A stand outlined unlike every other is read as reserved.</td><td class="k"><span class="swatch" style="background:#fcdf6d;border-color:#ed1c24;border-width:2px"></span>red stroke</td></tr>
+            <tr><td>Taken stand</td><td>One <strong>mid-tone</strong> fill, the most-used colour on the plan. Not a pale tint, which reads as available; not a dark one, which on a first issue with few stands sold reads as a sponsorable area.</td><td class="k"><span class="swatch" style="background:#fcdf6d"></span>#FCDF6D</td></tr>
+            <tr><td>Reserved stand</td><td>The taken fill with a <strong>different stroke colour</strong> — red is the house choice. It is the colour that is read: a thicker line, a dashed one or a glow is not enough on its own.</td><td class="k"><span class="swatch" style="background:#fcdf6d;border-color:#ed1c24;border-width:2px"></span>red stroke</td></tr>
             <tr><td>Sponsorable area</td><td>One dark fill, used for a handful of shapes only (section 4).</td><td class="k"><span class="swatch" style="background:#122830"></span>#122830</td></tr>
             <tr><td>Everything else</td><td>Anything at all, as long as it carries no stand number.</td><td class="k">—</td></tr>
           </tbody>
         </table>
       </div>
       <p>Fills on stands are flat and opaque: no gradients, patterns, transparency, blend modes or clipping masks on the stand shapes themselves. A stand whose fill cannot be read is treated as available, and a plan where most cannot be read is refused.</p>
+      <p>Colour the stand, its layer or its style — all three are read, and a colour set on a layer is inherited by the stands on it. The one thing that is not a colour is <span class="mono">none</span>: a stand drawn as an outline with no fill has nothing to say what it is, and is taken as available.</p>
     </section>
 
     <section id="text">
@@ -333,12 +342,16 @@
       <h2>7 — Re-issuing a plan <em>after selling has started</em></h2>
       <p class="lead">A plan is often redrawn once stands are already sold — a hall extension, a row moved, a block split. The new drawing is laid over the live event without touching a single booking, and that works on one condition: <strong>a stand keeps its number from one issue to the next.</strong></p>
       <p>The number is how a stand on the new drawing is matched to the stand already sold. Renumber a sold stand and the software sees one stand vanish and a new one appear; the booking stays on the old number and shows nowhere on the map until someone reconciles it by hand.</p>
+      <div class="callout">
+        <h4>Ask for the current stand schedule first</h4>
+        <p>Before redrawing a plan that is already selling, ask us for the stand schedule. It is exported from the live event on the day, and it is the only record of what has happened to the layout since your last file: stands merged into a single block, a stand split into cells, a number changed. Redrawing from your own last version instead undoes all of it, and every one of those stands comes back through the check as moved, resized or missing — with a booking underneath. The schedule names each one in its <span class="mono">note</span> column.</p>
+      </div>
       <div class="two">
         <div class="do">
           <h4>Do</h4>
           <p>Keep every existing stand number exactly as it was, whether or not the stand moved or changed size.</p>
           <p>Give new stands new numbers — an extension takes the next block (<span class="mono">501–540</span>), never numbers freed by a removed stand.</p>
-          <p>Keep the artboard, the origin and the scale identical to the previous issue, so a stand that did not move is drawn at the same coordinates.</p>
+          <p>Keep the artboard, the origin and the scale identical to the previous issue, so a stand that did not move is drawn at the same coordinates. A stand is compared to within one drawing unit, so nudging a row to tidy its alignment reports the whole row as moved.</p>
           <p>Put the version in the filename and send a short change note: added, removed, moved, renumbered.</p>
         </div>
         <div class="dont">
@@ -371,12 +384,13 @@
         </table>
       </div>
       <p>Groups, layers and transforms are fine — the software resolves them. Rotated stands are fine. What is not fine is anything that turns a number into a picture of a number.</p>
+      <p>Keep the file under <strong>8 MB</strong>; anything larger is refused on upload. It is almost always an embedded logo that takes a plan over: place logos at the size they are drawn rather than embedding the print original.</p>
     </section>
 
     <section id="send">
       <h2>9 — Before you send <em>a two-minute check</em></h2>
       <pre><b>LNA27_Floorplan_v03.svg</b>          <i>show, document, version</i>
-<b>LNA27_StandSchedule_v03.csv</b>      <i>optional but welcome: stand_number, area, status, exhibitor</i>
+<b>LNA27_StandSchedule_v03.csv</b>      <i>required: stand_number, area, status, exhibitor</i>
 <b>LNA27_Changes_v03.txt</b>            <i>for a revision: added / removed / moved / renumbered</i></pre>
       <div class="tscroll">
         <table class="check">
@@ -384,11 +398,14 @@
           <tbody>
             <tr><td class="box">☐</td><td>Text is live</td><td>Open the SVG in a browser; a stand number can be selected with the cursor</td></tr>
             <tr><td class="box">☐</td><td>One shape per stand</td><td>No rectangle has two numbers in it; no block rectangle behind a row</td></tr>
+            <tr><td class="box">☐</td><td>Nothing inside a stand</td><td>No backing box, panel or badge within a stand outline</td></tr>
             <tr><td class="box">☐</td><td>Labels inside</td><td>Every number, size and name sits wholly inside its own stand</td></tr>
             <tr><td class="box">☐</td><td>One unit</td><td>Every size reads <span class="mono">m²</span> or every size reads <span class="mono">ft²</span></td></tr>
             <tr><td class="box">☐</td><td>Colours consistent</td><td>One flat fill per meaning; one near-white, on available stands only; areas in their own dark fill</td></tr>
             <tr><td class="box">☐</td><td>Numbers unique</td><td>No number appears on two shapes; none reused from a previous issue</td></tr>
             <tr><td class="box">☐</td><td>Revision stable</td><td>Same artboard, origin and scale; sold stands keep their numbers</td></tr>
+            <tr><td class="box">☐</td><td>Schedule attached</td><td>A CSV of every stand, same version as the drawing</td></tr>
+            <tr><td class="box">☐</td><td>Under 8 MB</td><td>Logos placed at drawn size, not embedded at print resolution</td></tr>
             <tr><td class="box">☐</td><td>Named and versioned</td><td>Show, document and version in the filename; version bumped on every change</td></tr>
           </tbody>
         </table>

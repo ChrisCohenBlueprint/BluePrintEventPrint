@@ -62,6 +62,21 @@ check('duplicate stand numbers are caught', sched.failedClauses.includes('R11'))
 check('a supplied schedule stops R15 complaining it is missing',
       !sched.results.some(x => !x.ok && x.clause === 'R15' && /no schedule supplied/.test(x.detail)));
 
+// The schedule's own column names. R15 required the single spelling
+// "area_sqm", while the designer brief's checklist asks for "area" — so a
+// designer who followed the document they were given failed the clause, and
+// nothing they could do satisfied both. A plan measured in square feet has no
+// square-metre column to give either.
+const headers = (h) => validate(live, { scheduleText: `${h}\n101,30,available` })
+  .results.filter(x => !x.ok && x.clause === 'R15' && /missing/.test(x.detail));
+check('a schedule headed area_sqm is accepted', headers('stand_number,area_sqm,status').length === 0);
+check('a schedule headed area is accepted too', headers('stand_number,area,status').length === 0,
+      JSON.stringify(headers('stand_number,area,status').map(x => x.detail)));
+check('so is area_sqft, for a plan drawn in feet', headers('stand_number,area_sqft,status').length === 0);
+check('a schedule with no area column at all is still caught',
+      headers('stand_number,status').length === 1,
+      JSON.stringify(headers('stand_number,status').map(x => x.detail)));
+
 const f = out.filter(x => !x).length;
 console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);
 process.exit(f ? 1 : 0);

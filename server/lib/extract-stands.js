@@ -32,6 +32,8 @@
  * text was right there. Everything below is deliberately dialect-agnostic.
  */
 
+const { pathBBox } = require('../../scripts/svg-paths');
+
 // ─── Transforms ───────────────────────────────────────────────────────────────
 // A 2×3 affine matrix [a b c d e f], as SVG writes it. Everything a plan can do
 // to place a shape — translate, scale, rotate by any angle, an explicit
@@ -208,22 +210,95 @@ function lightness(colour) {
  * translated <g>; read without it, every shape sits a few hundred units away
  * from its own label and the plan reads as empty.
  */
-const WALK = /<g\b([^>]*?)(\/?)>|<\/g\s*>|<rect\b([^>]*?)\/?>|<text\b([^>]*?)>([\s\S]*?)<\/text\s*>/g;
+const WALK = /<g\b([^>]*?)(\/?)>|<\/g\s*>|<rect\b([^>]*?)\/?>|<(polygon|path)\b([^>]*?)\/?>|<text\b([^>]*?)>([\s\S]*?)<\/text\s*>/g;
+
+/**
+ * The box a <polygon>'s points occupy, in the polygon's own space.
+ *
+ * Read because the spec allows a corner stand to be a closed polygon, and a
+ * reader that knew only <rect> did not merely mis-place such a stand — it
+ * never saw it. Its number then sat inside no shape at all and was reported
+ * back to the designer as a stray label on artwork that was correct.
+ */
+function polygonBox(attrs) {
+  const pts = (attr(attrs, 'points') || '').trim();
+  if (!pts) return null;
+  const n = pts.split(/[\s,]+/).map(parseFloat).filter(Number.isFinite);
+  if (n.length < 6) return null;              // fewer than three corners is not a shape
+  const xs = [], ys = [];
+  for (let i = 0; i + 1 < n.length; i += 2) { xs.push(n[i]); ys.push(n[i + 1]); }
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+
+/**
+ * The box a CLOSED <path> occupies, in the path's own space.
+ *
+ * A rounded-corner rectangle is not a <rect> once Illustrator has exported it,
+ * and neither is a stand drawn with the pen tool. Only CLOSED paths are taken:
+ * an open path has no inside for a label to sit in (spec R7), and leaving the
+ * open ones out keeps aisle lines, leader lines and hall hatching from
+ * presenting themselves as candidate stands.
+ */
+function closedPathBox(attrs) {
+  const d = attr(attrs, 'd');
+  if (!d || !/z/i.test(d)) return null;
+  let b = null;
+  try { b = pathBBox(d); } catch { return null; }
+  if (!b || !(b.w > 0) || !(b.h > 0)) return null;
+  return { x: b.x0, y: b.y0, w: b.w, h: b.h };
+}
+
+/**
+ * What a group passes down to the shapes inside it.
+ *
+ * fill and stroke INHERIT in SVG. A plan that colours a row of stands by
+ * putting fill on their layer — which is what a designer does when they
+ * recolour a block in one action — states nothing on the rectangles
+ * themselves, so a reader that looked only at the element read no colour,
+ * counted the stands as unreadable and offered sold stands for sale.
+ */
+function inheritPaint(parent, attrs) {
+  const own = ownPaint(attrs);
+  return {
+    styleFill:   own.styleFill   || parent.styleFill   || null,
+    styleStroke: own.styleStroke || parent.styleStroke || null,
+    attrFill:    own.attrFill    || parent.attrFill    || null,
+    attrStroke:  own.attrStroke  || parent.attrStroke  || null,
+    cls:         (attr(attrs, 'class') || '') || parent.cls || '',
+  };
+}
 
 function readShapes(svg) {
   const rects = [];
   const texts = [];
   const stack = [IDENTITY];
+  const paints = [{ cls: '' }];
   const here = () => stack[stack.length - 1];
+  const inherited = () => paints[paints.length - 1];
+
+  const pushShape = (a, raw, kind) => {
+    // Where the shape actually appears, which is the space the text labels
+    // are positioned in and the only space they can be matched in.
+    const vis = transformRect(mul(here(), parseTransform(attr(a, 'transform'))), raw);
+    rects.push({ cls: attr(a, 'class') || '', ...vis, raw, kind,
+                 paint: ownPaint(a), inherit: inherited() });
+  };
 
   for (const m of svg.matchAll(WALK)) {
-    if (m[0][1] === '/') { if (stack.length > 1) stack.pop(); continue; }      // </g>
+    if (m[0][1] === '/') {                                                    // </g>
+      if (stack.length > 1) { stack.pop(); paints.pop(); }
+      continue;
+    }
 
     if (m[0].startsWith('<g')) {
       const t = parseTransform(attr(m[1], 'transform'));
       // A self-closing <g/> opens nothing, so it must not push a level the
       // matching </g> that never comes would have to pop.
-      if (m[2] !== '/') stack.push(mul(here(), t));
+      if (m[2] !== '/') {
+        stack.push(mul(here(), t));
+        paints.push(inheritPaint(inherited(), m[1]));
+      }
       continue;
     }
 
@@ -236,16 +311,22 @@ function readShapes(svg) {
       // binds a stand to its shape — it reads the x/y/width/height attributes
       // and does NOT apply the element's own transform — so it is what must be
       // stored.
-      const raw = { x, y, w, h };
-      // Where the shape actually appears, which is the space the text labels
-      // are positioned in and the only space they can be matched in.
-      const vis = transformRect(mul(here(), parseTransform(attr(a, 'transform'))), raw);
-      rects.push({ cls: attr(a, 'class') || '', ...vis, raw, paint: ownPaint(a) });
+      pushShape(a, { x, y, w, h }, 'rect');
+      continue;
+    }
+
+    if (m[0].startsWith('<polygon') || m[0].startsWith('<path')) {
+      const a = m[5];
+      const raw = m[4] === 'polygon' ? polygonBox(a) : closedPathBox(a);
+      // The page binds one of these by its drawn box rather than by x/y/width/
+      // height attributes it does not have, and that box is the untransformed
+      // one, exactly as stored here.
+      if (raw) pushShape(a, raw, m[4]);
       continue;
     }
 
     // <text>
-    const attrs = m[4], body = m[5];
+    const attrs = m[6], body = m[7];
     const own = parseTransform(attr(attrs, 'transform'));
     const matrix = mul(here(), own);
     // Where the run starts. A transform-positioned run (Illustrator) puts the
@@ -308,19 +389,27 @@ function repairMojibake(s) {
  * the two comparing differently is how a name stayed printed on the plan.
  */
 function flattenText(body) {
-  // Multi-line labels are tspans on different baselines. Joining them
-  // blind gives "NetworkingLounge", so a change of baseline becomes a space.
-  let out = body;
-  const spans = [...body.matchAll(/<tspan([^>]*)>([\s\S]*?)<\/tspan>/g)];
-  if (spans.length) {
-    let lastY = null;
-    out = spans.map(sp => {
-      const y = attr(sp[1], 'y');
-      const brk = lastY !== null && y !== null && y !== lastY ? ' ' : '';
-      lastY = y;
-      return brk + sp[2];
-    }).join('');
+  // Text OUTSIDE the tspans is kept as well as the text inside them. Reading
+  // only the tspans looks right on a label that is entirely tspans, and throws
+  // away the label on one that is not: "30 m<tspan>²</tspan>" — which is what
+  // a superscript inside one text object exports as — read as "²" alone, so
+  // the plan printed no areas at all.
+  let out = '';
+  let lastY = null;
+  let at = 0;
+  const re = /<tspan([^>]*)>([\s\S]*?)<\/tspan>/g;
+  let sp;
+  while ((sp = re.exec(body)) !== null) {
+    out += body.slice(at, sp.index);
+    const y = attr(sp[1], 'y');
+    // Multi-line labels are tspans on different baselines. Joining them
+    // blind gives "NetworkingLounge", so a change of baseline becomes a space.
+    if (lastY !== null && y !== null && y !== lastY) out += ' ';
+    lastY = y;
+    out += sp[2];
+    at = sp.index + sp[0].length;
   }
+  out += body.slice(at);
   return repairMojibake(decodeEntities(out.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim());
 }
 
@@ -342,7 +431,18 @@ const labelRuns = (texts) => texts.filter(t => !(/scale\(/.test(t.transform) && 
 const readTexts = (svg) => labelRuns(readShapes(svg).texts);
 
 const NUMBER = /^[A-Z]{0,2}\d{2,5}[A-Z]?$/;          // 142, 1249, P014, A12
-const AREA   = /^([\d,]+)\s*(ft|m|sqm|sqft)$/i;      // "200ft" — the ² is separate
+/**
+ * A printed area.
+ *
+ * Every spelling a designer can reasonably type, because the alternative is
+ * reading none of them: the ² may be a separate scaled run (Illustrator's
+ * habit, and the only spelling this once accepted), a superscript tspan inside
+ * the same text object, a plain "2", or absent. Sizes may carry a decimal.
+ * A plan that wrote "30 m²" as one text object — which is what typing it does
+ * — printed no area on any stand, and every area on the plan was then derived
+ * from the drawing instead of read from the label beside it.
+ */
+const AREA   = /^([\d,]+(?:\.\d+)?)\s*(sqm|sqft|m|ft)\s*[²2]?$/i;
 
 /**
  * Pull the stands out of a floorplan.
@@ -373,7 +473,7 @@ function extractStands(svg) {
       : `${allTexts.length} text runs were found, but none of them reads as a stand number ` +
         `(expected something like 142, 1249 or P014).`;
     return { stands: [], unit: null, unitsPerArea: null, fills: [], printedNames: [],
-             issues: { collisions: [], repeated: [], orphans: [], noArea: [], sizeDisagrees: [] },
+             issues: { collisions: [], repeated: [], orphans: [], implausible: [], noArea: [], sizeDisagrees: [] },
              rects: rects.length, texts: allTexts.length, warnings: [why] };
   }
 
@@ -401,14 +501,69 @@ function extractStands(svg) {
   // A shape is a stand because it carries a number, not because of its fill —
   // class names and colours mean different things in different exports, and
   // the number is the thing every plan agrees on.
-  const standOf = new Map();
-  const collisions = [];
-  for (const n of numbers) {
-    const r = smallestAround(n, rects);
-    if (!r) continue;
-    if (standOf.has(r)) { collisions.push(`${standOf.get(r).text}/${n.text}`); continue; }
-    standOf.set(r, n);
+  const matchInto = (pool) => {
+    const standOf = new Map();
+    const collisions = [];
+    for (const n of numbers) {
+      const r = smallestAround(n, pool);
+      if (!r) continue;
+      if (standOf.has(r)) { collisions.push(`${standOf.get(r).text}/${n.text}`); continue; }
+      standOf.set(r, n);
+    }
+    return { standOf, collisions };
+  };
+
+  let { standOf, collisions } = matchInto(rects);
+
+  /**
+   * Shapes that cannot be a stand at all, taken out and the numbers matched
+   * again.
+   *
+   * "Smallest shape the label sits in" is the right rule and the wrong rule at
+   * the extremes. A white backing box tucked behind a stand number is smaller
+   * than the stand, so it wins — and the stand is then stored with the box's
+   * geometry, a few units across, which is not a failure anyone would see until
+   * a customer cannot click the stand. A hall outline or a closed background
+   * path is larger than every stand, and it collects any number that happens to
+   * fall outside its own shape, turning a reportable stray label into a stand
+   * the size of the hall.
+   *
+   * The two ends are recognised differently, and neither by a fixed size.
+   *
+   * Too small is judged against the median stand on the same drawing: a tenth
+   * of it is a label box, not a stand.
+   *
+   * Too large is NOT judged on size at all, because a plan's feature areas are
+   * legitimately many times the median stand — North America's theatre is
+   * 3500 ft² against a 300 ft² median, and a size rule at the top end threw all
+   * three of its sponsorable areas away. What distinguishes a hall outline from
+   * a large stand is not how big it is but what is inside it: an outline has
+   * whole stands within its bounds, and a stand, however large, has none.
+   *
+   * Nothing is discarded silently — what was rejected is reported.
+   */
+  const implausible = [];
+  if (standOf.size >= 5) {
+    const sizes = [...standOf.keys()].map(area).sort((a, b) => a - b);
+    const median = sizes[Math.floor(sizes.length / 2)];
+    const holds = (outer, inner) =>
+      inner !== outer && inner.x >= outer.x - T && inner.y >= outer.y - T &&
+      inner.x + inner.w <= outer.x + outer.w + T && inner.y + inner.h <= outer.y + outer.h + T;
+    const matched = [...standOf.keys()];
+    const encloses = (r) => matched.filter(o => holds(r, o)).length;
+    const plausible = (r) => area(r) >= median * 0.1 && encloses(r) < 3;
+    const rejects = matched.filter(r => !plausible(r));
+    if (rejects.length) {
+      for (const r of rejects) implausible.push(standOf.get(r).text);
+      ({ standOf, collisions } = matchInto(rects.filter(plausible)));
+      warnings.push(
+        `${rejects.length} stand numbers sat inside a shape that cannot be a stand ` +
+        `(${implausible.slice(0, 8).join(', ')}) — usually a backing box behind the number, or the hall ` +
+        `outline with stands drawn inside it. Those shapes were ignored and the numbers matched to the ` +
+        `stand around them.`);
+    }
   }
+
   if (collisions.length) {
     warnings.push(`${collisions.length} shapes carry two stand numbers (${collisions.join(', ')}) — usually a stale label left under a newer one. Only the first is kept; the artwork needs correcting.`);
   }
@@ -428,13 +583,27 @@ function extractStands(svg) {
   const areaFor = takeFor(areas);
   const nameFor = takeFor(others);
 
+  // "none" and "transparent" are the absence of a colour, not a colour. Left as
+  // strings they read as unlightenable — which is to say dark — and a stand
+  // drawn as an outline only imported as SOLD, invisible to sales for the run
+  // of the show. Unreadable defaults to available; see statusFromColour.
+  const colour = (v) => (v && v !== 'none' && v !== 'transparent' ? v : null);
+
   // Cascade order: an inline style beats the plan's own CSS class, which beats a
   // presentation attribute. All three are read, because which one a plan uses
-  // is a property of the tool that drew it and nothing else.
+  // is a property of the tool that drew it and nothing else. What the shape
+  // says about itself is then preferred to what its layers say, which is the
+  // order SVG itself inherits in.
   const paintOf = (r) => {
     const cls = palette[r.cls] || {};
-    return { fill:   r.paint.styleFill   || cls.fill   || r.paint.attrFill   || null,
-             stroke: r.paint.styleStroke || cls.stroke || r.paint.attrStroke || null };
+    const up = r.inherit || {};
+    const upCls = palette[up.cls] || {};
+    return {
+      fill: colour(r.paint.styleFill || cls.fill || r.paint.attrFill ||
+                   up.styleFill || upCls.fill || up.attrFill || null),
+      stroke: r.paint.styleStroke || cls.stroke || r.paint.attrStroke ||
+              up.styleStroke || upCls.stroke || up.attrStroke || null,
+    };
   };
 
   const stands = [];
@@ -446,7 +615,7 @@ function extractStands(svg) {
     const paint = paintOf(r);
     stands.push({
       number: n.text,
-      printedArea: a ? parseInt(AREA.exec(a.text)[1].replace(/,/g, ''), 10) : null,
+      printedArea: a ? Math.round(parseFloat(AREA.exec(a.text)[1].replace(/,/g, '')) * 100) / 100 : null,
       geometry: { x: +r.raw.x.toFixed(2), y: +r.raw.y.toFixed(2),
                   w: +r.raw.w.toFixed(2), h: +r.raw.h.toFixed(2) },
       visual: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), w: +r.w.toFixed(2), h: +r.h.toFixed(2) },
@@ -540,6 +709,7 @@ function extractStands(svg) {
     collisions,                                  // "134/138": two numbers in one shape
     repeated: repeated.slice(),                  // one number on two shapes
     orphans: orphans.map(o => o.text),           // a number outside every shape
+    implausible,                                 // a number inside a shape no stand could be
     noArea: stands.filter(s => s.printedArea == null).map(s => s.number),
     sizeDisagrees: disagree.slice(),
   };

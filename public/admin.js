@@ -4183,7 +4183,20 @@ function planCard(row, isCurrent) {
   col.textContent = 'Colours';
   col.onclick = () => openPalettePanel(row);
 
-  actions.append(up, dl, imp, col, rm);
+  // The layout as it stands NOW, to send the designer before they redraw.
+  // Their last file does not know about a stand this console has since merged,
+  // split or renumbered, so a re-issue drawn from it comes back undoing all of
+  // it — and the diff reports those as sold stands that have moved or gone.
+  // Offered only where there are stands to schedule.
+  const sch = document.createElement('button');
+  sch.type = 'button';
+  sch.className = 'admin-btn';
+  sch.textContent = 'Stand schedule';
+  sch.title = 'The current stands as a CSV — send this to the designer with the brief before a plan is redrawn.';
+  sch.hidden = !row.boothCount;
+  sch.onclick = () => downloadSchedule(row, sch);
+
+  actions.append(up, dl, imp, col, sch, rm);
 
   // Only where there is something to lose.
   const parts = [head, preview, meta];
@@ -4197,6 +4210,44 @@ function planCard(row, isCurrent) {
   parts.push(actions);
   card.append(...parts);
   return card;
+}
+
+/**
+ * Download this event's stands as the schedule specification BEC-FP-01 asks a
+ * designer to send back with a drawing.
+ *
+ * Fetched rather than linked because the event is named in the X-Show header,
+ * which an <a href> cannot send — a plain link would hand over the DEFAULT
+ * event's stands under this event's filename, which is worse than no link.
+ */
+async function downloadSchedule(row, btn) {
+  const was = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Preparing…';
+  try {
+    const res = await fetch('/api/stands/schedule.csv', { headers: { 'X-Show': row.slug } });
+    if (res.status === 401) {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+      return;
+    }
+    if (!res.ok) throw new Error(`Could not build the schedule (${res.status}).`);
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${row.slug}-stand-schedule-${csvDate()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoked on a delay: revoking in the same tick cancels the download in
+    // Safari, which reads the blob after the click returns.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    adminToast(`Stand schedule downloaded — send it to the designer with the brief.`, 'ok');
+  } catch (e) {
+    adminToast(e.message || 'Could not build the schedule.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = was;
+  }
 }
 
 /**
