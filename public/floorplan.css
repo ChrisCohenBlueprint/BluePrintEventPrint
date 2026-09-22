@@ -495,27 +495,24 @@ body {
   filter: drop-shadow(0 0 8px rgba(79,70,229,.8)) !important;
 }
 
-/* ON HOLD is drawn, not animated.
-   It used to pulse opacity. Opacity on an SVG child is not compositor-driven —
-   the browser cannot promote one <rect> inside a 6000-path document to its own
-   layer — so every held stand forced a REPAINT OF THE WHOLE PLAN at 60fps, for
-   as long as the page sat open doing nothing. A hatch says "on hold" just as
-   clearly and costs one paint. */
-.booth-held {
-  stroke: var(--booth-held) !important;
-  stroke-width: 3px !important;
-  stroke-dasharray: 7 5 !important;
-}
+/* ON HOLD is its COLOUR, and nothing else — no stroke of its own, exactly like
+   available and taken. It has been two other things and neither survived:
+   a pulsing opacity, which forced a repaint of the whole 6000-path plan at
+   60fps for as long as the page sat open; and then a dashed hatch, which cost
+   one paint but read as unfinished artwork on the plan rather than as a stand
+   on hold. The orange fill and the legend already say it. Whatever replaces
+   this must not animate — see the note on holdPulse below. */
 
 .booth-selected {
   stroke: #4f46e5 !important; stroke-width: 8px !important;
-  /* The on-hold hatch above sets a dash pattern; the selection ring is a single
-     solid statement of "this is the one you have open" and must not inherit it. */
+  /* A plan may draw its own stands with a dashed stroke. The selection ring is
+     a single solid statement of "this is the one you have open", so it states
+     its own pattern rather than inheriting the artwork's. */
   stroke-dasharray: none !important;
   filter: drop-shadow(0 0 12px rgba(79,70,229,0.7)) !important;
 }
 
-/* holdPulse is gone: ON HOLD is a static hatch now (see .booth-held). */
+/* holdPulse is gone: ON HOLD is drawn by its fill alone, and never animated. */
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* Loading */
@@ -656,7 +653,7 @@ body {
    the search glow pulsed on regardless — and the header dot and the loading
    spinner were never mentioned. Each selector below matches or beats the
    specificity of the rule that starts the animation. (The on-hold pulse is gone
-   entirely: it is drawn as a hatch now, for performance — see .booth-held.) */
+   entirely — a held stand is drawn by its fill and never animates.) */
 @media (prefers-reduced-motion: reduce) {
   .booth-interactive.booth-match { animation: none; }
   .live-dot { animation: none; }
