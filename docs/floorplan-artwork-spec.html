@@ -190,9 +190,9 @@
     <h1>Floorplan artwork specification</h1>
     <p class="sub">Mandatory requirements for exhibition floorplan files supplied to Blueprint Event Company. Files that do not meet these requirements cannot be used in the interactive floorplan and will be returned.</p>
     <div class="issue">
-      <span><b>Issue</b>1.0</span>
+      <span><b>Issue</b>1.1</span>
       <span><b>Applies to</b>All halls, all shows</span>
-      <span><b>Supersedes</b>—</span>
+      <span><b>Supersedes</b>Issue 1.0 (R12 relaxed: colours are chosen per meaning, not fixed)</span>
       <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
     </div>
   </header>
@@ -368,8 +368,8 @@
       <div class="clause">
         <div class="cid">R12</div>
         <div>
-          <h3><span class="kw must">Must</span> use exactly one fill per status</h3>
-          <p>Use these exact values. Do not introduce near-identical variants.</p>
+          <h3><span class="kw must">Must</span> use exactly one flat fill per meaning</h3>
+          <p>Every stand of the same status is filled with the same flat colour, and no two meanings share a colour. The hues themselves are the designer's to choose — the software is told what each colour on the plan means when the file is received, and the colours shown on screen are set there — with two fixed rules: an <strong>available</strong> stand is white or near-white and nothing else on the plan is, and a <strong>sponsorable area</strong> (a lounge, a theatre, a conference track) is a dark fill used for those shapes only. The values below are the house defaults, and what to use if in doubt.</p>
           <div class="tscroll" style="margin-top:12px">
             <table>
               <thead><tr><th>Meaning</th><th>Fill</th><th>Notes</th></tr></thead>
@@ -482,7 +482,7 @@ LEX26_StandSchedule_v03.csv</pre>
             <tr><td class="box">☐</td><td>No slivers</td><td>No stand shape under 0.5 m in either direction</td></tr>
             <tr><td class="box">☐</td><td>Labels inside stands</td><td>Every number and area sits within its own stand</td></tr>
             <tr><td class="box">☐</td><td>Numbers unique</td><td>No stand number appears twice</td></tr>
-            <tr><td class="box">☐</td><td>Colours exact</td><td>Only the four fills in R12 appear on stands and facilities</td></tr>
+            <tr><td class="box">☐</td><td>Colours consistent</td><td>One flat fill per meaning; one near-white, on available stands only</td></tr>
             <tr><td class="box">☐</td><td>Layers correct</td><td>Nothing but stands on the <code>STANDS</code> layer</td></tr>
             <tr><td class="box">☐</td><td>Schedule supplied</td><td>CSV present, same version, row count matches stand count</td></tr>
             <tr><td class="box">☐</td><td>Schedule agrees with drawing</td><td>Every number and area matches</td></tr>

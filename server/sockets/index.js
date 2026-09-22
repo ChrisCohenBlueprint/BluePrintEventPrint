@@ -1113,4 +1113,32 @@ async function notifyStands() {
   if (ioRef) broadcastState(ioRef);
 }
 
-module.exports = { register, refresh, refreshAll, notifyAreas, notifyStands };
+/**
+ * The REST side changed this event's settings — today, the colours its spaces
+ * are painted in. Both rooms hear the same public shape; admins also get the
+ * rate, exactly as the connect-time `settings` event sends it.
+ */
+async function notifySettings() {
+  const st = await settings.get();
+  const pub = { unit: st.unit, currency: st.currency, currencySymbol: st.currencySymbol, palette: st.palette };
+  if (ioRef) {
+    ioRef.to(pubRoom(config.showId)).emit('settings', pub);
+    ioRef.to(adminRoom(config.showId)).emit('settings', { ...pub, ratePerSqm: st.ratePerSqm });
+  }
+  return st;
+}
+
+/**
+ * This event's artwork was replaced, re-read or removed. Every open plan
+ * fetches it again and re-binds its stands, so a re-issued drawing lands on
+ * the pages already looking at it rather than only on the next reload — which
+ * is when a stand that moved would otherwise sit bound to where it used to be.
+ */
+function notifyArtwork(version) {
+  if (!ioRef) return;
+  const payload = { version: version || null, at: Date.now() };
+  ioRef.to(pubRoom(config.showId)).emit('floorplan:changed', payload);
+  ioRef.to(adminRoom(config.showId)).emit('floorplan:changed', payload);
+}
+
+module.exports = { register, refresh, refreshAll, notifyAreas, notifyStands, notifySettings, notifyArtwork };

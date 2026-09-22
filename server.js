@@ -253,6 +253,18 @@ async function start() {
   // Pages, with and without a show in the path. The unprefixed forms are kept
   // deliberately: /floorplan is embedded in the marketing site via an iframe and
   // /admin is bookmarked, so moving them would break both silently.
+  // What to hand a designer. Two documents: the brief (how to draw a plan the
+  // app can read, in their terms) and the specification it is checked against.
+  // Public on purpose — the designer has no account, and there is nothing in
+  // either that the plan itself does not already show. Served fresh: a
+  // correction to the brief must reach the next person to open the link.
+  const doc = (file) => (_req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.sendFile(path.join(__dirname, 'docs', file));
+  };
+  app.get('/artwork-brief', doc('floorplan-designer-brief.html'));
+  app.get('/artwork-spec',  doc('floorplan-artwork-spec.html'));
+
   app.get('/floorplan',        (req, res) => sendPage(res, 'floorplan.html', showForRequest(req)));
   app.get('/floorplan/:show',  (req, res) => sendPage(res, 'floorplan.html', showForRequest(req)));
   app.get('/admin',            (req, res) => sendPage(res, 'admin.html',     showForRequest(req)));

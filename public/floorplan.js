@@ -1480,8 +1480,11 @@ socket.on('error:action', ({ message }) => console.warn(message));
 // re-render the open panel + stats so the unit changes live.
 socket.on('settings', (s) => {
   if (!s) return;
-  // The colours this event's plan is drawn in, before anything is painted.
-  BoothPalette.apply(s.palette);
+  // The colours this event's spaces are painted in, before anything is
+  // painted. Only when the event actually carries the field: the unit and
+  // currency handlers send partial settings, and applying an absent palette
+  // stripped the event's colours every time an admin changed the unit.
+  if ('palette' in s) { BoothPalette.apply(s.palette); updateAreaLegend(); }
   repaintLabels();
   if (!s.unit) return;
   UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
@@ -1604,8 +1607,29 @@ function renderAreaPanel(key) {
   syncSponsorPanel();
 }
 
+// The artwork itself was replaced, re-read or removed — a re-issued drawing,
+// or its printed names taken out after an import. Fetch it again and re-bind
+// every stand, exactly as a first load does; the stands, the shortlist and the
+// open panel are all state this page already holds and are left alone.
+socket.on('floorplan:changed', () => {
+  if (!svgDoc) return;         // still loading, or failed: load() will fetch the current one
+  load();
+});
+
+// The legend's area swatches are only worth showing when the areas are being
+// painted from the palette — otherwise they keep the plan's own fills, which
+// the legend cannot promise to match.
+function updateAreaLegend() {
+  const on = !!(planAreas.length && window.BoothPalette && BoothPalette.paintsAreas());
+  const open = document.getElementById('leg-area-open');
+  const taken = document.getElementById('leg-area-taken');
+  if (open) open.hidden = !on;
+  if (taken) taken.hidden = !(on && planAreas.some(a => a.status === 'taken'));
+}
+
 socket.on('areas:catalogue', (list) => {
   planAreas = Array.isArray(list) ? list : [];
+  updateAreaLegend();
   paintAreas();
 });
 

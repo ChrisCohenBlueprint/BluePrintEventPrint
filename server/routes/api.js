@@ -13,6 +13,7 @@ const showsModel = require('../models/shows');
 const floorplans = require('../models/floorplans');
 const settings   = require('../models/settings');
 const { extractStands, stripExhibitorNames, paletteOf } = require('../lib/extract-stands');
+const { diffStands } = require('../lib/plan-diff');
 const showContext = require('../show-context');
 const boothsModel = require('../models/booths');
 const sockets   = require('../sockets');
@@ -136,7 +137,68 @@ router.post('/floorplan', rawSvg, async (req, res, next) => {
     }
     track({ type: 'floorplan.upload', boothNumber: null, actor: req.admin?.user || 'unknown',
             meta: { bytes: r.bytes, removed: r.removed } });
+    // Every page looking at this event fetches the new drawing now, rather
+    // than sitting on the old one until somebody reloads.
+    try { sockets.notifyArtwork(r.version); }
+    catch (e) { console.error('Floorplan upload: viewers not told —', e.message); }
     res.json({ ok: true, ...r });
+  } catch (e) { next(e); }
+});
+
+// ─── The colours this event's spaces are painted in ───────────────────────────
+// Chosen at upload, or at any time after from the Settings card. Not
+// password-gated: a colour is cosmetic, reversible in a click, and changes no
+// number. X-Show names the event, as it does for the upload itself.
+
+/**
+ * The palette in force, and the one the plan itself suggests, side by side, so
+ * the picker can start from what the designer drew and show what each colour
+ * on the plan currently means.
+ */
+router.get('/palette', async (_req, res, next) => {
+  try {
+    const st = await settings.get();
+    const f = await floorplans.get();
+    let fromArtwork = null, fills = [];
+    if (f && f.svg) {
+      const r = extractStands(f.svg);
+      fills = r.fills;
+      if (r.fills.length) fromArtwork = settings.cleanPalette({ ...paletteOf(r.fills), source: 'artwork' });
+    }
+    res.json({ ok: true, palette: st.palette, fromArtwork, fills, keys: settings.PALETTE_KEYS });
+  } catch (e) { next(e); }
+});
+
+/**
+ * Set the palette. Either a set of colours (any subset; a missing one means
+ * the app's own), or `use: 'artwork'` to go back to what the plan is drawn in,
+ * or `use: 'app'` for the app's own colours throughout.
+ */
+router.put('/palette', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    let r;
+    if (body.use === 'app') {
+      r = await settings.clearPalette();
+    } else if (body.use === 'artwork') {
+      const f = await floorplans.get();
+      const fills = f && f.svg ? extractStands(f.svg).fills : [];
+      if (!fills.length) {
+        return res.status(400).json({ error: 'The colours cannot be read from this event\'s plan — choose them by hand, or use the app\'s own.' });
+      }
+      r = await settings.setPalette(paletteOf(fills), { source: 'artwork' });
+      if (!r.ok) return res.status(400).json({ error: 'The plan\'s colours could not be read well enough to use.' });
+    } else {
+      const chosen = body.palette && typeof body.palette === 'object' ? body.palette : body;
+      const bad = settings.PALETTE_KEYS.filter(k => chosen[k] && !/^#[0-9a-f]{3,8}$/i.test(String(chosen[k])));
+      if (bad.length) return res.status(400).json({ error: `Not a colour: ${bad.join(', ')}. Use a hex value like #fcdf6d.` });
+      r = await settings.setPalette(chosen, { source: 'admin' });
+    }
+    try { await sockets.notifySettings(); }
+    catch (e) { console.error('Palette: viewers not refreshed —', e.message); }
+    track({ type: 'settings.palette', boothNumber: null, actor: req.admin?.user || 'unknown',
+            meta: { palette: r.palette, use: body.use || 'chosen' } });
+    res.json({ ok: true, palette: r.palette });
   } catch (e) { next(e); }
 });
 
@@ -159,8 +221,19 @@ router.get('/stands/preview', async (_req, res, next) => {
     // The same measure the import itself applies, so the button the admin sees
     // and the answer it gets can never disagree.
     const committed = await booths.countCommitted();
+    const existingRows = await booths.col().find({ showId: config.showId }).toArray();
+    const sellable = r.stands.filter(s => !s.sponsored);
+    const st = await settings.get();
     res.json({
       ok: true,
+      // What this drawing does to the stands already here: new, moved,
+      // resized, and — the part that matters on a selling event — which sold
+      // stands it no longer draws. Judged before anything is written.
+      diff: diffStands(sellable, existingRows),
+      issues: r.issues,
+      // The colours in force, and the ones this plan is drawn in.
+      palette: st.palette,
+      suggestedPalette: r.fills.length ? settings.cleanPalette({ ...paletteOf(r.fills), source: 'artwork' }) : null,
       stands: r.stands.filter(s => !s.sponsored).length,
       named: r.stands.filter(s => !s.sponsored && s.exhibitor).length,
       // What the plan's own colours say each stand is.
@@ -176,7 +249,8 @@ router.get('/stands/preview', async (_req, res, next) => {
       // Named so the admin can say plainly why import is unavailable rather
       // than offering a button that fails.
       committed,
-      existing: await booths.col().countDocuments({ showId: config.showId }),
+      handwork: await booths.countHandwork(),
+      existing: existingRows.length,
       sample: r.stands.filter(s => !s.sponsored).slice(0, 10)
         .map(s => ({ number: s.number, area: s.area, exhibitor: s.exhibitor, status: s.status })),
     });
@@ -219,10 +293,15 @@ router.post('/stands/import', async (req, res, next) => {
     // behaviour is still reachable, but it now has to be ASKED for — "import"
     // meaning "destroy the inventory" is not a default anyone would choose.
     const replace = req.query.replace === '1';
+    // ?mode=update is the re-issued plan: merge the drawing over an event that
+    // is already selling, keeping every booking where it is. See
+    // importFromArtwork's `keep` for exactly what that promises.
+    const update = req.query.mode === 'update';
     const out = await booths.importFromArtwork(sellable, {
       actor: req.admin?.user || null,
       force: req.query.force === '1',
-      replace,
+      replace: replace && !update,
+      keep: update,
     });
     if (!out.ok) {
       // Each refusal says what is in the way and what to do about it. All three
@@ -282,9 +361,13 @@ router.post('/stands/import', async (req, res, next) => {
 
     // Paint the app in the colours this plan is drawn in, so a stand keeps the
     // colour the designer chose for it instead of the hall being repainted in
-    // another event's palette.
-    try { await settings.setPalette(paletteOf(r.fills)); }
-    catch (e) { console.error('Stand import: palette not stored —', e.message); }
+    // another event's palette — unless an admin has chosen this event's
+    // colours, in which case their choice stands.
+    let paletteKept = false;
+    try {
+      const pr = await settings.setPaletteFromArtwork(paletteOf(r.fills));
+      paletteKept = !!(pr && pr.kept);
+    } catch (e) { console.error('Stand import: palette not stored —', e.message); }
 
     // Now the artwork's own names come out of the copy we SHOW, so ours are the
     // only ones drawn. The uploaded original keeps its names: overwriting it
@@ -311,14 +394,24 @@ router.post('/stands/import', async (req, res, next) => {
     // every page opened afterwards, since the cache is only warmed at boot.
     try { await sockets.notifyStands(); }
     catch (e) { console.error('Stand import: viewers not refreshed —', e.message); }
+    // The display copy changed too (names out), and on a re-issued plan the
+    // stands have new shapes: every open page re-fetches the drawing and
+    // re-binds, so nothing is left pointing at where a stand used to be.
+    try {
+      const now = await floorplans.get();
+      sockets.notifyArtwork(now && now.version);
+    } catch (e) { console.error('Stand import: artwork change not broadcast —', e.message); }
+    try { await sockets.notifySettings(); }
+    catch (e) { console.error('Stand import: settings not broadcast —', e.message); }
 
     // Which mode ran is part of the record: "imported 96 stands" means two very
     // different things depending on whether the previous inventory survived.
     track({ type: 'stands.import', boothNumber: null, actor: req.admin?.user || 'unknown',
             meta: { imported: out.imported, sold: out.sold, replaced: out.replaced,
                     mode: out.mode || (replace ? 'replace' : 'upsert'),
-                    forced: req.query.force === '1', areasImported } });
-    res.json({ ok: true, ...out, namesRemoved, unit: r.unit, areasImported,
+                    forced: req.query.force === '1', areasImported,
+                    removed: out.removed || [], kept: (out.kept || []).map(k => k.boothNumber) } });
+    res.json({ ok: true, ...out, namesRemoved, unit: r.unit, areasImported, paletteKept,
                areasSkipped: r.stands.length - sellable.length, warnings: r.warnings });
   } catch (e) { next(e); }
 });
@@ -328,6 +421,8 @@ router.delete('/floorplan', async (req, res, next) => {
     if (!await confirmPassword(req, res, 'the floorplan was not removed')) return;
     const gone = await floorplans.remove();
     track({ type: 'floorplan.revert', boothNumber: null, actor: req.admin?.user || 'unknown', meta: {} });
+    try { sockets.notifyArtwork(null); }
+    catch (e) { console.error('Floorplan removal: viewers not told —', e.message); }
     res.json({ ok: true, reverted: gone });
   } catch (e) { next(e); }
 });
@@ -985,7 +1080,7 @@ const AUDIT_TYPES = [
   'booth.status_change', 'deal.update', 'hold.create', 'hold.release', 'hold.expire',
   'hold.extend', 'booth.restore', 'booth.consolidate', 'booth.split', 'booth.reset',
   'booth.move', 'booth.set_number', 'booth.set_tags', 'booth.set_country', 'booth.set_logo',
-  'unmerge', 'unsplit', 'floorplan.upload', 'floorplan.revert', 'stands.import',
+  'unmerge', 'unsplit', 'floorplan.upload', 'floorplan.revert', 'stands.import', 'settings.palette',
   'sponsor.create', 'sponsor.delete', 'sponsor.import', 'enquiry.forward',
   'lead.admin', 'admin.team', 'security.denied', 'security.secret_failed',
 ];

@@ -1440,12 +1440,23 @@ const countHandwork = (showId = config.showId) =>
  * re-import of a plan that has not sold anything yet; it does not bypass the
  * snapshot.
  *
+ *   keep — the RE-ISSUED PLAN case: the hall has been extended or redrawn
+ *     after selling started, and the new drawing has to land without moving a
+ *     single booking. Always an upsert. A stand that is sold, held by a person
+ *     or carrying hand-work keeps everything but its shape, size and list
+ *     price, which are re-read from the plan; a stand the plan no longer draws
+ *     is removed only if nothing but a previous import ever touched it, and is
+ *     otherwise left in place and REPORTED by number, status and company so
+ *     the person who uploaded the plan can see what the drawing dropped. It
+ *     does not bypass the unreadable-fills refusal: a plan whose colours cannot
+ *     be read is no safer for being a re-issue.
+ *
  * Stands carrying an exhibitor name are imported as sold under that name.
  * The name then belongs to us: our renderer draws it, the smart search finds
  * it, and sales can change it — none of which is true of a name printed into
  * the artwork.
  */
-async function importFromArtwork(stands, { actor = null, force = false, replace = false } = {}) {
+async function importFromArtwork(stands, { actor = null, force = false, replace = false, keep = false } = {}) {
   if (!Array.isArray(stands) || !stands.length) return { ok: false, reason: 'no_stands' };
 
   const db = getDb();
@@ -1460,13 +1471,17 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
     return { ok: false, reason: 'fills_unreadable', unreadable, of: stands.length, showId };
   }
 
+  // A re-issued plan is only ever merged over the inventory, never swapped
+  // for it: "keep" and "replace" together would mean keep nothing.
+  if (keep) replace = false;
+
   const committed = await countCommitted(showId);
-  if (committed > 0 && !force) {
+  if (committed > 0 && !force && !keep) {
     return { ok: false, reason: 'has_bookings', committed, showId };
   }
 
   const customised = await countHandwork(showId);
-  if (customised > 0 && !force) {
+  if (customised > 0 && !force && !keep) {
     return { ok: false, reason: 'has_customisations', customised, showId };
   }
 
@@ -1529,7 +1544,7 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   const docs = stands.map(s => ({ showId, ...fromArtwork(s), clicks: 0,
                                   createdAt: now, updatedAt: now, updatedBy: actor || 'import' }));
 
-  const result = { ok: true, showId, mode: replace ? 'replace' : 'upsert',
+  const result = { ok: true, showId, mode: replace ? 'replace' : (keep ? 'update' : 'upsert'),
                    imported: docs.length,
                    sold: docs.filter(d => d.status === 'sold').length,
                    available: docs.filter(d => d.status === 'available').length,
@@ -1615,7 +1630,32 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   // removed: an upsert that quietly deleted them would be the destructive
   // behaviour this mode exists to avoid.
   const incoming = new Set(docs.map(d => d.boothNumber));
-  const orphaned = existing.filter(b => !incoming.has(b.boothNumber)).map(b => b.boothNumber);
+  const orphans = existing.filter(b => !incoming.has(b.boothNumber));
+  const orphaned = orphans.map(b => b.boothNumber);
+
+  // A re-issued plan is the one case where a stand that has vanished from the
+  // drawing is removed — and only a stand that has nothing on it but what a
+  // previous import wrote. An empty stand the new hall does not draw is not
+  // inventory; left behind it would be counted as available and be unclickable
+  // on the plan, which is exactly the phantom-stand fault the artwork spec
+  // exists to prevent. Anything a person touched — a sale, a hold, a merge, a
+  // logo — stays, and is named in the result so the person uploading can see
+  // what the drawing dropped.
+  const removed = [];
+  const kept = [];
+  if (keep) {
+    for (const b of orphans) {
+      const ours = b.source === IMPORT_SOURCE && !isCommitted(b) && !hasHandwork(b) &&
+                   !isComposite(b) && !personHolds.has(b.boothNumber);
+      if (ours) removed.push(b.boothNumber);
+      else kept.push({ boothNumber: b.boothNumber, status: b.status,
+                       company: (b.assignment && b.assignment.company) || null });
+    }
+    if (removed.length) {
+      await col().deleteMany({ showId, boothNumber: { $in: removed } });
+      await db.collection('holds').deleteMany({ showId, boothNumber: { $in: removed }, source: IMPORT_SOURCE });
+    }
+  }
 
   const heldNow = docs.filter(d => d.status === 'held' &&
     (created.includes(d.boothNumber) || refreshed.includes(d.boothNumber)));
@@ -1623,7 +1663,9 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
 
   return { ...result, created: created.length, refreshed: refreshed.length,
            reshaped: reshaped.length, untouched: untouched.length,
-           released: released.length, orphaned, preserved: reshaped.concat(untouched) };
+           released: released.length, orphaned, preserved: reshaped.concat(untouched),
+           createdNumbers: created, reshapedNumbers: reshaped, untouchedNumbers: untouched,
+           removed, kept };
 }
 
 /**

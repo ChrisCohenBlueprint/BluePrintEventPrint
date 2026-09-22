@@ -408,6 +408,37 @@ body {
   flex: 1; justify-content: center; font-size: 11px; padding: 6px 8px; text-decoration: none;
 }
 .plan-actions .admin-btn[hidden] { display: none; }
+.section-sub a { color: var(--accent); }
+
+/* The colour picker for an event's spaces. */
+.palette-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.palette-row {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.palette-row.is-set { border-color: rgba(99,102,241,.5); }
+.palette-label { font-size: 12px; font-weight: 700; }
+.palette-hint { font-size: 11px; color: var(--muted); line-height: 1.45; }
+.palette-controls { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.palette-input {
+  width: 44px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; cursor: pointer;
+}
+.palette-status { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); }
+.palette-clear { font-size: 10px; padding: 4px 8px; }
+.palette-swatches { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; align-items: center; }
+.palette-swatches .palette-hint { width: 100%; }
+.palette-swatch {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border: 1px solid var(--border); border-radius: 20px;
+  background: transparent; color: var(--text); cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px;
+}
+.palette-swatch:hover { border-color: var(--accent); }
+.palette-swatch-dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(255,255,255,.25); }
+
+/* What a re-issued plan drops that is sold: its own line, in the warning colour. */
+.stand-report-dropped { margin-bottom: 10px; max-width: 90ch; }
 
 /* Settings sits with the footer actions, so it needs the nav-link look without
    being inside the list. */

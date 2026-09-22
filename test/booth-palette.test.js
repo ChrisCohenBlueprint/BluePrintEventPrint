@@ -64,6 +64,37 @@ const NA = { available: '#fffcf8', sold: '#689abb', sponsored: '#7c1315' };
   const reported = await page.evaluate(() => BoothPalette.fillFor('sold'));
   check('so the legend and minimap match the plan', reported === '#689abb', reported);
 
+  console.log('\nA palette read off the plan leaves the areas as drawn');
+  await page.setContent(`<style>${CSS}</style>
+    <svg><rect id="a" class="booth-available"/><rect id="s" class="booth-sold"/>
+         <rect id="h" class="booth-held"/>
+         <rect id="open" data-area="vip" style="fill:#7c1315"/>
+         <rect id="taken" data-area="sales" class="area-taken" style="fill:#013149"/></svg>`);
+  await page.addScriptTag({ path: path.join(__dirname, '..', 'public', 'booth-palette.js') });
+  await page.evaluate((p) => BoothPalette.apply(p), { ...NA, source: 'artwork', areaTaken: '#00ff00' });
+  check('an open area keeps the plan\'s burgundy', (await paint('open')).includes('124, 19, 21'), await paint('open'));
+  check('a taken area keeps the plan\'s navy', (await paint('taken')).includes('1, 49, 73'), await paint('taken'));
+  check('and the page does not claim to paint areas', !(await page.evaluate(() => BoothPalette.paintsAreas())));
+  // A held colour on an artwork-sourced palette is ignored: nobody chose it.
+  await page.evaluate((p) => BoothPalette.apply(p), { ...NA, source: 'artwork', held: '#00ff00' });
+  check('on hold is not taken from a reading either', (await paint('h')).includes('249, 115, 22'), await paint('h'));
+
+  console.log('\nA palette an admin chose paints everything it names');
+  const CHOSEN = { available: '#ffffff', sold: '#111111', held: '#00ff00', sponsored: '#ff00ff', areaTaken: '#0000ff', source: 'admin' };
+  await page.evaluate((p) => BoothPalette.apply(p), CHOSEN);
+  check('on hold is the chosen colour', (await paint('h')).includes('0, 255, 0'), await paint('h'));
+  check('an open area is the chosen colour', (await paint('open')).includes('255, 0, 255'), await paint('open'));
+  check('a taken area is the chosen colour', (await paint('taken')).includes('0, 0, 255'), await paint('taken'));
+  check('and the page says so', await page.evaluate(() => BoothPalette.paintsAreas()));
+  check('fillFor knows the area colours too',
+        (await page.evaluate(() => BoothPalette.fillFor('areaTaken'))) === '#0000ff');
+
+  console.log('\nA chosen colour left unset means the app\'s own');
+  await page.evaluate((p) => BoothPalette.apply(p), { sold: '#111111', source: 'admin' });
+  check('on hold is back to the app orange', (await paint('h')).includes('249, 115, 22'), await paint('h'));
+  check('the areas are left as drawn again', (await paint('open')).includes('124, 19, 21') &&
+        !(await page.evaluate(() => BoothPalette.paintsAreas())));
+
   await br.close();
   const f = out.filter(x => !x).length;
   console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);

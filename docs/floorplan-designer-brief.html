@@ -1,0 +1,403 @@
+<title>Floorplan Designer Brief — Blueprint Event Company</title>
+<style>
+  :root {
+    --paper:     #FCFCFB;
+    --panel:     #FFFFFF;
+    --panel-2:   #F2F3F1;
+    --ink:       #16191C;
+    --ink-soft:  #4A5157;
+    --ink-faint: #7B8288;
+    --rule:      #DBDDDA;
+    --rule-hard: #B6BAB6;
+    --accent:    #0F5F73;
+    --accent-bg: #E4EFF2;
+    --deny:      #A32E1F;
+    --deny-bg:   #F8EAE7;
+    --ok:        #1E6B4A;
+    --ok-bg:     #E6F1EA;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0F1113; --panel: #161A1D; --panel-2: #1E2326;
+      --ink: #E8EAEB; --ink-soft: #9BA1A5; --ink-faint: #6E767A;
+      --rule: #262A2D; --rule-hard: #3A4145;
+      --accent: #6FBFD4; --accent-bg: #10262C;
+      --deny: #E08472; --deny-bg: #2B1613;
+      --ok: #58BF93; --ok-bg: #0F2419;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0F1113; --panel: #161A1D; --panel-2: #1E2326;
+    --ink: #E8EAEB; --ink-soft: #9BA1A5; --ink-faint: #6E767A;
+    --rule: #262A2D; --rule-hard: #3A4145;
+    --accent: #6FBFD4; --accent-bg: #10262C;
+    --deny: #E08472; --deny-bg: #2B1613;
+    --ok: #58BF93; --ok-bg: #0F2419;
+  }
+  :root[data-theme="light"] {
+    --paper: #FCFCFB; --panel: #FFFFFF; --panel-2: #F2F3F1;
+    --ink: #16191C; --ink-soft: #4A5157; --ink-faint: #7B8288;
+    --rule: #DBDDDA; --rule-hard: #B6BAB6;
+    --accent: #0F5F73; --accent-bg: #E4EFF2;
+    --deny: #A32E1F; --deny-bg: #F8EAE7;
+    --ok: #1E6B4A; --ok-bg: #E6F1EA;
+  }
+
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px 110px;
+          display: grid; grid-template-columns: 1fr; gap: 44px; }
+  @media (min-width: 1060px) { .wrap { grid-template-columns: 178px minmax(0,1fr); } }
+
+  /* masthead */
+  .mast { grid-column: 1/-1; border-bottom: 3px double var(--rule-hard); padding: 52px 0 22px; }
+  .doccode {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 16px;
+  }
+  h1 { font-size: clamp(28px,4.6vw,42px); line-height: 1.09; letter-spacing: -.025em;
+       font-weight: 700; text-wrap: balance; margin-bottom: 12px; }
+  .sub { font-size: 17.5px; color: var(--ink-soft); max-width: 60ch; }
+  .issue {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr));
+    gap: 4px 24px; margin-top: 24px; font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink-faint);
+  }
+  .issue b { display: block; color: var(--ink-soft); font-weight: 500; letter-spacing: .04em; }
+
+  /* contents */
+  nav.toc { display: none; }
+  @media (min-width: 1060px) {
+    nav.toc { display: block; position: sticky; top: 28px; align-self: start;
+              font-family: var(--mono); font-size: 11.5px; line-height: 1.5; }
+    nav.toc ol { list-style: none; display: flex; flex-direction: column; gap: 11px; }
+    nav.toc a { color: var(--ink-faint); text-decoration: none; display: grid;
+                grid-template-columns: 26px 1fr; gap: 4px; }
+    nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+    nav.toc a span { color: var(--rule-hard); }
+  }
+
+  main { min-width: 0; display: flex; flex-direction: column; gap: 50px; }
+  section { scroll-margin-top: 22px; }
+
+  h2 {
+    font-family: var(--mono); font-size: 12.5px; text-transform: uppercase;
+    letter-spacing: .14em; font-weight: 600;
+    padding-bottom: 9px; border-bottom: 1px solid var(--rule-hard); margin-bottom: 24px;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+  }
+  h2 em { font-style: normal; color: var(--ink-faint); font-weight: 400;
+          letter-spacing: .05em; font-size: 11px; }
+  p { max-width: 68ch; margin-bottom: 13px; color: var(--ink-soft); }
+  p.lead { color: var(--ink); font-size: 16.5px; }
+  section > p:last-child { margin-bottom: 0; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .86em; background: var(--panel-2);
+         padding: 1.5px 5px; border: 1px solid var(--rule); color: var(--ink); }
+
+  /* requirement clauses */
+  .clause {
+    display: grid; grid-template-columns: 1fr; gap: 3px 20px;
+    padding: 20px 0; border-top: 1px solid var(--rule);
+  }
+  @media (min-width: 660px) { .clause { grid-template-columns: 74px minmax(0,1fr); } }
+  .clause:last-of-type { border-bottom: 1px solid var(--rule); }
+  .cid {
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+    color: var(--accent); letter-spacing: .04em; padding-top: 2px;
+  }
+  .clause h3 { font-size: 16.5px; font-weight: 650; letter-spacing: -.008em;
+               margin-bottom: 7px; text-wrap: balance; }
+  .clause p { font-size: 15px; margin-bottom: 0; }
+  .clause p + p { margin-top: 9px; }
+
+  .kw { font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+        letter-spacing: .06em; padding: 1px 6px; border: 1px solid currentColor;
+        white-space: nowrap; }
+  .kw.must  { color: var(--accent); background: var(--accent-bg); }
+  .kw.never { color: var(--deny);   background: var(--deny-bg); }
+  .kw.should{ color: var(--ink-faint); background: var(--panel-2); }
+
+  .why {
+    margin-top: 10px; padding: 9px 13px; background: var(--panel-2);
+    border-left: 2px solid var(--rule-hard);
+    font-size: 13.5px; color: var(--ink-soft);
+  }
+  .why b { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+           text-transform: uppercase; color: var(--ink-faint); display: block; margin-bottom: 3px; }
+
+  /* tables */
+  .tscroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--panel); margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 480px; }
+  th { text-align: left; font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+       text-transform: uppercase; color: var(--ink-faint); font-weight: 600;
+       padding: 10px 15px; border-bottom: 1px solid var(--rule-hard); white-space: nowrap; }
+  td { padding: 10px 15px; border-bottom: 1px solid var(--rule); color: var(--ink-soft); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.k { font-family: var(--mono); font-size: 12.5px; color: var(--ink); white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .swatch { display: inline-block; width: 13px; height: 13px; border: 1px solid var(--rule-hard);
+            vertical-align: -2px; margin-right: 7px; }
+
+  .callout { border-left: 3px solid var(--accent); background: var(--panel);
+             padding: 17px 21px; margin: 20px 0; }
+  .callout.warn { border-left-color: var(--deny); }
+  .callout h4 { font-family: var(--mono); font-size: 12px; text-transform: uppercase;
+                letter-spacing: .09em; color: var(--accent); margin-bottom: 7px; font-weight: 600; }
+  .callout.warn h4 { color: var(--deny); }
+  .callout p { margin-bottom: 0; }
+
+  ul.list { list-style: none; display: flex; flex-direction: column; gap: 8px;
+            max-width: 68ch; margin-bottom: 14px; }
+  ul.list li { color: var(--ink-soft); padding-left: 19px; position: relative; }
+  ul.list li::before { content: ""; position: absolute; left: 2px; top: 11px;
+                       width: 7px; height: 1px; background: var(--rule-hard); }
+
+  /* diagram */
+  .diagram { background: var(--panel); border: 1px solid var(--rule); padding: 22px; margin-bottom: 16px; }
+  .stand-demo { position: relative; width: 100%; max-width: 340px; aspect-ratio: 3/2;
+                background: var(--panel-2); border: 2px solid var(--ink); margin: 0 auto; }
+  .stand-demo span { position: absolute; font-family: var(--mono); font-size: 12px; color: var(--ink); }
+  .sd-num  { top: 7px; left: 8px; font-weight: 700; }
+  .sd-name { top: 50%; left: 50%; transform: translate(-50%,-50%); font-family: var(--sans);
+             font-size: 13px; font-weight: 600; text-align: center; }
+  .sd-size { bottom: 7px; right: 8px; }
+  .dlabel { font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+            text-align: center; margin-top: 12px; letter-spacing: .04em; }
+
+  pre { background: var(--panel); border: 1px solid var(--rule); padding: 16px 18px;
+        overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.62;
+        color: var(--ink-soft); margin-bottom: 16px; }
+  pre b { color: var(--accent); font-weight: 500; }
+  pre i { color: var(--ink-faint); font-style: normal; }
+
+  .check td:first-child { width: 46px; }
+  .box { font-family: var(--mono); color: var(--ink-faint); }
+
+
+  /* the anatomy figure */
+  .fig { background: var(--panel); border: 1px solid var(--rule); padding: 22px; margin: 18px 0; }
+  .fig svg { display: block; width: 100%; height: auto; max-width: 640px; margin: 0 auto; }
+  .fig .cap { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); text-align: center; margin-top: 12px; letter-spacing: .04em; }
+  .fig text { font-family: var(--mono); }
+  .fig .lbl { font-size: 10px; fill: var(--ink-faint); letter-spacing: .06em; text-transform: uppercase; }
+  .fig .num { font-size: 13px; font-weight: 700; fill: var(--ink); }
+  .fig .nm  { font-size: 12px; font-weight: 600; fill: var(--ink); font-family: var(--sans); }
+  .fig .sz  { font-size: 11px; fill: var(--ink); }
+  .fig .arrow { stroke: var(--accent); stroke-width: 1.2; fill: none; }
+  .fig .stand { stroke: var(--ink); stroke-width: 1.2; }
+  .two { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 720px) { .two { grid-template-columns: 1fr 1fr; } }
+  .do, .dont { border: 1px solid var(--rule); background: var(--panel); padding: 14px 16px; }
+  .do h4, .dont h4 { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 8px; }
+  .do h4 { color: var(--ok); } .dont h4 { color: var(--deny); }
+  .do p, .dont p { font-size: 14px; margin-bottom: 6px; }
+  .do p:last-child, .dont p:last-child { margin-bottom: 0; }
+  .mono { font-family: var(--mono); font-size: .9em; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="doccode">Blueprint Event Company · Designer Brief · BEC-FP-02</div>
+    <h1>How to draw a floorplan the interactive plan can read</h1>
+    <p class="sub">The plan you draw is not printed. It is loaded into software that finds every stand, reads its number, its size and its name, colours it by whether it is sold, and lets visitors click it. This brief is how to draw so that all of that happens on its own — and how to re-issue a plan once a show has started selling.</p>
+    <div class="issue">
+      <span><b>Issue</b>1.0</span>
+      <span><b>Applies to</b>Every new plan and every revision</span>
+      <span><b>Goes with</b>Specification BEC-FP-01 (issue 1.1)</span>
+      <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <ol>
+      <li><a href="#reads"><span>1</span> What the software reads</a></li>
+      <li><a href="#stand"><span>2</span> One stand, one shape</a></li>
+      <li><a href="#labels"><span>3</span> The three labels</a></li>
+      <li><a href="#areas"><span>4</span> Lounges, theatres, tracks</a></li>
+      <li><a href="#colour"><span>5</span> Colour</a></li>
+      <li><a href="#text"><span>6</span> Text and fonts</a></li>
+      <li><a href="#revisions"><span>7</span> Re-issuing a plan</a></li>
+      <li><a href="#export"><span>8</span> Exporting</a></li>
+      <li><a href="#send"><span>9</span> Before you send</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="reads">
+      <h2>1 — What the software reads <em>and what it ignores</em></h2>
+      <p class="lead">Five things are read off the drawing, and nothing else: each stand's <strong>shape</strong>, its <strong>number</strong>, its <strong>size</strong>, the <strong>exhibitor name</strong> if one is printed, and its <strong>fill colour</strong>, which says whether it is free, taken or reserved.</p>
+      <p>Everything else — walls, entrances, aisles, the hall outline, catering, toilets, arrows, the key, your logo — is drawn on screen exactly as you export it, and the software does not try to understand it. Draw it however the plan looks best.</p>
+      <p>A shape becomes a stand because a <strong>stand number sits inside it</strong>. Not because of its layer, its colour or its name in the layers panel. That single rule is behind most of what follows: put a number inside a shape and it is a stand; leave it out and it is scenery.</p>
+      <div class="callout">
+        <h4>The two things that cannot be fixed afterwards</h4>
+        <p>Text converted to outlines, and one shape drawn across two stands. Both destroy information that is not anywhere else in the file. Everything else in this brief can be corrected on receipt; these two mean a new export.</p>
+      </div>
+    </section>
+
+    <section id="stand">
+      <h2>2 — One stand, one shape <em>the geometry</em></h2>
+      <p>Each sellable stand is <strong>one closed rectangle</strong> (or one closed polygon for the odd corner stand). Its edges are the stand's edges. Nothing else about the shape matters to the software, so draw it in whatever style suits the plan.</p>
+      <div class="two">
+        <div class="do">
+          <h4>Do</h4>
+          <p>Draw every stand as its own rectangle, even where a row of stands shares a wall.</p>
+          <p>Draw to true scale, so a 30 m² stand is drawn as 30 m² of hall.</p>
+          <p>Delete construction lines, guides and collapsed rectangles before exporting.</p>
+        </div>
+        <div class="dont">
+          <h4>Don't</h4>
+          <p>Draw a block for a row of stands and divide it with lines on top — that is one stand to the software, with several numbers in it.</p>
+          <p>Leave an older rectangle underneath a newer one. Two shapes on one footprint is two stands, or a stand the software cannot choose.</p>
+          <p>Build a stand from four separate lines. An open path has no inside, so no number can sit in it.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="labels">
+      <h2>3 — The three labels <em>number, size, name</em></h2>
+      <p>Every label is matched to a stand by <strong>where it sits</strong>: a label belongs to the smallest shape it is inside. So each label sits wholly inside its own stand, in its fixed corner, and never overhangs a neighbour.</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 720 300" role="img" aria-label="A stand with its number top-left, exhibitor name centred and size bottom-right">
+          <rect class="stand" x="170" y="40" width="340" height="200" fill="#FFFFFF"/>
+          <text class="num" x="182" y="62">412</text>
+          <text class="nm" x="340" y="146" text-anchor="middle">Acme Lubricants Ltd</text>
+          <text class="sz" x="498" y="228" text-anchor="end">30 m²</text>
+          <path class="arrow" d="M140 56 H170"/>
+          <text class="lbl" x="132" y="60" text-anchor="end">number · top-left</text>
+          <path class="arrow" d="M540 142 H510"/>
+          <text class="lbl" x="548" y="146">name · centred</text>
+          <path class="arrow" d="M540 226 H514"/>
+          <text class="lbl" x="548" y="230">size · bottom-right</text>
+          <path class="arrow" d="M170 256 V268 M510 256 V268 M170 262 H510"/>
+          <text class="lbl" x="340" y="284" text-anchor="middle">one closed rectangle, drawn to scale</text>
+        </svg>
+        <div class="cap">Each label is one text object, fully inside the stand it describes.</div>
+      </div>
+
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Label</th><th>Where</th><th>Write it as</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>Stand number</td><td>Top-left corner</td><td class="k">142 · 1249 · P014 · A12</td><td>Two to five digits, with up to two letters in front and one after if the show uses them. Nothing else in the text object — no "Stand", no full stop.</td></tr>
+            <tr><td>Size</td><td>Bottom-right corner</td><td class="k">30 m² · 300 ft²</td><td>The number, a space, then <span class="mono">m²</span> or <span class="mono">ft²</span> (<span class="mono">sqm</span> and <span class="mono">sqft</span> also read). One unit for the whole plan. The ² may be its own superscript run inside the same text object; that is fine.</td></tr>
+            <tr><td>Exhibitor name</td><td>Centred</td><td class="k">Acme Lubricants Ltd</td><td>Optional. One text object; two lines inside it are fine. Any text that is not a number or a size is taken as the name, so nothing else goes inside a stand.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>A small stand whose number does not fit: shrink the type, never let it spill. If it truly cannot fit, leave the size off (the software works it out from the drawing) and keep the number.</p>
+    </section>
+
+    <section id="areas">
+      <h2>4 — Lounges, theatres, tracks <em>sponsorable areas</em></h2>
+      <p>A VIP lounge, a networking lounge, a theatre or a conference track is sold to a sponsor, and the software treats it as sponsorable inventory: clickable, with the sponsor's logo drawn onto it once it is taken. It is found the same way a stand is, so <strong>draw it like a stand</strong>: one closed shape, a number top-left, a size bottom-right, and its name centred — <span class="mono">VIP Lounge</span>, <span class="mono">Conference Track 1</span>.</p>
+      <p>What sets it apart from a stand is its <strong>fill</strong>: one dark colour, used only for these areas and for no more than a handful of shapes on the plan. That is how the software tells a lounge from a sold stand. Catering, toilets and storage are <em>not</em> sponsorable: give them no number and they stay scenery.</p>
+    </section>
+
+    <section id="colour">
+      <h2>5 — Colour <em>one flat fill per meaning</em></h2>
+      <p class="lead">The colours are yours to choose. What the software needs is that every stand with the same meaning has the same flat fill, and no two meanings share one. When the file is received, the person loading it is shown each colour on the plan and what it reads as, and chooses what visitors see on screen — so the plan on the website can keep your palette or not, as the show prefers.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Meaning</th><th>How it is recognised</th><th>House default</th></tr></thead>
+          <tbody>
+            <tr><td>Available stand</td><td>White or near-white. The <strong>only</strong> near-white on the plan — a white logo box or a pale facility reads as a stand for sale.</td><td class="k"><span class="swatch" style="background:#ffffff"></span>#FFFFFF</td></tr>
+            <tr><td>Taken stand</td><td>One mid-tone fill, the most-used colour on the plan.</td><td class="k"><span class="swatch" style="background:#fcdf6d"></span>#FCDF6D</td></tr>
+            <tr><td>Reserved stand</td><td>The taken fill with a <strong>different outline</strong> — a red stroke, a glow. A stand outlined unlike every other is read as reserved.</td><td class="k"><span class="swatch" style="background:#fcdf6d;border-color:#ed1c24;border-width:2px"></span>red stroke</td></tr>
+            <tr><td>Sponsorable area</td><td>One dark fill, used for a handful of shapes only (section 4).</td><td class="k"><span class="swatch" style="background:#122830"></span>#122830</td></tr>
+            <tr><td>Everything else</td><td>Anything at all, as long as it carries no stand number.</td><td class="k">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Fills on stands are flat and opaque: no gradients, patterns, transparency, blend modes or clipping masks on the stand shapes themselves. A stand whose fill cannot be read is treated as available, and a plan where most cannot be read is refused.</p>
+    </section>
+
+    <section id="text">
+      <h2>6 — Text and fonts <em>live, always</em></h2>
+      <p class="lead">Never convert text to outlines, curves or paths. Not for the numbers, not for the sizes, not for the names, not "just for the export". A number that has become a shape is gone from the file, and every stand on the plan is then unreadable.</p>
+      <p>Use any typeface you like. The website replaces the family with its own so the plan matches the rest of the site, and keeps your sizes, weights and positions — so the plan need not carry a font, and a font we do not have is not a problem. Do not paste the numbers in as images, and do not rasterise any part of the drawing; the only bitmaps on the plan are logos, in their own boxes, clear of every stand.</p>
+      <p>A quick test before sending: open the exported file in a browser and try to select a stand number with the cursor. If it highlights as text, the file is live.</p>
+    </section>
+
+    <section id="revisions">
+      <h2>7 — Re-issuing a plan <em>after selling has started</em></h2>
+      <p class="lead">A plan is often redrawn once stands are already sold — a hall extension, a row moved, a block split. The new drawing is laid over the live event without touching a single booking, and that works on one condition: <strong>a stand keeps its number from one issue to the next.</strong></p>
+      <p>The number is how a stand on the new drawing is matched to the stand already sold. Renumber a sold stand and the software sees one stand vanish and a new one appear; the booking stays on the old number and shows nowhere on the map until someone reconciles it by hand.</p>
+      <div class="two">
+        <div class="do">
+          <h4>Do</h4>
+          <p>Keep every existing stand number exactly as it was, whether or not the stand moved or changed size.</p>
+          <p>Give new stands new numbers — an extension takes the next block (<span class="mono">501–540</span>), never numbers freed by a removed stand.</p>
+          <p>Keep the artboard, the origin and the scale identical to the previous issue, so a stand that did not move is drawn at the same coordinates.</p>
+          <p>Put the version in the filename and send a short change note: added, removed, moved, renumbered.</p>
+        </div>
+        <div class="dont">
+          <h4>Don't</h4>
+          <p>Renumber a row to "tidy up" the sequence.</p>
+          <p>Reuse a removed stand's number for a new stand.</p>
+          <p>Re-export at a different artboard size, or with the drawing shifted or rescaled.</p>
+          <p>Send a changed drawing under the previous version number.</p>
+        </div>
+      </div>
+      <p>On receipt, the software compares the new drawing to the stands already on the event and shows, before anything is accepted, which stands are new, which have moved or changed size, and which the drawing no longer has — flagging any of those that are sold. A stand the new drawing drops is never deleted if it has a booking; it is kept and listed. So the safest revision is one where that list is empty.</p>
+      <div class="callout">
+        <h4>If a sold stand genuinely has to be renumbered</h4>
+        <p>Say so in the change note — old number, new number — before the drawing is loaded. The stand is renumbered on the event first, and the new drawing then matches it.</p>
+      </div>
+    </section>
+
+    <section id="export">
+      <h2>8 — Exporting <em>SVG, from any tool</em></h2>
+      <p>The delivery format is <strong>SVG</strong>. The settings below are what keeps the text live and the geometry readable; anything not listed can stay at its default.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Tool</th><th>Settings</th></tr></thead>
+          <tbody>
+            <tr><td class="k">Illustrator</td><td>File → Export → Export As… → SVG. <strong>Styling:</strong> Internal CSS or Presentation Attributes (either reads). <strong>Font:</strong> SVG — never "Convert to outlines". <strong>Images:</strong> Embed. <strong>Object IDs:</strong> Layer names. <strong>Decimal:</strong> 2. <strong>Minify</strong> and <strong>Responsive</strong> off. Do not use Save As with "Preserve Illustrator Editing Capabilities".</td></tr>
+            <tr><td class="k">Inkscape</td><td>Save a copy as <strong>Plain SVG</strong>. Leave text as text (no Object → Object to Path).</td></tr>
+            <tr><td class="k">Figma</td><td>Export as SVG with <strong>"Outline text" switched off</strong>. Flatten nothing.</td></tr>
+            <tr><td class="k">AutoCAD</td><td>Export via PDF or DWG with text as TEXT/MTEXT, then to SVG in Illustrator as above. Text must survive as text at every step.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Groups, layers and transforms are fine — the software resolves them. Rotated stands are fine. What is not fine is anything that turns a number into a picture of a number.</p>
+    </section>
+
+    <section id="send">
+      <h2>9 — Before you send <em>a two-minute check</em></h2>
+      <pre><b>LNA27_Floorplan_v03.svg</b>          <i>show, document, version</i>
+<b>LNA27_StandSchedule_v03.csv</b>      <i>optional but welcome: stand_number, area, status, exhibitor</i>
+<b>LNA27_Changes_v03.txt</b>            <i>for a revision: added / removed / moved / renumbered</i></pre>
+      <div class="tscroll">
+        <table class="check">
+          <thead><tr><th></th><th>Check</th><th>How</th></tr></thead>
+          <tbody>
+            <tr><td class="box">☐</td><td>Text is live</td><td>Open the SVG in a browser; a stand number can be selected with the cursor</td></tr>
+            <tr><td class="box">☐</td><td>One shape per stand</td><td>No rectangle has two numbers in it; no block rectangle behind a row</td></tr>
+            <tr><td class="box">☐</td><td>Labels inside</td><td>Every number, size and name sits wholly inside its own stand</td></tr>
+            <tr><td class="box">☐</td><td>One unit</td><td>Every size reads <span class="mono">m²</span> or every size reads <span class="mono">ft²</span></td></tr>
+            <tr><td class="box">☐</td><td>Colours consistent</td><td>One flat fill per meaning; one near-white, on available stands only; areas in their own dark fill</td></tr>
+            <tr><td class="box">☐</td><td>Numbers unique</td><td>No number appears on two shapes; none reused from a previous issue</td></tr>
+            <tr><td class="box">☐</td><td>Revision stable</td><td>Same artboard, origin and scale; sold stands keep their numbers</td></tr>
+            <tr><td class="box">☐</td><td>Named and versioned</td><td>Show, document and version in the filename; version bumped on every change</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <h4>What happens on receipt</h4>
+        <p>The file is loaded and checked automatically against specification BEC-FP-01. You will get either a confirmation or a report naming the clauses and the specific stands that need correcting, which can usually be turned around the same day. The report is generated from the file itself, so it is worth running the checks above first.</p>
+      </div>
+    </section>
+
+  </main>
+</div>

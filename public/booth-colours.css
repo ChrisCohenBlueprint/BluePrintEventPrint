@@ -17,10 +17,15 @@
   --booth-sold:      #fcdf6d;   /* "Taken" */
   --booth-held:      #f97316;   /* "On Hold" */
 
-  /* Sponsorable space — a lounge, a conference track. Defaults to the sold
-     colour so an event whose plan does not distinguish them looks unchanged.
-     Overridden per event from the artwork by booth-palette.js. */
-  --booth-sponsored: var(--booth-sold);
+  /* Sponsorable space — a lounge, a conference track. Two colours: still open
+     to sponsor, and taken. Both default to the sold colour so an event whose
+     plan does not distinguish them looks unchanged, and NEITHER is painted onto
+     the plan unless an admin chose it in the Settings colour picker: until
+     then an area keeps exactly the fill its designer gave it. Set per event by
+     booth-palette.js. */
+  --area-open:  var(--booth-sold);
+  --area-taken: var(--area-open);
+  --booth-sponsored: var(--area-open);   /* the old name, still read by older styles */
 
   /* The "this is the stand you want" cue: the rose ring the admin search puts
      round a found stand, and the same ring the printed proposal puts round the
@@ -40,3 +45,9 @@
 .booth-sold      { fill: var(--booth-sold)      !important; }
 .booth-sponsored { fill: var(--booth-sponsored) !important; }
 .booth-held      { fill: var(--booth-held)      !important; }
+
+/* The areas, only once someone has chosen their colours (booth-palette.js sets
+   the class). [data-area] is what BoothMap puts on an area's own rectangle;
+   .area-taken is toggled from the area's status on every catalogue broadcast. */
+.has-area-palette [data-area]            { fill: var(--area-open)  !important; }
+.has-area-palette [data-area].area-taken { fill: var(--area-taken) !important; }

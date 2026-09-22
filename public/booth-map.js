@@ -989,9 +989,30 @@
     return band.h >= Math.max(5, box.h * 0.16) ? band : null;
   }
 
+  /**
+   * Every element an area could be drawn as, Europe's two blue fills first.
+   *
+   * `.cls-6, .cls-8` are the classes Europe's export gave its lounges — and on
+   * North America's export they are TEXT styles, so the areas there were never
+   * found: no click, no logo, however the geometry matched. Class names are an
+   * exporter's private numbering. So, as attach() does for stands, the old
+   * selector stays first (an area that binds today binds to the same element
+   * tomorrow) and every other rect in the plan is a second-chance pool behind
+   * it. Matching is by geometry, so a wider pool cannot mis-bind an area that
+   * already had a match.
+   */
+  function areaCandidates(svgDoc) {
+    var primary = Array.prototype.slice.call(svgDoc.querySelectorAll('.cls-6, .cls-8'));
+    var spare = Array.prototype.slice.call(svgDoc.querySelectorAll('rect'))
+      .filter(function (el) { return primary.indexOf(el) === -1; });
+    return primary.concat(spare);
+  }
+
   /** The artwork rectangle an area occupies, or null if the plan has moved. */
   function areaHost(svgDoc, area) {
-    var candidates = svgDoc.querySelectorAll('.cls-6, .cls-8');
+    var tagged = svgDoc.querySelector('[data-area="' + String(area.key).replace(/"/g, '') + '"]');
+    if (tagged) return tagged;
+    var candidates = areaCandidates(svgDoc);
     for (var i = 0; i < candidates.length; i++) {
       var g = rectGeom(candidates[i]);
       if (g && sameGeom(g, area.geometry, 2)) return candidates[i];
@@ -1006,9 +1027,7 @@
     if (!svgDoc || !areas) return 0;
     var missed = 0;
 
-    // Only the two blue fills the areas use — a tight net, so a stand-shaped
-    // rectangle of the same size elsewhere can never be mistaken for an area.
-    var candidates = Array.prototype.slice.call(svgDoc.querySelectorAll('.cls-6, .cls-8'));
+    var candidates = areaCandidates(svgDoc);
 
     areas.forEach(function (a) {
       var id = prefix + a.key;
@@ -1025,6 +1044,9 @@
       }
       if (!host) { missed++; return; }
       host.setAttribute('data-area', a.key);
+      // Its status, for the palette: an event whose admin chose area colours
+      // paints an open area one colour and a taken one another.
+      if (host.classList) host.classList.toggle('area-taken', a.status === 'taken');
 
       // Measured before the logo test, because restoring a name that has been
       // un-sponsored needs the box just as much as placing one does.

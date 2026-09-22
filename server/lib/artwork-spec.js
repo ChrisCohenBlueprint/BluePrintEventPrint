@@ -1,4 +1,5 @@
 const { glyphBoxes, clusterLabels, rects, pathBBox } = require('../../scripts/svg-paths');
+const { extractStands } = require('./extract-stands');
 
 /**
  * Check a floorplan SVG against specification BEC-FP-01.
@@ -13,7 +14,7 @@ const { glyphBoxes, clusterLabels, rects, pathBBox } = require('../../scripts/sv
  * is telling a designer precisely what to correct, in clause numbers they can
  * act on.
  */
-const SPEC = 'BEC-FP-01 issue 1.0';
+const SPEC = 'BEC-FP-01 issue 1.1';
 
 function validate(svg, { scheduleText = null } = {}) {
 const results = [];
@@ -59,13 +60,29 @@ bigImages.length === 0
   : fail('R2', 'No rasterised drawing content', `${bigImages.length} large embedded images`);
 
 // ─── Collect stand shapes ─────────────────────────────────────────────────────
+// Two ways in, and which one applies is a property of the file.
+//
+// A plan with LIVE TEXT is read by the same extractor the import uses, so the
+// shapes judged here are exactly the shapes that would become stands — whatever
+// colours the designer used. The fill table below was measured on Europe's
+// plan and knows only its yellow and white; on North America's light blue it
+// found no stands at all, and every geometry clause passed on an empty set.
+//
+// A plan whose text has been outlined has nothing for the extractor to read,
+// so the old route stays: stand-coloured rectangles, with numbers guessed from
+// glyph outlines. That is a rescue, and the report says so in R1.
 const fills  = classFills();
 const glyphs = glyphBoxes(svg);
 const all    = rects(svg);
-const stands = all.filter(r => {
-  const f = fills[(r.cls || '').split(/\s+/)[0]];
-  return f && STAND_FILLS[f];
-});
+let read = null;
+try { read = extractStands(svg); } catch (e) { read = null; }
+const live = !!(read && read.stands.length);
+const stands = live
+  ? read.stands.map(s => ({ x: s.visual.x, y: s.visual.y, w: s.visual.w, h: s.visual.h, number: s.number }))
+  : all.filter(r => {
+      const f = fills[(r.cls || '').split(/\s+/)[0]];
+      return f && STAND_FILLS[f];
+    });
 
 // ─── R4: one shape per stand ──────────────────────────────────────────────────
 function numberLabels(r) {
@@ -74,12 +91,20 @@ function numberLabels(r) {
   const band = Math.min(r.h * 0.35, 18);
   return clusterLabels(inside.filter(p => p.cx < r.x + r.w * 0.6 && p.cy < r.y + band));
 }
-const multi = stands.filter(r => numberLabels(r).length > 1);
-multi.length === 0
-  ? pass('R4', 'One shape per stand')
-  : fail('R4', 'One shape per stand',
-         `${multi.length} shapes contain more than one stand number: ` +
-         multi.slice(0, 5).map(r => `${Math.round(r.w)}x${Math.round(r.h)}@(${Math.round(r.x)},${Math.round(r.y)})`).join(', '));
+if (live) {
+  const c = read.issues.collisions;
+  c.length === 0
+    ? pass('R4', 'One shape per stand', `${stands.length} stands, one number each`)
+    : fail('R4', 'One shape per stand',
+           `${c.length} shapes carry two stand numbers: ${c.slice(0, 8).join(', ')} — usually a stale label left under a newer one`);
+} else {
+  const multi = stands.filter(r => numberLabels(r).length > 1);
+  multi.length === 0
+    ? pass('R4', 'One shape per stand')
+    : fail('R4', 'One shape per stand',
+           `${multi.length} shapes contain more than one stand number: ` +
+           multi.slice(0, 5).map(r => `${Math.round(r.w)}x${Math.round(r.h)}@(${Math.round(r.x)},${Math.round(r.y)})`).join(', '));
+}
 
 // ─── R5: no overlapping stands ────────────────────────────────────────────────
 const overlaps = [];
@@ -111,11 +136,29 @@ function areaLabels(r) {
   const band = Math.min(r.h * 0.35, 18);
   return clusterLabels(inside.filter(p => p.cx > r.x + r.w * 0.5 && p.cy > r.y + r.h - band));
 }
-const unlabelled = stands.filter(r => !numberLabels(r).length || !areaLabels(r).length);
-unlabelled.length === 0
-  ? pass('R10', 'Every stand has a number and an area label', `${stands.length} stands`)
-  : fail('R10', 'Every stand has a number and an area label',
-         `${unlabelled.length} of ${stands.length} stands missing a label`);
+if (live) {
+  // Every extracted stand has a number by construction; what can be missing is
+  // the printed area, and what can be astray is a number outside every shape.
+  const noArea = read.issues.noArea, astray = read.issues.orphans;
+  const detail = [];
+  if (noArea.length) detail.push(`${noArea.length} stands print no area (${noArea.slice(0, 8).join(', ')})`);
+  if (astray.length) detail.push(`${astray.length} stand numbers sit outside any shape (${astray.slice(0, 8).join(', ')})`);
+  detail.length === 0
+    ? pass('R10', 'Every stand has a number and an area label', `${stands.length} stands`)
+    : fail('R10', 'Every stand has a number and an area label', detail.join('; '));
+
+  // A number is the stand's identity: printed twice, neither stand can be sold.
+  const rep = read.issues.repeated;
+  rep.length === 0
+    ? pass('R11', 'Stand numbers unique')
+    : fail('R11', 'Stand numbers unique', `printed on two shapes: ${rep.slice(0, 8).join(', ')}`);
+} else {
+  const unlabelled = stands.filter(r => !numberLabels(r).length || !areaLabels(r).length);
+  unlabelled.length === 0
+    ? pass('R10', 'Every stand has a number and an area label', `${stands.length} stands`)
+    : fail('R10', 'Every stand has a number and an area label',
+           `${unlabelled.length} of ${stands.length} stands missing a label`);
+}
 
 // ─── R12: exact fills only ────────────────────────────────────────────────────
 // Near-white means every channel is high — not merely a hex string starting
@@ -126,16 +169,36 @@ function channels(hex) {
   if (!/^[0-9a-f]{6}$/.test(h)) return null;
   return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16));
 }
-const nearWhite = Object.entries(fills).filter(([, f]) => {
+const isNearWhite = (f) => {
   if (['#fff', '#ffffff'].includes(f)) return false;
   const c = channels(f);
-  return c && c.every(v => v >= 0xE8);   // visually white but not exactly white
-});
-nearWhite.length === 0
-  ? pass('R12', 'Exact fills only')
-  : fail('R12', 'Exact fills only',
-         `near-white variants present: ${nearWhite.map(([c, f]) => `${c}=${f}`).join(', ')} — ` +
-         `these are indistinguishable from available stands`);
+  return !!(c && c.every(v => v >= 0xE8));   // visually white but not exactly white
+};
+if (live) {
+  // Colours are the plan's own to choose (the app is told what each means at
+  // upload), so what R12 asks of a live-text plan is that each MEANING has one
+  // flat fill. Two different near-whites on stands is the failure: a reader —
+  // or a person — cannot tell which of them is the empty stand.
+  const standFills = read.fills.filter(f => f.fill && !f.sponsored).map(f => f.fill);
+  const whites = [...new Set(standFills.filter(isNearWhite).concat(standFills.filter(f => ['#fff', '#ffffff'].includes(f))))];
+  const unread = read.unreadableFills;
+  if (unread * 2 > read.stands.length) {
+    fail('R12', 'One flat fill per meaning',
+         `${unread} of ${read.stands.length} stands have no readable fill — gradients, patterns or transparency on the stand shapes`);
+  } else if (whites.length > 1) {
+    fail('R12', 'One flat fill per meaning',
+         `${whites.length} different near-white fills on stands (${whites.join(', ')}) — only one of them can mean "available"`);
+  } else {
+    pass('R12', 'One flat fill per meaning', read.fills.map(f => `${f.fill}=${f.sponsored ? 'area' : f.status}`).join(', '));
+  }
+} else {
+  const nearWhite = Object.entries(fills).filter(([, f]) => isNearWhite(f));
+  nearWhite.length === 0
+    ? pass('R12', 'Exact fills only')
+    : fail('R12', 'Exact fills only',
+           `near-white variants present: ${nearWhite.map(([c, f]) => `${c}=${f}`).join(', ')} — ` +
+           `these are indistinguishable from available stands`);
+}
 
 // ─── R15: companion schedule ──────────────────────────────────────────────────
 if (scheduleText) {

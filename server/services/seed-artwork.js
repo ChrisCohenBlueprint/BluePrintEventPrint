@@ -134,7 +134,9 @@ async function seedNorthAmerica({ apply = false, force = false, actor = 'deploy'
     catch (e) { console.error('Seed: areas not stored —', e.message); }
 
     if (source.unit) await settings.setUnit(source.unit === 'sqft' ? 'ft' : 'm');
-    try { await settings.setPalette(paletteOf(source.fills)); }
+    // A palette an admin has chosen for the event outranks the one read off
+    // the plan; setPaletteFromArtwork is what knows the difference.
+    try { await settings.setPaletteFromArtwork(paletteOf(source.fills)); }
     catch (e) { console.error('Seed: palette not stored —', e.message); }
 
     // The names are ours now, so they come out of the copy that gets served.

@@ -110,11 +110,32 @@ database up and 503 without it.
 
 ### Getting stands into a new event
 
-1. Upload the event's SVG in **Admin → Settings → Floorplans**.
-2. **Preview stands** reads the artwork and shows what it found — it writes
+1. Upload the event's SVG in **Admin → Settings**. The upload is scored against
+   the artwork specification and reported, never refused.
+2. Straight after the upload the console opens **Colours** — what each kind of
+   space (a stand available, taken or on hold; a sponsorable area open or
+   taken) is painted in, starting from the colours the plan is drawn in. A
+   colour you choose sticks; re-reading the plan never overwrites it.
+3. **Read stands** reads the artwork and shows what it found — it writes
    nothing.
-3. **Import** replaces that event's inventory from the artwork. It refuses
-   outright on an event that has sold or held stands.
+4. **Import** turns the artwork into the event's inventory.
+
+### Re-issuing a plan on an event that is selling
+
+Upload the new drawing over the old one. The console immediately shows what it
+changes against the stands already there — new, moved, resized, and any the
+drawing no longer has, flagging those that are sold — and offers **Update from
+this plan**. That keeps every booking where it is: a sold or held stand keeps
+its company, price and notes and only takes its new shape, size and list price
+from the drawing; new stands are added; empty stands the drawing no longer
+draws are removed; anything sold that the drawing dropped is kept and listed by
+number. Every open plan re-fetches the artwork the moment it changes. Stands
+are matched by number, which is why the designer brief asks for numbers to be
+kept stable between issues.
+
+What to give the designer: `/artwork-brief` (how to draw a plan the app can
+read, including revisions) and `/artwork-spec` (the specification each upload
+is checked against). Both are linked from Settings.
 
 `npm run migrate` still exists and seeds stands from `server/data/booth_data.json`;
 it predates artwork import and is only for the original Europe data. That file

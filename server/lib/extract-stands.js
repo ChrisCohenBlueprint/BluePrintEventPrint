@@ -373,6 +373,7 @@ function extractStands(svg) {
       : `${allTexts.length} text runs were found, but none of them reads as a stand number ` +
         `(expected something like 142, 1249 or P014).`;
     return { stands: [], unit: null, unitsPerArea: null, fills: [], printedNames: [],
+             issues: { collisions: [], repeated: [], orphans: [], noArea: [], sizeDisagrees: [] },
              rects: rects.length, texts: allTexts.length, warnings: [why] };
   }
 
@@ -532,7 +533,18 @@ function extractStands(svg) {
   const fills = statusFromColour(stands, warnings);
   for (const st of stands) if (st.exhibitor) printedNames.push(st.exhibitor);
 
-  return { stands, unit, unitsPerArea, fills, printedNames,
+  // The same findings as the warnings above, as data rather than prose, so the
+  // artwork check can score a live-text plan on what was actually read instead
+  // of re-deriving it from outline glyphs it does not have.
+  const issues = {
+    collisions,                                  // "134/138": two numbers in one shape
+    repeated: repeated.slice(),                  // one number on two shapes
+    orphans: orphans.map(o => o.text),           // a number outside every shape
+    noArea: stands.filter(s => s.printedArea == null).map(s => s.number),
+    sizeDisagrees: disagree.slice(),
+  };
+
+  return { stands, unit, unitsPerArea, fills, printedNames, issues,
            unreadableFills: stands.filter(s => s.fillUnknown).length,
            rects: rects.length, texts: allTexts.length, warnings };
 }

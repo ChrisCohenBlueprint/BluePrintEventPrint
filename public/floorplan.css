@@ -104,9 +104,11 @@ body {
    no floorplan sponsor is set. This more-specific rule lets JS hide it. */
 .leg-item[hidden] { display: none; }
 .leg-dot { width: 12px; height: 12px; border-radius: 3px; }
-.leg-dot.white  { background: #fff; border: 1px solid #94a3b8; }
+.leg-dot.white  { background: var(--booth-available); border: 1px solid #94a3b8; }
 .leg-dot.yellow { background: var(--yellow); }
 .leg-dot.orange { background: var(--orange); }
+.leg-dot.area-open  { background: var(--area-open); }
+.leg-dot.area-taken { background: var(--area-taken); }
 
 .fp-zoom-controls { display: flex; gap: 6px; }
 .zoom-btn {

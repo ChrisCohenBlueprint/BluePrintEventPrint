@@ -32,32 +32,100 @@ async function get() {
     unit: doc && (doc.unit === 'ft') ? 'ft' : 'm',
     currency,
     currencySymbol: CURRENCIES[currency],
-    // The colours THIS event's artwork is drawn in. Null means the app's own
+    // The colours THIS event's spaces are painted in. Null means the app's own
     // palette, which is what Europe has always used.
-    palette: doc && doc.palette && doc.palette.sold ? doc.palette : null,
+    palette: cleanPalette(doc && doc.palette),
   };
 }
 
 /**
- * Record the colours this event's plan is drawn in.
+ * The colours a palette can set, and the space each one paints.
+ *
+ *   available, sold, held — a stand, by status
+ *   sponsored             — a sponsorable area (a lounge, a theatre) still open
+ *   areaTaken             — a sponsorable area a sponsor has taken
+ *
+ * `sponsored` keeps its old name because every stored palette already carries
+ * it. The two area colours are only ever PAINTED when an admin chose them:
+ * a palette read out of the artwork leaves the areas exactly as drawn.
+ */
+const PALETTE_KEYS = ['available', 'sold', 'held', 'sponsored', 'areaTaken'];
+const hex = (v) => (/^#[0-9a-f]{3,8}$/i.test(String(v || '')) ? String(v).toLowerCase() : null);
+
+/** A stored palette as the clients expect it, or null when nothing is set. */
+function cleanPalette(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  let any = false;
+  for (const k of PALETTE_KEYS) {
+    out[k] = hex(raw[k]);
+    if (out[k]) any = true;
+  }
+  if (!any) return null;
+  // Who chose these: 'admin' from the colour picker, 'artwork' read off the
+  // plan by an import. Older rows predate the field and were all read off the
+  // plan, so that is what a missing value means.
+  out.source = raw.source === 'admin' ? 'admin' : 'artwork';
+  return out;
+}
+
+/**
+ * Record the colours this event's spaces are painted in.
  *
  * A stand's colour should be the colour the designer chose for it. North
  * America's plan draws sold stands light blue and sponsored areas burgundy;
  * repainting them in Europe's yellow made the plan stop looking like the plan
- * that was approved. Held stays the app's orange on every event, because a
- * held stand is a state the app owns, not something the artwork drew.
+ * that was approved. So an import reads the colours off the plan and stores
+ * them here with `source: 'artwork'`.
+ *
+ * An admin can also CHOOSE them, at upload or any time after, and a choice
+ * outranks a reading: `source: 'admin'` is what setPaletteFromArtwork checks
+ * before it writes, so re-reading a plan never undoes a decision someone made.
+ * A chosen palette may leave any colour unset, which means the app's own.
+ *
+ * ON HOLD can be chosen but is never read off a plan: a hold starts and expires
+ * in the app, so unless someone decides otherwise it keeps the one orange that
+ * means the same thing on every event.
  */
-async function setPalette(palette) {
-  const hex = (v) => (/^#[0-9a-f]{3,8}$/i.test(String(v || '')) ? String(v).toLowerCase() : null);
-  const clean = {
-    available: hex(palette && palette.available),
-    sold: hex(palette && palette.sold),
-    sponsored: hex(palette && palette.sponsored),
-  };
-  if (!clean.sold) return { ok: false, reason: 'no_sold_colour' };
+async function setPalette(palette, { source = 'admin' } = {}) {
+  const clean = {};
+  for (const k of PALETTE_KEYS) clean[k] = hex(palette && palette[k]);
+  const any = PALETTE_KEYS.some(k => clean[k]);
+  if (source === 'artwork') {
+    // A reading with no sold colour is a plan whose colours could not be read;
+    // painting the app in that would blank the hall.
+    if (!clean.sold) return { ok: false, reason: 'no_sold_colour' };
+    clean.held = null;                     // never read off a plan — see above
+  } else if (!any) {
+    // Nothing chosen at all is "use the app's own colours", not an error.
+    await clearPalette();
+    return { ok: true, palette: null };
+  }
+  clean.source = source === 'artwork' ? 'artwork' : 'admin';
   await col().updateOne({ _id: config.showId },
     { $set: { palette: clean, updatedAt: new Date() } }, { upsert: true });
-  return { ok: true, palette: clean };
+  return { ok: true, palette: cleanPalette(clean) };
+}
+
+/**
+ * What an import calls: store the colours read off the plan, unless an admin
+ * has already chosen this event's colours, in which case their choice stands
+ * and the reading is reported back untouched.
+ */
+async function setPaletteFromArtwork(palette) {
+  const current = (await get()).palette;
+  if (current && current.source === 'admin') {
+    return { ok: true, kept: true, palette: current, fromArtwork: cleanPalette({ ...palette, source: 'artwork' }) };
+  }
+  const r = await setPalette(palette, { source: 'artwork' });
+  return { ...r, kept: false };
+}
+
+/** Back to the app's own colours for every space. */
+async function clearPalette() {
+  await col().updateOne({ _id: config.showId },
+    { $unset: { palette: '' }, $set: { updatedAt: new Date() } }, { upsert: true });
+  return { ok: true, palette: null };
 }
 
 /** The live €/unit rate — used wherever a list price is derived. */
@@ -99,4 +167,5 @@ async function setUnit(value) {
   return { ok: true, unit };
 }
 
-module.exports = { get, rate, setRate, setUnit, setCurrency, setPalette, CURRENCIES };
+module.exports = { get, rate, setRate, setUnit, setCurrency, setPalette, setPaletteFromArtwork,
+                   clearPalette, cleanPalette, PALETTE_KEYS, CURRENCIES };

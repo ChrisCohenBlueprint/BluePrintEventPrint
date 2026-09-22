@@ -116,9 +116,21 @@ led to it. Behavioural events are **not sent at all** until the visitor consents
   collection — which is in the same database as the data, so restoring a backup,
   pointing at a fresh cluster or cloning to staging re-armed them and the next
   deploy deleted every booth and hold on the default event.
-* **Importing stands deletes that event's inventory** and rebuilds it from the
-  artwork. It refuses outright on an event with sold or held stands; `?force=1`
-  is a decision, not a retry.
+* **Importing stands has four modes** and the query string names them.
+  Default is an upsert; `?replace=1` deletes the inventory and rebuilds it;
+  `?mode=update` is the re-issued plan on a selling event (`keep` in
+  `booths.importFromArtwork`: bookings stay, shapes follow the drawing, empty
+  stands the drawing dropped are removed, sold ones are kept and reported);
+  `?force=1` is the seed script's override and is not offered in the UI. The
+  first two refuse outright on an event with sold or held stands.
+* **A palette chosen by an admin outranks one read off the plan.**
+  `settings.setPaletteFromArtwork` is what an import calls, and it leaves an
+  admin's choice (`palette.source === 'admin'`) alone. Only a chosen palette
+  paints the sponsorable areas (`has-area-palette` on the root); a reading
+  leaves them as drawn. On hold is never read off a plan.
+* **The artwork check reads live-text plans through the extractor** and
+  outlined plans through the glyph heuristics. Europe still scores 3/8; North
+  America is judged on its real stands, not on an empty set.
 * **The artwork is user-uploaded SVG sanitised by regex.** It is served under its
   own locked-down CSP (`default-src 'none'`) for that reason.
 * **One instance only.** Rooms, caches, limiters and the spent-2FA set are all

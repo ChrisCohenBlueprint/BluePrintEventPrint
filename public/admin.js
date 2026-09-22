@@ -2322,6 +2322,32 @@ function retagAdminMap() {
   tagAdminBooths();
 }
 
+// The artwork was replaced, re-read or removed. Fetch it again and re-bind the
+// stands in place — the pan/zoom is on the frame around the plan, not the plan
+// itself, so it survives the swap. The Settings cards refresh too, so the
+// previews and the artwork check show the plan that is now in use.
+socket.on('floorplan:changed', async () => {
+  if (svgDoc) {
+    const mount = document.getElementById('admin-svg-mount');
+    try {
+      const svgRes = await fetch(`/floorplan.svg?show=${encodeURIComponent(SHOW)}`);
+      if (svgRes.ok) {
+        if (splitUI.id) exitSplitMode();
+        mount.innerHTML = await svgRes.text();
+        svgDoc = mount.querySelector('svg');
+        if (svgDoc) {
+          svgDoc.setAttribute('width', '100%');
+          svgDoc.setAttribute('height', '100%');
+          adminTagged = false;
+          tagAdminBooths();
+          lucide.createIcons();
+        }
+      }
+    } catch (e) { console.warn('Could not re-fetch the plan —', e.message); }
+  }
+  if (document.getElementById('section-settings')?.classList.contains('active')) loadPlans();
+});
+
 socket.on('floorplan-sponsor', (s) => {
   sponsorColor = (s && s.color) || '';
   sponsorName  = (s && s.name)  || '';
@@ -2342,8 +2368,10 @@ socket.on('floorplan-sponsor', (s) => {
 // Show settings (area unit, currency, rate). Re-render everything that prints a
 // size or a rate so the label/price updates live.
 socket.on('settings', (s) => {
-  // The colours this event's plan is drawn in.
-  if (window.BoothPalette) BoothPalette.apply(s && s.palette);
+  // The colours this event's spaces are painted in — only when the event
+  // carries the field. The rate and unit handlers send partial settings, and
+  // applying an absent palette wiped the event's colours on every one.
+  if (window.BoothPalette && s && ('palette' in s)) BoothPalette.apply(s.palette);
   if (s && s.unit) UNIT = s.unit === 'ft' ? 'ft²' : 'm²';
   if (s && s.unit) relabelSplitSizes();
   if (s && s.currencySymbol) { CUR = s.currencySymbol; window.UI.setCurrency(CUR); }
@@ -2595,7 +2623,9 @@ function auditText(r) {
     case 'booth.set_logo':      return `Sponsor logo ${m.logo === '' ? 'removed from' : 'set on'} ${n}`;
     case 'floorplan.upload':    return `Floorplan uploaded${m.bytes ? ` (${Math.round(m.bytes / 1024)} KB)` : ''}`;
     case 'floorplan.revert':    return 'Floorplan reverted to the shipped plan';
-    case 'stands.import':       return `Stands imported from the artwork${m.imported ? ` — ${m.imported}` : ''}`;
+    case 'stands.import':       return `Stands ${m.mode === 'update' ? 'updated from a re-issued plan' : 'imported from the artwork'}${m.imported ? ` — ${m.imported}` : ''}`;
+    case 'settings.palette':    return m.use === 'app' ? 'Colours set back to the app\'s own'
+                                     : m.use === 'artwork' ? 'Colours set from the plan' : 'Colours chosen for the plan';
     case 'sponsor.create':      return `Sponsorship package added${m.name ? `: ${m.name}` : ''}`;
     case 'sponsor.delete':      return `Sponsorship package deleted${m.name ? `: ${m.name}` : ''}`;
     case 'sponsor.import':      return 'Sponsorship catalogue imported';
@@ -4145,7 +4175,15 @@ function planCard(row, isCurrent) {
   imp.hidden = !row.uploaded;
   imp.onclick = () => previewStands(row);
 
-  actions.append(up, dl, imp, rm);
+  // The colours this event's spaces are painted in — every event, uploaded or
+  // not, because Europe's shipped plan is coloured too.
+  const col = document.createElement('button');
+  col.type = 'button';
+  col.className = 'admin-btn';
+  col.textContent = 'Colours';
+  col.onclick = () => openPalettePanel(row);
+
+  actions.append(up, dl, imp, col, rm);
 
   // Only where there is something to lose.
   const parts = [head, preview, meta];
@@ -4153,7 +4191,7 @@ function planCard(row, isCurrent) {
   if (row.boothCount > 0) {
     const warn = document.createElement('div');
     warn.className = 'plan-warn';
-    warn.textContent = `${row.boothCount} stands are positioned against this plan. Replacing it with differently drawn artwork can leave them off the map until their geometry is re-extracted — bookings are unaffected.`;
+    warn.textContent = `${row.boothCount} stands are positioned against this plan. After replacing it with a re-issued drawing, use Read stands → Update from this plan to move them to where the new drawing puts them. Bookings are kept.`;
     parts.push(warn);
   }
   parts.push(actions);
@@ -4203,13 +4241,192 @@ function showSpecReport(eventName, spec) {
 
   const note = document.createElement('p');
   note.className = 'spec-report-note';
-  note.textContent = 'The plan has been saved and is in use. This is what to send whoever produced the artwork.';
+  note.textContent = 'The plan has been saved and is in use. This is what to send whoever produced the artwork, together with the ';
+  const brief = document.createElement('a');
+  brief.href = '/artwork-brief'; brief.target = '_blank'; brief.rel = 'noopener';
+  brief.textContent = 'designer brief';
+  note.append(brief, '.');
 
   const pre = document.createElement('pre');
   pre.className = 'spec-report-body';
   pre.textContent = text;
 
   box.append(head, note, pre);
+  document.getElementById('section-settings')?.prepend(box);
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ── Settings: the colours an event's spaces are painted in ───────────────────
+// Five colours: a stand available, taken and on hold, and a sponsorable area
+// open and taken. The picker starts from whatever the plan is drawn in, shows
+// what each colour on the plan currently reads as, and saves per event. A
+// colour left as "app default" means the app's own — which is what Europe has
+// always used.
+const PALETTE_ROWS = [
+  { key: 'available', label: 'Stand — available',   hint: 'An empty stand a visitor can enquire about.', fallback: '#ffffff' },
+  { key: 'sold',      label: 'Stand — taken',       hint: 'A stand that has been sold.',                 fallback: '#fcdf6d' },
+  { key: 'held',      label: 'Stand — on hold',     hint: 'Reserved for 24 hours, or by the plan. The app\'s orange unless you choose otherwise.', fallback: '#f97316' },
+  { key: 'sponsored', label: 'Area — open',         hint: 'A lounge, theatre or track still available to sponsor. Painted only once you choose a colour; until then it keeps the plan\'s own.', fallback: '#fcdf6d' },
+  { key: 'areaTaken', label: 'Area — sponsored',    hint: 'An area a sponsor has taken.',              fallback: '#fcdf6d' },
+];
+
+async function openPalettePanel(row, { fresh = false } = {}) {
+  document.getElementById('palette-panel')?.remove();
+  const where = row.name || row.showId;
+
+  let info;
+  try {
+    info = await api('/api/palette', { headers: { 'X-Show': row.slug } });
+  } catch (e) {
+    return adminToast(`Could not read ${where}'s colours — ${e.message}`, 'error');
+  }
+  const current = info.palette || null;
+  const suggested = info.fromArtwork || null;
+  // What each row starts on: the colour in force, else the plan's own, else
+  // the app's. Whether it is "set" is what decides if it is saved.
+  const state = {};
+  PALETTE_ROWS.forEach(r => {
+    state[r.key] = { value: (current && current[r.key]) || (suggested && suggested[r.key]) || r.fallback,
+                     set: !!(current && current[r.key]) };
+  });
+
+  const box = document.createElement('div');
+  box.id = 'palette-panel';
+  box.className = 'spec-report palette-panel';
+
+  const head = document.createElement('div');
+  head.className = 'spec-report-head';
+  const title = document.createElement('strong');
+  title.textContent = `${where} — colours`;
+  head.append(title);
+
+  const note = document.createElement('p');
+  note.className = 'spec-report-note';
+  note.textContent = fresh
+    ? 'The plan is uploaded. Choose what each kind of space is painted in — these start from the colours the plan is drawn in. The plan sponsor\'s own colour is set under Sponsors.'
+    : current && current.source === 'admin'
+      ? 'These colours were chosen here and will not be changed by re-reading the plan. The plan sponsor\'s own colour is set under Sponsors.'
+      : current
+        ? 'These are the colours read from the plan. Change any of them and your choice will stick, even if the plan is re-read.'
+        : 'This event uses the app\'s own colours. Choose any to paint this event differently; leave the rest as they are.';
+
+  const grid = document.createElement('div');
+  grid.className = 'palette-grid';
+  PALETTE_ROWS.forEach(r => {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'palette-row';
+    const lab = document.createElement('label');
+    lab.className = 'palette-label';
+    lab.textContent = r.label;
+    const hint = document.createElement('div');
+    hint.className = 'palette-hint';
+    hint.textContent = r.hint;
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'palette-input';
+    input.value = state[r.key].value;
+    input.setAttribute('data-palette-key', r.key);
+    input.setAttribute('aria-label', r.label);
+    const status = document.createElement('span');
+    status.className = 'palette-status';
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'admin-btn palette-clear';
+    clear.textContent = 'App default';
+    clear.title = 'Use the app\'s own colour for this';
+    const paint = () => {
+      status.textContent = state[r.key].set ? input.value : 'app default';
+      rowEl.classList.toggle('is-set', state[r.key].set);
+    };
+    input.oninput = () => { state[r.key] = { value: input.value, set: true }; paint(); };
+    clear.onclick = () => { state[r.key] = { value: r.fallback, set: false }; input.value = r.fallback; paint(); };
+    paint();
+    const controls = document.createElement('div');
+    controls.className = 'palette-controls';
+    controls.append(input, status, clear);
+    rowEl.append(lab, hint, controls);
+    grid.appendChild(rowEl);
+  });
+
+  // What the plan itself uses, so the choice can be made against the drawing.
+  let swatches = null;
+  if (info.fills && info.fills.length) {
+    swatches = document.createElement('div');
+    swatches.className = 'palette-swatches';
+    const cap = document.createElement('div');
+    cap.className = 'palette-hint';
+    cap.textContent = 'Colours on the plan and what each reads as — click one to copy it into the matching row:';
+    swatches.appendChild(cap);
+    info.fills.forEach(f => {
+      if (!f.fill) return;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'palette-swatch';
+      const key = f.sponsored ? 'sponsored' : f.status;
+      const dot = document.createElement('span');
+      dot.className = 'palette-swatch-dot';
+      dot.style.background = f.fill;
+      b.append(dot, `${f.fill} · ${f.count} · ${f.sponsored ? 'area' : f.status}`);
+      b.title = `Use ${f.fill} for "${(PALETTE_ROWS.find(r => r.key === key) || {}).label || key}"`;
+      b.onclick = () => {
+        const input = grid.querySelector(`[data-palette-key="${key}"]`);
+        if (!input) return;
+        input.value = f.fill;
+        input.dispatchEvent(new Event('input'));
+      };
+      swatches.appendChild(b);
+    });
+  }
+
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'admin-btn primary';
+  save.textContent = 'Save colours';
+  save.onclick = (e) => withPending(e.currentTarget, async () => {
+    const palette = {};
+    PALETTE_ROWS.forEach(r => { palette[r.key] = state[r.key].set ? state[r.key].value : null; });
+    try {
+      await api('/api/palette', { method: 'PUT', headers: { 'X-Show': row.slug }, body: JSON.stringify({ palette }) });
+      adminToast(`${where}: colours saved.`, 'ok');
+      box.remove();
+    } catch (err) { adminToast(err.message || 'Could not save the colours.', 'error'); }
+  });
+
+  const usePlan = document.createElement('button');
+  usePlan.type = 'button';
+  usePlan.className = 'admin-btn';
+  usePlan.textContent = 'Use the plan\'s colours';
+  usePlan.title = 'Read the colours off the plan and use those. On hold stays the app\'s orange; the areas keep the plan\'s own fills.';
+  usePlan.hidden = !suggested;
+  usePlan.onclick = (e) => withPending(e.currentTarget, async () => {
+    try {
+      await api('/api/palette', { method: 'PUT', headers: { 'X-Show': row.slug }, body: JSON.stringify({ use: 'artwork' }) });
+      adminToast(`${where}: using the plan's own colours.`, 'ok');
+      box.remove();
+    } catch (err) { adminToast(err.message || 'Could not set the colours.', 'error'); }
+  });
+
+  const useApp = document.createElement('button');
+  useApp.type = 'button';
+  useApp.className = 'admin-btn';
+  useApp.textContent = 'Use the app\'s colours';
+  useApp.onclick = (e) => withPending(e.currentTarget, async () => {
+    try {
+      await api('/api/palette', { method: 'PUT', headers: { 'X-Show': row.slug }, body: JSON.stringify({ use: 'app' }) });
+      adminToast(`${where}: using the app's own colours.`, 'ok');
+      box.remove();
+    } catch (err) { adminToast(err.message || 'Could not set the colours.', 'error'); }
+  });
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'admin-btn';
+  close.textContent = 'Close';
+  close.onclick = () => box.remove();
+  head.append(save, usePlan, useApp, close);
+
+  box.append(head, note, grid);
+  if (swatches) box.appendChild(swatches);
   document.getElementById('section-settings')?.prepend(box);
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -4253,6 +4470,8 @@ async function previewStands(row) {
   head.append(title);
 
   const st = p.byStatus || {};
+  const d = p.diff || null;
+  const ds = (d && d.summary) || {};
   const note = document.createElement('p');
   note.className = 'spec-report-note';
   note.textContent =
@@ -4262,12 +4481,40 @@ async function previewStands(row) {
       ? `${p.sponsored} sponsorable areas (${(p.areas || []).join(', ')}) are left in the artwork, not imported as stands. `
       : '') +
     `${p.totalArea.toLocaleString()} ${unit} in total. ` +
-    (p.existing ? `This event currently has ${p.existing} stands, which would be replaced. ` : '') +
+    (p.existing
+      ? `This event has ${p.existing} stands now: against this plan, ${ds.added || 0} new, ${ds.moved || 0} moved, ` +
+        `${ds.resized || 0} resized, ${ds.unchanged || 0} unchanged, ${ds.missing || 0} no longer drawn` +
+        (ds.committedMissing ? ` — ${ds.committedMissing} of them sold or on hold` : '') + '. '
+      : '') +
     'Exhibitor names become ours: drawn in our own type, searchable, and editable here.';
 
+  // The stands the drawing drops that somebody has sold: the one thing that
+  // must not be scrolled past, so it is its own line, in the warning colour.
+  let dropped = null;
+  if (d && ds.committedMissing) {
+    dropped = document.createElement('p');
+    dropped.className = 'plan-warn stand-report-dropped';
+    dropped.textContent = 'Not drawn on this plan but sold or on hold here: ' +
+      d.missing.filter(m => m.committed)
+        .map(m => `${m.boothNumber}${m.company ? ` (${m.company})` : ''}`).join(', ') +
+      '. They are kept exactly as they are, but will not appear on the map until the drawing puts them back. ' +
+      'If they have been renumbered, renumber them here (Tools → Renumber) before updating.';
+  }
+
+  const list = (rows, f) => rows.slice(0, 40).map(f).join(', ') + (rows.length > 40 ? ` … and ${rows.length - 40} more` : '');
   const pre = document.createElement('pre');
   pre.className = 'spec-report-body';
   pre.textContent = [
+    ...(d && p.existing ? [
+      'What this drawing changes:',
+      ...(d.added.length   ? [`  new        ${list(d.added, a => a.boothNumber)}`] : []),
+      ...(d.moved.length   ? [`  moved      ${list(d.moved, a => a.boothNumber)}`] : []),
+      ...(d.resized.length ? [`  resized    ${list(d.resized, a => `${a.boothNumber} (${a.from ?? '?'}→${a.to ?? '?'} ${unit})`)}`] : []),
+      ...(d.missing.length ? [`  not drawn  ${list(d.missing, a => `${a.boothNumber}${a.committed ? ' *' : ''}`)}` +
+                              (d.missing.some(m => m.committed) ? '   (* sold or on hold — kept)' : '   (empty stands are removed by Update)')] : []),
+      ...(!d.added.length && !d.moved.length && !d.resized.length && !d.missing.length ? ['  nothing — every stand is where it was'] : []),
+      '',
+    ] : []),
     ...(p.fills && p.fills.length ? [
       'What the plan\'s colours mean:',
       '  colour     outline    stands  reads as',
@@ -4287,18 +4534,25 @@ async function previewStands(row) {
   const go = document.createElement('button');
   go.type = 'button';
   go.className = 'admin-btn primary';
-  if (p.committed > 0) {
-    // Never offer a button that is going to be refused. Europe has stands sold
-    // and on hold, and re-reading the plan would move stands already spoken for.
-    go.disabled = true;
-    go.textContent = `Cannot import — ${p.committed} sold or on hold`;
-    go.title = 'Re-reading the plan is refused on an event that has started selling.';
-  } else {
-    // The ordinary import keeps everything it can: it re-reads geometry, size
-    // and price, and leaves shown numbers, logos, tags and countries alone.
+  if (!p.existing) {
+    // A fresh event: the plan becomes its inventory.
     go.textContent = `Import ${p.stands} stands`;
+    go.title = 'Reads each stand\u2019s number, shape, size, status and exhibitor from the plan.';
+    go.onclick = () => importStands(row, p, box, { mode: 'import' });
+  } else if (p.committed > 0 || p.handwork > 0) {
+    // The re-issued plan on an event that is selling. Every booking stays
+    // where it is; only shapes, sizes and list prices are re-read, new stands
+    // are added, and empty stands the drawing no longer has are removed.
+    go.textContent = `Update from this plan — keeps ${p.committed || 0} bookings`;
+    go.title = 'Sold and held stands keep their company, price and notes and only take their new shape from the plan. ' +
+               'New stands are added; empty stands the plan no longer draws are removed; anything sold that is missing is kept and listed.';
+    go.onclick = () => importStands(row, p, box, { mode: 'update' });
+  } else {
+    // Nothing committed yet: the ordinary re-read, which keeps anything set by
+    // hand and refreshes the rest from the plan.
+    go.textContent = `Update ${p.stands} stands from this plan`;
     go.title = 'Re-reads each stand\u2019s shape, size and list price from the plan. Anything set by hand is kept.';
-    go.onclick = () => importStands(row, p, box, { replace: false });
+    go.onclick = () => importStands(row, p, box, { mode: 'upsert' });
   }
 
   // Kept well apart from the button above, and named for what it destroys.
@@ -4310,18 +4564,30 @@ async function previewStands(row) {
   wipe.textContent = 'Replace everything';
   wipe.title = 'Throws away this event\u2019s stands and rebuilds them from the plan. Bookings and anything set by hand are lost.';
   wipe.disabled = p.committed > 0;
-  wipe.onclick = () => importStands(row, p, box, { replace: true });
+  wipe.hidden = !p.existing;
+  wipe.onclick = () => importStands(row, p, box, { mode: 'replace' });
 
   head.append(go, wipe, close);
 
-  box.append(head, note, pre);
+  box.append(head, note);
+  if (dropped) box.appendChild(dropped);
+  box.appendChild(pre);
   document.getElementById('section-settings')?.prepend(box);
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-/** Import the stands, once the password is given. */
-async function importStands(row, preview, box, { replace = false } = {}) {
+/**
+ * Import the stands, once the password is given.
+ *
+ *   import  — a fresh event; the plan becomes its inventory
+ *   upsert  — re-read shapes, sizes and prices; keep anything set by hand
+ *   update  — the re-issued plan on a selling event: bookings stay put
+ *   replace — throw the inventory away and rebuild it (asked for by name)
+ */
+async function importStands(row, preview, box, { mode = 'upsert' } = {}) {
   const where = row.name || row.showId;
+  const replace = mode === 'replace';
+  const update = mode === 'update';
 
   if (replace && !await confirmDialog(
     `Throw away ${where}'s ${preview.existing || 0} stands and rebuild them from the plan?\n\n` +
@@ -4332,19 +4598,26 @@ async function importStands(row, preview, box, { replace = false } = {}) {
 
   // Was a window.prompt(), which shows the admin password in clear text and
   // leaves it in the browser's dialog history.
+  const ds = (preview.diff && preview.diff.summary) || {};
   const pw = await askSecret(
     replace
       ? `Replacing every stand on ${where} from its artwork.`
-      : `Reading ${preview.stands} stands into ${where}.\n\n` +
-        'Each stand\u2019s shape, size and list price are re-read from the plan. Shown numbers, sponsor logos, tags and countries are kept.',
-    { title: replace ? `Replace every stand on ${where}` : `Import stands into ${where}`,
-      confirmLabel: replace ? 'Replace them' : 'Import them' });
+      : update
+        ? `Updating ${where} from the re-issued plan.\n\n` +
+          `${preview.committed || 0} sold or held stands keep their company, price and notes and take their new shape from the plan. ` +
+          `${ds.added || 0} new stands are added` +
+          (ds.missing ? `; ${ds.missing} the plan no longer draws are removed if empty, kept and listed if sold.` : '.')
+        : `Reading ${preview.stands} stands into ${where}.\n\n` +
+          'Each stand\u2019s shape, size and list price are re-read from the plan. Shown numbers, sponsor logos, tags and countries are kept.',
+    { title: replace ? `Replace every stand on ${where}` : update ? `Update ${where} from the plan` : `Import stands into ${where}`,
+      confirmLabel: replace ? 'Replace them' : update ? 'Update them' : 'Import them' });
   if (!pw) return;
 
-  adminToast(replace ? 'Replacing…' : 'Importing…');
+  adminToast(replace ? 'Replacing…' : update ? 'Updating…' : 'Importing…');
   let r;
   try {
-    r = await api(`/api/stands/import${replace ? '?replace=1' : ''}`, {
+    const q = replace ? '?replace=1' : update ? '?mode=update' : '';
+    r = await api(`/api/stands/import${q}`, {
       method: 'POST',
       headers: { 'X-Show': row.slug, 'X-Confirm-Password': pw },
     });
@@ -4358,9 +4631,19 @@ async function importStands(row, preview, box, { replace = false } = {}) {
   adminToast(
     `${where}: ${r.imported} stands ${r.mode === 'replace' ? 'replaced' : 'updated from the plan'} — ` +
     `${r.available} available, ${r.sold} sold, ${r.held || 0} on hold` +
+    (r.created ? `, ${r.created} new` : '') +
+    (r.removed && r.removed.length ? `, ${r.removed.length} empty stands no longer drawn removed` : '') +
     (r.areasImported ? `, ${r.areasImported} sponsorable areas read from this plan` : '') +
     (r.namesRemoved ? `, ${r.namesRemoved} printed names taken out of the artwork.` : '.'), 'ok');
   box?.remove();
+  // What the drawing dropped that could not be removed stays on the page, by
+  // number and company, until it is read — a toast is not the place for it.
+  if (r.kept && r.kept.length) {
+    showImportRefusal(where,
+      'Updated. These stands are not drawn on the new plan but carry a booking or hand-work, so they were kept: ' +
+      r.kept.map(k => `${k.boothNumber} (${k.status}${k.company ? `, ${k.company}` : ''})`).join(', ') +
+      '. They will not appear on the map until the drawing includes them again — or renumber them here if the plan has renumbered them.');
+  }
   loadPlans();
 }
 
@@ -4408,7 +4691,8 @@ function pickPlan(row) {
     }
     if (row.boothCount > 0 &&
         !await confirmDialog(
-          `${row.boothCount} stands are positioned against ${row.name || row.showId}'s current plan.\n\nIf the new artwork is drawn differently they may stop appearing on the map until their geometry is re-extracted. Bookings are not affected.`,
+          `${row.boothCount} stands are positioned against ${row.name || row.showId}'s current plan.\n\n` +
+          'The new drawing is checked against them straight after upload, and Update from this plan moves them to where it puts them. Bookings are kept throughout.',
           { title: `Replace the floorplan for ${row.name || row.showId}`, confirmLabel: 'Replace it', danger: true })) {
       return;
     }
@@ -4446,7 +4730,12 @@ function pickPlan(row) {
       if (r.spec && r.spec.failedClauses && r.spec.failedClauses.length) {
         showSpecReport(row.name || row.showId, r.spec);
       }
-      loadPlans();
+      // The two things that follow an upload, opened rather than left to be
+      // found: what this drawing does to the stands already here, and what
+      // each kind of space is painted in.
+      await loadPlans();
+      await previewStands({ ...row, uploaded: true });   // it is uploaded now, whatever the card said before
+      await openPalettePanel(row, { fresh: true });
     } catch (err) {
       adminToast(err.message || 'Could not read that file.', 'error');
     }

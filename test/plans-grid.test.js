@@ -24,6 +24,34 @@ const PLANS = [
   await page.route('**/api/floorplans', r => r.fulfill({ status: 200, contentType: 'application/json',
     body: JSON.stringify(PLANS) }));
 
+  // What follows an upload: the stands preview (with its diff against the
+  // event) and the colour picker. Both are opened for the admin rather than
+  // left to be found, so both are stubbed here.
+  const paletteWrites = [];
+  await page.route('**/api/palette', r => {
+    if (r.request().method() === 'PUT') {
+      paletteWrites.push({ show: r.request().headers()['x-show'], body: r.request().postDataJSON() });
+      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, palette: null }) });
+    }
+    r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      ok: true, palette: null,
+      fromArtwork: { available: '#fffcf8', sold: '#689abb', held: null, sponsored: '#7c1315', areaTaken: null, source: 'artwork' },
+      fills: [{ fill: '#689abb', stroke: '#013149', count: 70, status: 'sold', sponsored: false },
+              { fill: '#fffcf8', stroke: '#013149', count: 19, status: 'available', sponsored: false },
+              { fill: '#7c1315', stroke: '#013149', count: 3, status: 'sold', sponsored: true }],
+    }) });
+  });
+  await page.route('**/api/stands/preview', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    ok: true, stands: 96, named: 70, byStatus: { available: 22, sold: 70, held: 4 }, sponsored: 3, areas: ['VIP Lounge'],
+    fills: [], unit: 'sqft', totalArea: 12000, warnings: [], committed: 12, handwork: 0, existing: 93,
+    sample: [{ number: '101', area: 100, exhibitor: 'Acme', status: 'sold' }],
+    diff: { added: [{ boothNumber: '501' }, { boothNumber: '502' }, { boothNumber: '503' }],
+            moved: [{ boothNumber: '101' }], resized: [], unchanged: [],
+            missing: [{ boothNumber: '140', status: 'sold', company: 'Gone GmbH', committed: true },
+                      { boothNumber: '141', status: 'available', company: null, committed: false }],
+            summary: { added: 3, moved: 1, resized: 0, unchanged: 89, missing: 2, committedMissing: 1 } },
+  }) }));
+
   const uploads = [];
   await page.route('**/api/floorplan', r => {
     const req = r.request();
@@ -76,6 +104,8 @@ const PLANS = [
   check('an uploaded plan says Replace, one without says Upload',
         lna.buttons[0] === 'Replace' && lme.buttons[0] === 'Upload',
         `${lna.buttons[0]} / ${lme.buttons[0]}`);
+  check('every event offers its colours, uploaded or not',
+        cards.every(c => c.buttons.includes('Colours')), cards.map(c => c.buttons.join(',')).join(' | '));
   check('the event being viewed is marked', cards.filter(c => c.current).length <= 1);
 
   // The part that matters: uploading from this page must target the card's
@@ -114,6 +144,45 @@ const PLANS = [
   check('uploading from a card targets THAT event', posted && posted.show === 'lme',
         JSON.stringify(posted));
   check('and sends the password', posted && posted.pw === 'my-password');
+
+  // The upload is followed through: what the drawing changes, and the colours.
+  await page.waitForSelector('#palette-panel', { timeout: 5000 }).catch(() => {});
+  const after = await page.evaluate(() => ({
+    palette: !!document.getElementById('palette-panel'),
+    rows: [...document.querySelectorAll('#palette-panel .palette-row')].map(r => ({
+      label: r.querySelector('.palette-label')?.textContent,
+      value: r.querySelector('input[type=color]')?.value,
+      status: r.querySelector('.palette-status')?.textContent })),
+    swatches: document.querySelectorAll('#palette-panel .palette-swatch').length,
+    report: document.getElementById('stand-report')?.textContent || '',
+    go: document.querySelector('#stand-report .admin-btn.primary')?.textContent || '',
+  }));
+  check('the colour picker opens after an upload', after.palette);
+  check('with the five kinds of space', after.rows.length === 5 && after.rows[0].label === 'Stand — available' &&
+        after.rows[2].label === 'Stand — on hold' && after.rows[4].label === 'Area — sponsored',
+        after.rows.map(r => r.label).join(' | '));
+  check('starting from the colours the plan is drawn in', after.rows[1].value === '#689abb' && after.rows[3].value === '#7c1315',
+        `${after.rows[1].value} / ${after.rows[3].value}`);
+  check('a colour not yet chosen says so', after.rows[1].status === 'app default', after.rows[1].status);
+  check('the plan\'s own colours are offered as swatches', after.swatches === 3, String(after.swatches));
+  check('the stands preview opens too, with what the drawing changes',
+        /3 new, 1 moved/.test(after.report) && /2 no longer drawn/.test(after.report), after.report.slice(0, 200));
+  check('and names the sold stand the drawing dropped', /140 \(Gone GmbH\)/.test(after.report));
+  check('offering an update that keeps the bookings', /Update from this plan — keeps 12 bookings/.test(after.go), after.go);
+
+  // Choosing a colour and saving sends the choice for THAT event.
+  await page.evaluate(() => {
+    const input = document.querySelector('#palette-panel input[data-palette-key="sold"]');
+    input.value = '#112233';
+    input.dispatchEvent(new Event('input'));
+    [...document.querySelectorAll('#palette-panel .spec-report-head .admin-btn')].find(b => b.textContent === 'Save colours').click();
+  });
+  await page.waitForTimeout(600);
+  const w = paletteWrites[0];
+  check('saving the colours targets the card\'s event', w && w.show === 'lme', JSON.stringify(w && w.show));
+  check('sends the chosen colour and leaves the rest unset',
+        w && w.body.palette.sold === '#112233' && w.body.palette.held === null && w.body.palette.available === null,
+        JSON.stringify(w && w.body));
 
   await br.close();
   server.close();
