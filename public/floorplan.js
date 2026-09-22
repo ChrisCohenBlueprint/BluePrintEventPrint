@@ -288,12 +288,39 @@ function panToBooth(n) {
   if (box && box.w > 0 && box.h > 0 && vb && vb.width > 0) {
     const sr = svgDoc.getBoundingClientRect();
     // preserveAspectRatio "meet" letterboxes, so the live scale is the SMALLER
-    // of the two ratios, not whichever axis we happened to pick.
+    // of the two ratios, not whichever axis we happened to pick. This already
+    // carries the current pan-zoom scale, so a box in drawing units multiplied
+    // by it is the stand's size ON SCREEN, right now.
     const pxPerUnit = Math.min(sr.width / vb.width, sr.height / vb.height);
-    if (pxPerUnit > 0) {
-      const want = Math.min(fr.width, fr.height) * 0.3 / Math.max(box.w, box.h);
-      const target = Math.max(t.scale, Math.min(8, t.scale * (want / pxPerUnit)));
-      if (target > t.scale * 1.05) { scale = target; pz.zoomAbs(0, 0, scale); }
+    // Measured from the geometry rather than from getBoundingClientRect,
+    // because the selected stand carries an 8px ring: on a 15px stand that ring
+    // is most of the measurement, and the zoom it asks for is half what it
+    // should be.
+    const seen = Math.max(box.w, box.h) * pxPerUnit;
+    // Big enough to read the number and the name, and no bigger. This used to
+    // ask for 30% of the frame — 220px for one stand — which from a whole-hall
+    // view is a jump to nearly the 8x maximum in a single step.
+    const want = Math.min(fr.width, fr.height) * 0.14;
+    if (pxPerUnit > 0 && seen > 0 && seen < want) {
+      const target = Math.max(t.scale, Math.min(4, t.scale * (want / seen)));
+      if (target > t.scale * 1.05) {
+        pz.zoomAbs(0, 0, target);
+        // READ BACK what actually happened, rather than assuming the zoom took.
+        // panzoom drops a zoom silently whenever its bounds check adjusts the
+        // transform first:
+        //
+        //   var transformAdjusted = keepTransformInsideBounds();
+        //   if (!transformAdjusted) transform.scale *= ratio;
+        //
+        // so with bounds on, whether a zoom applies depends on where it is
+        // anchored. Anchoring on the stand — which is what this should do, and
+        // what stops the hall lurching toward the drawing's origin — trips that
+        // branch every time: the scale stayed put while the pan below was
+        // computed for the scale it asked for, and the plan slid to a position
+        // that matched nothing on screen. Anchored at the corner the zoom lands,
+        // and reading the scale back keeps the pan honest either way.
+        scale = pz.getTransform().scale;
+      }
     }
   }
 
@@ -474,9 +501,15 @@ function tagBooths() {
         e.preventDefault();          // Space would otherwise scroll the page
         selectBooth(n);
       });
-      // Focusing a stand with the keyboard has to bring it into view, the same
-      // as clicking one does — by panning, never by scrolling (see panToBooth).
-      el.addEventListener('focus', () => panToBooth(n));
+      // Focusing a stand with the KEYBOARD has to bring it into view — by
+      // panning, never by scrolling (see panToBooth).
+      //
+      // Only the keyboard. A click focuses the stand too, and this handler was
+      // the only thing on the click path that moved the map: clicking a small
+      // stand zoomed the hall to nearly 8x and slid it across the frame, which
+      // is not what anyone means by clicking a stand. A mouse user has already
+      // put the stand where they want it — under their cursor.
+      el.addEventListener('focus', () => { if (!pointerFocus) panToBooth(n); });
       labelStand(el, n);
     },
   });
@@ -524,6 +557,19 @@ function labelStand(el, n) {
   const label = standLabel(n);
   if (el.getAttribute('aria-label') !== label) el.setAttribute('aria-label', label);
 }
+
+/**
+ * Did the focus that is about to happen come from a pointer?
+ *
+ * :focus-visible expresses exactly this and is what the CSS would use, but it
+ * is a style-level question and this is a behavioural one — so the input type
+ * is tracked directly. Both listeners are capturing, and both events precede
+ * the focus they explain: pointerdown before a click's focus, keydown before
+ * the focus Tab moves.
+ */
+let pointerFocus = false;
+document.addEventListener('pointerdown', () => { pointerFocus = true; }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Tab') pointerFocus = false; }, true);
 
 // ─── Deep link: /floorplan?booth=412 ──────────────────────────────────────────
 // Lets sales send a customer straight to a stand, and gives campaign traffic a
