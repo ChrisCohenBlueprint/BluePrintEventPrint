@@ -210,9 +210,9 @@
     <h1>How to draw a floorplan the interactive plan can read</h1>
     <p class="sub">The plan you draw is not printed. It is loaded into software that finds every stand, reads its number, its size and its name, colours it by whether it is sold, and lets visitors click it. This brief is how to draw so that all of that happens on its own — and how to re-issue a plan once a show has started selling.</p>
     <div class="issue">
-      <span><b>Issue</b>1.1</span>
+      <span><b>Issue</b>1.2</span>
       <span><b>Applies to</b>Every new plan and every revision</span>
-      <span><b>Goes with</b>Specification BEC-FP-01 (issue 1.2)</span>
+      <span><b>Goes with</b>Specification BEC-FP-01 (issue 1.3)</span>
       <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
     </div>
   </header>
@@ -226,8 +226,9 @@
       <li><a href="#colour"><span>5</span> Colour</a></li>
       <li><a href="#text"><span>6</span> Text and fonts</a></li>
       <li><a href="#revisions"><span>7</span> Re-issuing a plan</a></li>
-      <li><a href="#export"><span>8</span> Exporting</a></li>
-      <li><a href="#send"><span>9</span> Before you send</a></li>
+      <li><a href="#extending"><span>8</span> Adding to a live plan</a></li>
+      <li><a href="#export"><span>9</span> Exporting</a></li>
+      <li><a href="#send"><span>10</span> Before you send</a></li>
     </ol>
   </nav>
 
@@ -310,6 +311,8 @@
       <h2>4 — Lounges, theatres, tracks <em>sponsorable areas</em></h2>
       <p>A VIP lounge, a networking lounge, a theatre or a conference track is sold to a sponsor, and the software treats it as sponsorable inventory: clickable, with the sponsor's logo drawn onto it once it is taken. It is found the same way a stand is, so <strong>draw it like a stand</strong>: one closed shape, a number top-left, a size bottom-right, and its name centred — <span class="mono">VIP Lounge</span>, <span class="mono">Conference Track 1</span>.</p>
       <p>What sets it apart from a stand is its <strong>fill</strong>: one dark colour, used only for these areas and for no more than a handful of shapes on the plan. That is how the software tells a lounge from a sold stand. Catering, toilets and storage are <em>not</em> sponsorable: give them no number and they stay scenery.</p>
+      <p><strong>The name in the middle of the shape is the area's identity</strong>, and it stays that way for the life of the plan. The sponsor, their logo and whether the area is still for sale are all held against that name, so <span class="mono">VIP Lounge</span> must still read <span class="mono">VIP Lounge</span> in the next issue — not <span class="mono">VIP Lounge 1</span>, not <span class="mono">The VIP Lounge</span>, not <span class="mono">VIP lounge</span> with the capital dropped. Retype it and the software has no way to know it is the same lounge: the sponsored one disappears from the plan with its sponsor still attached to it, and an empty new area arrives in its place. Only we can put that right, and only by hand.</p>
+      <p>An area the new plan simply <em>does not draw</em> is safe by comparison — it keeps its sponsor and stops being shown, and comes back the moment the area is drawn again under the same name.</p>
     </section>
 
     <section id="colour">
@@ -350,6 +353,7 @@
         <div class="do">
           <h4>Do</h4>
           <p>Keep every existing stand number exactly as it was, whether or not the stand moved or changed size.</p>
+          <p>Draw every stand exactly as the schedule lists it. Where the <span class="mono">note</span> column says <span class="mono">merged from 104 + 106</span>, that is now <em>one</em> stand drawn as one shape under the surviving number; where it says <span class="mono">split from 105</span>, the cells are drawn as separate stands under their own numbers (<span class="mono">105a</span>, <span class="mono">105b</span>). Drawing the old arrangement back does not undo ours — it adds a stand on top of it.</p>
           <p>Give new stands new numbers — an extension takes the next block (<span class="mono">501–540</span>), never numbers freed by a removed stand.</p>
           <p>Keep the artboard, the origin and the scale identical to the previous issue, so a stand that did not move is drawn at the same coordinates. A stand is compared to within one drawing unit, so nudging a row to tidy its alignment reports the whole row as moved.</p>
           <p>Put the version in the filename and send a short change note: added, removed, moved, renumbered.</p>
@@ -357,6 +361,7 @@
         <div class="dont">
           <h4>Don't</h4>
           <p>Renumber a row to "tidy up" the sequence.</p>
+          <p>Redraw a merged block back into the stands it was made from, or a split stand back into one.</p>
           <p>Reuse a removed stand's number for a new stand.</p>
           <p>Re-export at a different artboard size, or with the drawing shifted or rescaled.</p>
           <p>Send a changed drawing under the previous version number.</p>
@@ -364,13 +369,52 @@
       </div>
       <p>On receipt, the software compares the new drawing to the stands already on the event and shows, before anything is accepted, which stands are new, which have moved or changed size, and which the drawing no longer has — flagging any of those that are sold. A stand the new drawing drops is never deleted if it has a booking; it is kept and listed. So the safest revision is one where that list is empty.</p>
       <div class="callout">
+        <h4>A stand whose note reads "shown on the plan as …"</h4>
+        <p>Its number on the schedule and the number visitors see are not the same — someone has relabelled it on the live event. The number the software matches on is the one in the <span class="mono">stand_number</span> column, so ask us before you draw that stand rather than printing either one and hoping. There are rarely more than a handful, and we will tell you which number to put in the box.</p>
+      </div>
+      <div class="callout">
         <h4>If a sold stand genuinely has to be renumbered</h4>
         <p>Say so in the change note — old number, new number — before the drawing is loaded. The stand is renumbered on the event first, and the new drawing then matches it.</p>
       </div>
     </section>
 
+    <section id="extending">
+      <h2>8 — Adding to a live plan <em>extensions and new areas</em></h2>
+      <p class="lead">The commonest revision is not a redraw at all. It is an addition: a hall opened up, a block of stands added along a wall, a new lounge or theatre carved out. Everything already sold keeps its booking, its price and its number, and the new space simply appears alongside — <strong>provided the existing drawing is left strictly alone.</strong></p>
+      <p>An addition is the one revision that can be accepted without anybody reconciling anything by hand, so it is worth being pedantic about. These are the conditions, and they are mandatory — clauses R21–R25 of specification BEC-FP-01.</p>
+      <div class="two">
+        <div class="do">
+          <h4>Do</h4>
+          <p><b>1. Start from the current issue and the current schedule.</b> Ask for the schedule on the day you begin, not the one you were sent last time.</p>
+          <p><b>2. Extend the artboard outward.</b> If the new space does not fit, grow the canvas to the right or the bottom. The origin stays where it is and the scale stays what it was.</p>
+          <p><b>3. Leave every existing stand untouched</b> — shape, position, number and fill. Not a nudge, not a re-align, not a rounded coordinate.</p>
+          <p><b>4. Number the new stands from a clean block</b> — <span class="mono">501–540</span> for an extension, the next hundred for a new hall. Never a number that has been used on this plan before, even one freed years ago.</p>
+          <p><b>5. Draw a new sponsorable area like a stand</b> — closed shape, number top-left, size bottom-right, name centred, in the dark area fill of section 4 — and give it the name it will keep for good.</p>
+          <p><b>6. Use the previous issue's fills, unchanged.</b> The colours mean what they were set to mean when the plan was first loaded.</p>
+          <p><b>7. Say what you added</b> in the change note: the new numbers, the new areas, and anything that had to come out to make room.</p>
+        </div>
+        <div class="dont">
+          <h4>Don't</h4>
+          <p>Shift or rescale the existing drawing to centre the new one. Everything on the plan then reports as moved, with bookings underneath.</p>
+          <p>Tidy the existing numbering to run on neatly into the new block.</p>
+          <p>Give a new stand a number freed by a stand that was removed.</p>
+          <p>Rename an existing lounge, theatre or track while you are in the file.</p>
+          <p>Introduce a new fill for the new stands because they are not selling yet. Available is available, wherever it is in the hall.</p>
+          <p>Send the addition as a fresh plan. It is the next version of the existing one.</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>What a clean addition looks like on receipt</h4>
+        <p>The check we run before accepting anything lists what the drawing does to the live event. For an addition it should read: <em>new</em> — the numbers you added; <em>moved</em> — none; <em>resized</em> — none; <em>not drawn</em> — none. Any other line means something happened to a stand that is already selling, and the file goes back to you rather than onto the site.</p>
+      </div>
+      <div class="callout">
+        <h4>If stands have to come out to make room</h4>
+        <p>Say so explicitly in the change note, by number. A stand nobody has touched is simply removed with the new issue. A stand that is <strong>sold or on hold</strong> is never deleted by a drawing — it is kept, and listed for us to deal with commercially. So a removal needs a conversation, not just an omission from the file.</p>
+      </div>
+    </section>
+
     <section id="export">
-      <h2>8 — Exporting <em>SVG, from any tool</em></h2>
+      <h2>9 — Exporting <em>SVG, from any tool</em></h2>
       <p>The delivery format is <strong>SVG</strong>. The settings below are what keeps the text live and the geometry readable; anything not listed can stay at its default.</p>
       <div class="tscroll">
         <table>
@@ -388,7 +432,7 @@
     </section>
 
     <section id="send">
-      <h2>9 — Before you send <em>a two-minute check</em></h2>
+      <h2>10 — Before you send <em>a two-minute check</em></h2>
       <pre><b>LNA27_Floorplan_v03.svg</b>          <i>show, document, version</i>
 <b>LNA27_StandSchedule_v03.csv</b>      <i>required: stand_number, area, status, exhibitor</i>
 <b>LNA27_Changes_v03.txt</b>            <i>for a revision: added / removed / moved / renumbered</i></pre>
@@ -404,6 +448,9 @@
             <tr><td class="box">☐</td><td>Colours consistent</td><td>One flat fill per meaning; one near-white, on available stands only; areas in their own dark fill</td></tr>
             <tr><td class="box">☐</td><td>Numbers unique</td><td>No number appears on two shapes; none reused from a previous issue</td></tr>
             <tr><td class="box">☐</td><td>Revision stable</td><td>Same artboard, origin and scale; sold stands keep their numbers</td></tr>
+            <tr><td class="box">☐</td><td>Existing stands untouched</td><td>On an addition: nothing already on the plan moved, resized or renumbered</td></tr>
+            <tr><td class="box">☐</td><td>Schedule honoured</td><td>Merged blocks drawn as one stand; split cells under their own numbers</td></tr>
+            <tr><td class="box">☐</td><td>Area names unchanged</td><td>Every lounge, theatre and track reads letter for letter as the last issue</td></tr>
             <tr><td class="box">☐</td><td>Schedule attached</td><td>A CSV of every stand, same version as the drawing</td></tr>
             <tr><td class="box">☐</td><td>Under 8 MB</td><td>Logos placed at drawn size, not embedded at print resolution</td></tr>
             <tr><td class="box">☐</td><td>Named and versioned</td><td>Show, document and version in the filename; version bumped on every change</td></tr>

@@ -190,9 +190,9 @@
     <h1>Floorplan artwork specification</h1>
     <p class="sub">Mandatory requirements for exhibition floorplan files supplied to Blueprint Event Company. Files that do not meet these requirements cannot be used in the interactive floorplan and will be returned.</p>
     <div class="issue">
-      <span><b>Issue</b>1.2</span>
+      <span><b>Issue</b>1.3</span>
       <span><b>Applies to</b>All halls, all shows</span>
-      <span><b>Supersedes</b>Issue 1.1 (R13 and R17 relaxed to match what is actually read; R16 is SVG only; R19–R20 added)</span>
+      <span><b>Supersedes</b>Issue 1.2 (section 8 added: R21–R25 govern a revision of a plan that is already selling)</span>
       <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
     </div>
   </header>
@@ -206,7 +206,8 @@
       <li><a href="#colour"><span>5</span> Colour &amp; layers</a></li>
       <li><a href="#data"><span>6</span> Companion data file</a></li>
       <li><a href="#export"><span>7</span> Export &amp; delivery</a></li>
-      <li><a href="#accept"><span>8</span> Acceptance checks</a></li>
+      <li><a href="#revisions"><span>8</span> Revisions of a selling plan</a></li>
+      <li><a href="#accept"><span>9</span> Acceptance checks</a></li>
     </ol>
   </nav>
 
@@ -488,14 +489,69 @@ LEX26_StandSchedule_v03.csv</pre>
     </section>
 
     <!-- 8 -->
+    <section id="revisions">
+      <h2>8 — Revisions of a selling plan <em>Clauses R21–R25</em></h2>
+      <p class="lead">Once stands on a plan are sold, a new issue of that plan is laid over the live event rather than replacing it, and each stand on the drawing is matched to the stand already sold <strong>by its number</strong>. These clauses are what make that possible. They apply to every issue after the first, including one that only adds to the plan.</p>
+
+      <div class="clause">
+        <div class="cid">R21</div>
+        <div>
+          <h3><span class="kw must">Must</span> keep every existing stand number unchanged</h3>
+          <p>A stand carries the same number from one issue to the next, whether or not it has moved, changed size or changed hands. The number is the stand's identity in the live event; the drawing does not hold identity of any other kind.</p>
+          <div class="why"><b>Why</b>A renumbered stand is read as one stand removed and a different one added. The booking, the agreed price and the exhibitor stay on the old number and show nowhere on the map until someone reconciles them by hand.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R22</div>
+        <div>
+          <h3><span class="kw must">Must</span> take new numbers from an unused block</h3>
+          <p>Stands added by a revision are numbered from a block that has never appeared on this plan — an extension takes <code>501–540</code>, a new hall the next hundred. A number freed by a stand that was removed is retired permanently and must not be reissued.</p>
+          <div class="why"><b>Why</b>A removed stand that was sold is kept on the event rather than deleted. Reusing its number puts a new, empty stand where a live booking already is.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R23</div>
+        <div>
+          <h3><span class="kw must">Must</span> draw each stand as the current schedule lists it</h3>
+          <p>The schedule supplied under R15 is the authority on what each stand now is, and its <code>note</code> column names every stand whose arrangement has changed since the last drawing. A block listed as <code>merged from 104 + 106</code> is drawn as <strong>one</strong> shape under the surviving number. Cells listed as <code>split from 105</code> are drawn as separate stands under their own numbers, suffixes included.</p>
+          <p>Where a note reads <code>shown on the plan as …</code>, the stand has been relabelled on the live event and the two numbers differ. The number to draw is the one in the <code>stand_number</code> column; confirm it with us before drawing rather than choosing between them.</p>
+          <div class="why"><b>Why</b>A merge or a split is held in the live event, not in the designer's file. Redrawing the previous arrangement does not undo it — it adds duplicate stands over stands that are already sold.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R24</div>
+        <div>
+          <h3><span class="kw must">Must</span> keep sponsorable area names identical between issues</h3>
+          <p>A lounge, theatre or track is matched on the name printed inside it, exactly as printed. <code>VIP Lounge</code> is not <code>VIP Lounge 1</code>, <code>The VIP Lounge</code> or <code>VIP lounge</code>. An area that is renamed is treated as a different area.</p>
+          <div class="why"><b>Why</b>The sponsor, their logo and the area's availability are held against that name. A renamed area drops off the plan with its sponsorship attached to it and arrives back empty, and only a manual correction reunites them.</div>
+        </div>
+      </div>
+
+      <div class="clause">
+        <div class="cid">R25</div>
+        <div>
+          <h3><span class="kw must">Must</span> reuse the previous issue's fills, or declare a change</h3>
+          <p>The fills on a plan are mapped to their meanings once, when the plan is first loaded. A revision uses the same fills for the same meanings. If the palette genuinely has to change, state the old and new colours in the change note so the mapping is made again deliberately.</p>
+          <div class="why"><b>Why</b>Status is read from colour. A fill silently changed between issues re-reads the status of every stand that is not yet committed — a hall full of available stands can be read as reserved on nothing more than a new swatch.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9 -->
     <section id="accept">
-      <h2>8 — Acceptance checks <em>Run before you send</em></h2>
+      <h2>9 — Acceptance checks <em>Run before you send</em></h2>
       <p class="lead">Each delivery is checked automatically on receipt. A file failing any check is returned. Running these yourself first will save a round trip.</p>
 
       <div class="tscroll">
         <table class="check">
           <thead><tr><th></th><th>Check</th><th>Pass condition</th></tr></thead>
           <tbody>
+            <tr><td class="box">☐</td><td>Revision: numbers stable</td><td>Every stand already on the event keeps its number (R21); new stands come from an unused block (R22)</td></tr>
+            <tr><td class="box">☐</td><td>Revision: schedule honoured</td><td>Merged blocks drawn as one stand, split cells under their own numbers (R23)</td></tr>
+            <tr><td class="box">☐</td><td>Revision: areas and fills</td><td>Area names letter for letter as the last issue (R24); fills unchanged or declared (R25)</td></tr>
             <tr><td class="box">☐</td><td>Text is live</td><td>A stand number can be selected with the text tool</td></tr>
             <tr><td class="box">☐</td><td>No rasterised drawing content</td><td>Only logos are images</td></tr>
             <tr><td class="box">☐</td><td>One shape per stand</td><td>No shape contains two stand numbers</td></tr>
