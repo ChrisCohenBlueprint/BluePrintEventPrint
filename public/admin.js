@@ -737,10 +737,16 @@ function resetToastFor(boothNumber, res) {
        : `Removed leftover cell ${shownN(boothNumber)}.`;
 }
 
-function resetFromPanel(n) {
+async function resetFromPanel(n) {
   const r = resetTargetOf(booths[n]);
   if (!r) return adminToast('That stand was not merged or split.', 'error');
-  if (!confirm(`Reset: ${resetDescription(r)}?`)) return;
+  // The styled dialog every other action on this panel uses. This one alone
+  // still called the browser's confirm(), which arrives unstyled, with the
+  // origin in the title bar, and reads as something the page did not mean to
+  // do — on the one action whose wording has to be read carefully, because a
+  // stand carrying both a merge and a split undoes only one of them here.
+  if (!await confirmDialog(`This will ${resetDescription(r)}.`,
+      { title: `Reset stand ${shownN(r.target)}`, confirmLabel: 'Reset it' })) return;
   socket.emit('booth:reset', { boothNumber: r.target }, (res) => {
     if (res && res.ok) { adminToast(resetToastFor(r.target, res), 'ok'); if (booths[r.target]) selectAdminBooth(r.target); }
     else adminToast((res && res.error) || 'Reset failed.', 'error');
@@ -750,7 +756,7 @@ function resetFromPanel(n) {
 // Every selected stand resolved to what its reset acts on, de-duplicated —
 // selecting both halves of one split resets that split once, not twice (the
 // second would be refused as "not merged or split" after the first succeeded).
-function restoreMultiSelect() {
+async function restoreMultiSelect() {
   const seen = new Set(), targets = [];
   let skipped = 0;
   multiSel.forEach((id) => {
@@ -762,7 +768,9 @@ function restoreMultiSelect() {
   if (!targets.length) return adminToast('None of the selected stands was merged or split.', 'error');
   const lines = targets.map(r => `• ${resetDescription(r)}`).join('\n');
   const note = skipped ? `\n\n(${skipped} selected stand${skipped === 1 ? ' was' : 's were'} not merged or split and will be left alone.)` : '';
-  if (!confirm(`Restore ${targets.length} stand${targets.length === 1 ? '' : 's'}?\n\n${lines}${note}`)) return;
+  // The styled dialog, as everywhere else on this bar — see resetFromPanel.
+  if (!await confirmDialog(`${lines}${note}`,
+      { title: `Reset ${targets.length} stand${targets.length === 1 ? '' : 's'}`, confirmLabel: 'Reset them' })) return;
 
   const btn = document.getElementById('multi-restore');
   if (btn) btn.disabled = true;

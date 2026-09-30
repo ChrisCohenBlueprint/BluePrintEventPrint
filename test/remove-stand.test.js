@@ -173,6 +173,16 @@ const span = (edges) => edges.map(e => `${e.x1},${e.y1}→${e.x2},${e.y2}`).join
   check('an import counts it as handwork, so it is not put back by the next upload',
         await run(() => booths.countHandwork(SHOW)) >= 1);
 
+  // The headline figures are computed ONLY in stats(), so this is the only
+  // place that can say whether a stand off the plan has really left the hall.
+  const st = await run(() => booths.stats());
+  check('it leaves the hall totals — the count, the area and the revenue alike',
+        st.totalBooths === 3 && st.totalSqm === 27 && st.totalRevenue === 3 * 5940,
+        JSON.stringify({ n: st.totalBooths, sqm: st.totalSqm, rev: st.totalRevenue }));
+  check('and it is not counted as space still for sale',
+        st.availableBooths === 2 && st.availSqm === 18,
+        JSON.stringify({ avail: st.availableBooths, sqm: st.availSqm }));
+
   console.log('\nPutting one back');
   r = await run(() => booths.restoreRemoved('101', { actor: 'chris' }));
   check('it returns', r.ok, JSON.stringify(r));

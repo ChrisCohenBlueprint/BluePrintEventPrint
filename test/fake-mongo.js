@@ -95,6 +95,57 @@ function project(doc, spec) {
 }
 
 /**
+ * Enough of the aggregation pipeline for booths.stats().
+ *
+ * Only what that one pipeline uses: a `$match`, then a `$group` on a null id
+ * whose every accumulator is a `$sum` — of a field path, of the literal 1, or
+ * of a `$cond` that counts or adds a field when a status matches. Anything else
+ * throws, for the same reason the query matcher does: a stand-in that quietly
+ * returns nothing for an expression it does not understand lets a broken
+ * aggregate pass as an empty hall.
+ *
+ * It exists because the headline totals — the hall's area, its revenue, how
+ * much is still for sale — are computed ONLY here. Without it nothing could
+ * check that a stand taken off the plan leaves them, or that merging and
+ * splitting leave them alone.
+ */
+function evalExpr(doc, expr) {
+  if (typeof expr === 'number' || typeof expr === 'boolean' || expr === null) return expr;
+  if (typeof expr === 'string') return expr.startsWith('$') ? getPath(doc, expr.slice(1)) : expr;
+  if (expr && typeof expr === 'object') {
+    if (expr.$cond) {
+      const [test, yes, no] = expr.$cond;
+      return evalExpr(doc, test) ? evalExpr(doc, yes) : evalExpr(doc, no);
+    }
+    if (expr.$eq) return evalExpr(doc, expr.$eq[0]) === evalExpr(doc, expr.$eq[1]);
+    if (expr.$ne) return evalExpr(doc, expr.$ne[0]) !== evalExpr(doc, expr.$ne[1]);
+  }
+  throw new Error(`fake-mongo: unsupported aggregation expression ${JSON.stringify(expr)}`);
+}
+
+function aggregate(docs, pipeline) {
+  let rows = docs;
+  for (const stage of pipeline || []) {
+    const [op] = Object.keys(stage);
+    if (op === '$match') { rows = rows.filter(d => matches(d, stage.$match)); continue; }
+    if (op === '$group') {
+      const spec = stage.$group;
+      if (spec._id !== null) throw new Error('fake-mongo: only $group on a null _id is supported');
+      const out = { _id: null };
+      for (const [field, acc] of Object.entries(spec)) {
+        if (field === '_id') continue;
+        if (!acc || acc.$sum === undefined) throw new Error(`fake-mongo: unsupported accumulator ${JSON.stringify(acc)}`);
+        out[field] = rows.reduce((sum, d) => sum + (Number(evalExpr(d, acc.$sum)) || 0), 0);
+      }
+      rows = rows.length ? [out] : [];
+      continue;
+    }
+    throw new Error(`fake-mongo: unsupported aggregation stage ${op}`);
+  }
+  return rows;
+}
+
+/**
  * `calls` records every operation with its filter, so a test can still assert
  * on ordering — that the snapshot happens before the delete, say.
  */
@@ -170,6 +221,11 @@ function fakeDb(initial = {}) {
         }
         return { modifiedCount: modified, upsertedCount: upserted };
       },
+      aggregate: (pipeline) => {
+        calls.push(['aggregate', name, pipeline]);
+        const rows = aggregate(docs(), pipeline);
+        return { toArray: async () => rows };
+      },
       createIndex: async () => 'index',
       createIndexes: async () => ['index'],
     };
@@ -184,4 +240,4 @@ const plainOf = (filter) => Object.fromEntries(
   Object.entries(filter).filter(([k, v]) =>
     !k.startsWith('$') && (v == null || typeof v !== 'object' || v instanceof Date)));
 
-module.exports = { fakeDb, matches, applyUpdate, getPath };
+module.exports = { fakeDb, matches, applyUpdate, getPath, aggregate };
