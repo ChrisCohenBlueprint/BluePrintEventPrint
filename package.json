@@ -13,6 +13,7 @@
     "check:security": "node scripts/security-check.js",
     "check:browser": "node scripts/browser-check.js",
     "check": "npm run check:security && npm run check:browser",
+    "preview:removal": "node scripts/preview-removal.js",
     "validate:artwork": "node scripts/validate-artwork.js",
     "test": "node test/run-all.js"
   },

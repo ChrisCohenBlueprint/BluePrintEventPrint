@@ -7,3 +7,7 @@ booth_state.json
 booths-backup-*.json
 
 atlas-booths-backup-*.json
+
+# Screenshots written by scripts/preview-removal.js --shots
+preview-before.png
+preview-after.png

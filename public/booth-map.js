@@ -89,6 +89,47 @@
   }
 
   /**
+   * The colour of the hall floor under a stand — what a removed stand is
+   * painted out in.
+   *
+   * Assuming white was wrong on the first plan it met. LEX27 draws its aisles
+   * as one pale blue shape with the white stands sitting on top, so a stand
+   * painted out in white left a white rectangle in a blue aisle: the stand was
+   * gone and a hole was there instead, which is not the same thing.
+   *
+   * So it is read off the drawing rather than decided here: the smallest filled
+   * shape that actually contains the stand IS the floor it is standing on — on
+   * LEX27 the hall polygon, on a plan drawn on white paper nothing at all,
+   * which is what the white fallback is for. Stands are skipped (a neighbour is
+   * not floor), and so are the rectangles of the stands being removed, whose
+   * own white fill is exactly what is being painted over.
+   *
+   * @param boxOf   a function giving an element's drawn box, so a rotated
+   *                shape is judged by where it appears.
+   * @param dead    the removed stand's drawn box.
+   * @param isDead  true for a box that belongs to a stand coming off the plan.
+   */
+  function floorUnder(svgDoc, boxOf, dead, isDead) {
+    var cx = dead.x + dead.w / 2, cy = dead.y + dead.h / 2;
+    var best = null, bestArea = Infinity;
+    var shapes = svgDoc.querySelectorAll('rect, polygon, circle, ellipse');
+    for (var i = 0; i < shapes.length; i++) {
+      var el = shapes[i];
+      if (el.hasAttribute('data-booth') || el.hasAttribute('data-removed-mask')) continue;
+      var b = boxOf(el);
+      if (!b || !(b.w > 0) || !(b.h > 0)) continue;
+      if (b.w * b.h >= bestArea) continue;
+      if (cx < b.x || cx > b.x + b.w || cy < b.y || cy > b.y + b.h) continue;
+      if (isDead(b)) continue;
+      var fill;
+      try { fill = global.getComputedStyle(el).fill; } catch (e) { continue; }
+      if (!fill || fill === 'none' || /rgba\([^)]*,\s*0\s*\)/.test(fill)) continue;
+      best = fill; bestArea = b.w * b.h;
+    }
+    return best;
+  }
+
+  /**
    * Overlapping spans on one line, merged into the fewest spans that cover them.
    *
    * Two stands stacked against the same edge of a removed stand each contribute
@@ -683,6 +724,26 @@
       }
       var EDGE_TOL = 1.5;
 
+      // What to paint the hole in, in the order the answers deserve to be
+      // trusted: a colour the event has actually chosen (--plan-floor, set by
+      // an admin for a hall drawn on a tinted floor), then the colour the
+      // artwork itself puts under the stand, and only then white.
+      var chosen = '';
+      try { chosen = (global.getComputedStyle(document.documentElement)
+        .getPropertyValue('--plan-floor') || '').trim(); } catch (e) { chosen = ''; }
+      var floorCache = {};
+      var floorFill = function (d) {
+        if (chosen) return chosen;
+        var key = [d.x, d.y, d.w, d.h].join(',');
+        if (!Object.prototype.hasOwnProperty.call(floorCache, key)) {
+          floorCache[key] = floorUnder(svgDoc, function (el) {
+            var idx = artwork.indexOf(el);
+            return idx > -1 ? drawnAt(idx) : visualBox(el);
+          }, d, isDead) || '#ffffff';
+        }
+        return floorCache[key];
+      };
+
       var deadBoxes = gone.map(function (b) { return drawnBoxOf(b.geometry); })
         .filter(function (g) { return g && g.w > 0 && g.h > 0; });
 
@@ -720,7 +781,7 @@
         mask.setAttribute('height', d.h + pad * 2);
         mask.setAttribute('data-removed-mask', num == null ? '' : num);
         if (mask.classList) mask.classList.add('booth-removed-floor');
-        mask.setAttribute('fill', '#ffffff');       // the stylesheet's --plan-floor wins over this
+        mask.setAttribute('fill', floorFill(d));
         mask.style.pointerEvents = 'none';
         svgDoc.appendChild(mask);
 

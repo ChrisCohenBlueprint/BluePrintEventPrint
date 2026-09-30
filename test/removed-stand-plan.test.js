@@ -112,6 +112,13 @@ const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 
     return {
       masks: masks.length,
       maskFill: masks[0] ? getComputedStyle(masks[0]).fill : null,
+      // What the artwork itself draws under the stands — LEX27's aisles are one
+      // pale blue shape, NOT white paper, so this is the colour a removed stand
+      // has to become. White here was the first thing the preview caught.
+      hallFill: (function () {
+        var hall = svg.querySelector('polygon.cls-9, rect.cls-9');
+        return hall ? getComputedStyle(hall).fill : null;
+      })(),
       maskInert: masks[0] ? getComputedStyle(masks[0]).pointerEvents === 'none' : false,
       edges,
       victimStillBound: !!svg.querySelector(`[data-booth="${d.victim}"]`),
@@ -120,7 +127,9 @@ const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 
   }, { victim, neighbour });
 
   check('the removed stand is painted out', after.masks === 1, `${after.masks} masks`);
-  check('in the hall floor colour', /rgb\(255,\s*255,\s*255\)/.test(after.maskFill || ''), after.maskFill);
+  check('in the colour the artwork draws the hall floor in, not a guess at white',
+        !!after.hallFill && after.maskFill === after.hallFill,
+        `mask ${after.maskFill} vs hall ${after.hallFill}`);
   check('and the paint answers no clicks', after.maskInert);
   check('the stand itself is no longer bound to the artwork', !after.victimStillBound);
   check('its neighbour still is', after.neighbourStillBound);
