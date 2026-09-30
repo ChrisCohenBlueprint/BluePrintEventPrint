@@ -88,6 +88,130 @@
            pt.y >= outer.y - pad && pt.y <= outer.y + outer.h + pad;
   }
 
+  /**
+   * Overlapping spans on one line, merged into the fewest spans that cover them.
+   *
+   * Two stands stacked against the same edge of a removed stand each contribute
+   * their own half of that edge; drawn separately they leave a hairline gap at
+   * the join where neither span quite reaches. Merged, the edge is one line.
+   */
+  function unionSpans(spans, tol) {
+    if (!spans.length) return [];
+    var sorted = spans.slice().sort(function (a, b) { return a[0] - b[0]; });
+    var out = [sorted[0].slice()];
+    for (var i = 1; i < sorted.length; i++) {
+      var cur = out[out.length - 1], s = sorted[i];
+      if (s[0] <= cur[1] + tol) cur[1] = Math.max(cur[1], s[1]);
+      else out.push(s.slice());
+    }
+    return out;
+  }
+
+  /**
+   * Which parts of a removed stand's outline belong to somebody else.
+   *
+   * A plan draws every stand as its own rectangle, so the line between two
+   * stands standing side by side is TWO strokes lying on top of each other —
+   * one from each stand. Take one stand off the plan and paint its rectangle
+   * out as hall floor, and the paint covers both: the neighbour loses the wall
+   * it shares, and reads as open floor running into the aisle.
+   *
+   * So the removed stand's outline is worked out edge by edge rather than
+   * kept or dropped whole. For each of its four sides, every shape still drawn
+   * that has an edge lying ON that side contributes the part of it the two
+   * actually share; the rest of the side — the part facing nothing but aisle —
+   * is not drawn, and that is what makes the stand disappear. A stand pulled
+   * from the middle of a row keeps all four of its lines (they are its
+   * neighbours' lines); one pulled off the end of a row keeps only the side it
+   * was attached by; one standing alone keeps none.
+   *
+   * Either of the other shape's two edges counts, because a neighbour may be
+   * flush on its near side (the usual case, stands abutting) or on its far side
+   * (a bigger stand the removed one was cut out of). What decides it is the
+   * OVERLAP: the shared part must be a real length of line, so a neighbour
+   * merely in line with the removed stand — same column, different row — has an
+   * overlap of nothing and contributes nothing.
+   *
+   * @param dead   {x,y,w,h} the stand coming off the plan.
+   * @param others [{x,y,w,h}] every shape still drawn. The removed stands
+   *               themselves must NOT be in here: two removed neighbours share
+   *               an edge with each other, and each would keep a line for a
+   *               wall that no longer has a stand on either side of it.
+   * @param tol    how far apart two edges may be and still be the same line.
+   * @param cap    how far a kept side runs on past a corner both sides reach;
+   *               half the weight the lines are drawn at. Defaults to tol/2.
+   * @return [{ x1, y1, x2, y2 }] in the same coordinate space.
+   */
+  function sharedEdges(dead, others, tol, cap) {
+    tol = tol == null ? 1.5 : tol;
+    if (!dead || !(dead.w > 0) || !(dead.h > 0)) return [];
+    var x1 = dead.x, y1 = dead.y, x2 = dead.x + dead.w, y2 = dead.y + dead.h;
+    var sides = [
+      { key: 'left',   horiz: false, at: x1, from: y1, to: y2 },
+      { key: 'right',  horiz: false, at: x2, from: y1, to: y2 },
+      { key: 'top',    horiz: true,  at: y1, from: x1, to: x2 },
+      { key: 'bottom', horiz: true,  at: y2, from: x1, to: x2 },
+    ];
+    var kept = {};
+    sides.forEach(function (s) {
+      var spans = [];
+      for (var i = 0; i < others.length; i++) {
+        var o = others[i];
+        if (!o || !(o.w > 0) || !(o.h > 0)) continue;
+        // The removed stand's own rectangle would match on all four sides and
+        // keep the whole outline — the one thing this must never do.
+        if (sameGeom(o, dead, tol)) continue;
+        // Does this shape have an edge lying along this side?
+        var near = s.horiz ? o.y : o.x;
+        var far  = s.horiz ? o.y + o.h : o.x + o.w;
+        if (Math.abs(near - s.at) > tol && Math.abs(far - s.at) > tol) continue;
+        // How much of the side the two genuinely share.
+        var lo = Math.max(s.from, s.horiz ? o.x : o.y);
+        var hi = Math.min(s.to,   s.horiz ? o.x + o.w : o.y + o.h);
+        if (hi - lo > tol) spans.push([lo, hi]);
+      }
+      kept[s.key] = unionSpans(spans, tol);
+    });
+
+    // Square off the corners. A span is drawn with butt ends, so where two kept
+    // sides meet at a corner of the removed stand each stops on the other's
+    // centre line and the corner has a notch out of it — visible at the weight
+    // these lines are drawn at, and the sort of thing that makes a plan look
+    // wrong without anyone being able to say why. Where BOTH sides reach the
+    // corner, each is run on by half a stroke so they close. Where only one
+    // does, nothing is extended: a stub of line poking into the aisle past the
+    // end of a wall is worse than a notch.
+    var pad = cap == null ? tol / 2 : cap;
+    var ends = function (side, c) { return kept[side].some(function (sp) { return Math.abs(sp[0] - c) <= tol || Math.abs(sp[1] - c) <= tol; }); };
+    var corners = [
+      { a: 'left',  b: 'top',    v: y1, h: x1 },
+      { a: 'right', b: 'top',    v: y1, h: x2 },
+      { a: 'left',  b: 'bottom', v: y2, h: x1 },
+      { a: 'right', b: 'bottom', v: y2, h: x2 },
+    ];
+    corners.forEach(function (c) {
+      if (!ends(c.a, c.v) || !ends(c.b, c.h)) return;
+      kept[c.a].forEach(function (sp) {
+        if (Math.abs(sp[0] - c.v) <= tol) sp[0] -= pad;
+        if (Math.abs(sp[1] - c.v) <= tol) sp[1] += pad;
+      });
+      kept[c.b].forEach(function (sp) {
+        if (Math.abs(sp[0] - c.h) <= tol) sp[0] -= pad;
+        if (Math.abs(sp[1] - c.h) <= tol) sp[1] += pad;
+      });
+    });
+
+    var out = [];
+    sides.forEach(function (s) {
+      kept[s.key].forEach(function (sp) {
+        if (sp[1] - sp[0] <= tol) return;
+        if (s.horiz) out.push({ x1: sp[0], y1: s.at, x2: sp[1], y2: s.at });
+        else out.push({ x1: s.at, y1: sp[0], x2: s.at, y2: sp[1] });
+      });
+    });
+    return out;
+  }
+
   // The typeface the plan's own live text is set in (booth-artwork.css) and
   // the share of the font size a capital takes in it — what turns a measured
   // cap height back into a font-size.
@@ -226,6 +350,14 @@
     var placed = {};
     var unplaced = [];
 
+    // Stands taken off the plan. They are held apart from here on: everything
+    // below places, letters, colours and wires up a stand, and a removed stand
+    // is none of those things — it is a hole in the drawing, painted out in the
+    // "Stands taken off the plan" pass at the end. They still arrive with their
+    // geometry, because that is the only way to know WHERE the hole is.
+    var gone = booths.filter(function (b) { return b && b.removed === true && b.geometry; });
+    booths = booths.filter(function (b) { return !(b && b.removed === true); });
+
     // ARTWORK_SELECTOR names the fill classes Europe's plan happens to use.
     // Class names are an exporter's private numbering: in North America's plan
     // .cls-7 and .cls-9 are TEXT styles, and its stands are .cls-15/16/17/19 —
@@ -253,6 +385,24 @@
 
     var artwork = primary.concat(spare);
     var geoms = artwork.map(rectGeom);
+    // Where a stored rectangle is actually DRAWN. A stand's geometry is its
+    // artwork rectangle as written, and Illustrator writes a rotated stand as a
+    // rectangle plus a transform — so on the many rotated stands the written
+    // box is not where the stand appears. Anything drawn here in root
+    // coordinates (a mask, a line) has to use the drawn box or it lands
+    // somewhere else on the plan entirely.
+    var visualCache = [];
+    function drawnAt(i) {
+      if (!visualCache[i]) visualCache[i] = visualBox(artwork[i]) || geoms[i];
+      return visualCache[i];
+    }
+    function drawnBoxOf(g) {
+      if (!g) return null;
+      for (var vi = 0; vi < artwork.length; vi++) {
+        if (geoms[vi] && sameGeom(geoms[vi], g)) return drawnAt(vi);
+      }
+      return g;
+    }
     // Largest legitimate stand dimension, used to reject absurdly-large geometry
     // that has no artwork cell to clamp against. Measured on the primary pool
     // only: the spare pool can hold the hall outline, and letting that set the
@@ -509,6 +659,85 @@
       placed[b.boothNumber] = overlay;
       if (opts.onTag) opts.onTag(overlay, b.boothNumber, b);
     });
+
+    // ─── Stands taken off the plan ────────────────────────────────────────────
+    //
+    // The artwork still draws the rectangle — the drawing has not changed, only
+    // what the show sells has — so the stand is painted out here: hall floor
+    // over the rectangle, its stroke and its baked-in number and size with it,
+    // and then the parts of its outline that are its NEIGHBOURS' outline put
+    // back on top. See sharedEdges for why that last step is the whole job.
+    if (gone.length) {
+      // The weight the plan strokes a stand at, so the lines we put back are
+      // the lines that were there. Read off the artwork rather than assumed:
+      // it is a per-plan decision of the designer's, and a line at the wrong
+      // weight is as obvious as no line at all.
+      var strokeW = 0.75, strokeC = '#000';
+      if (primary.length) {
+        try {
+          var cs = global.getComputedStyle(primary[0]);
+          var w = parseFloat(cs.strokeWidth);
+          if (w > 0 && w < 20) strokeW = w;
+          if (cs.stroke && cs.stroke !== 'none') strokeC = cs.stroke;
+        } catch (e) { /* a plan laid out in a hidden tab measures nothing — keep the defaults */ }
+      }
+      var EDGE_TOL = 1.5;
+
+      var deadBoxes = gone.map(function (b) { return drawnBoxOf(b.geometry); })
+        .filter(function (g) { return g && g.w > 0 && g.h > 0; });
+
+      // Everything still drawn that a removed stand can share a wall with: the
+      // stands that remain, and the artwork's own rectangles — a lounge, a
+      // catering block, the hall wall — which are nobody's stand but are still
+      // lines a designer drew and must not be rubbed out from the other side.
+      // Rectangles that ARE the removed stands are left out: their lines are
+      // exactly what is going.
+      var survivors = [];
+      booths.forEach(function (b) {
+        var g = drawnGeom[b.boothNumber] || b.geometry;
+        if (g && g.w > 0 && g.h > 0) survivors.push(drawnGeom[b.boothNumber] ? g : drawnBoxOf(g));
+      });
+      var isDead = function (g) {
+        for (var di = 0; di < deadBoxes.length; di++) if (sameGeom(deadBoxes[di], g, EDGE_TOL)) return true;
+        return false;
+      };
+      for (var ri = 0; ri < artwork.length; ri++) {
+        var ag = geoms[ri] ? drawnAt(ri) : null;
+        if (ag && ag.w > 0 && ag.h > 0 && !isDead(ag)) survivors.push(ag);
+      }
+
+      deadBoxes.forEach(function (d, gi) {
+        var num = gone[gi] && gone[gi].boothNumber;
+        // The floor. Inflated by half a stroke so the removed stand's OWN
+        // outline goes with it — a rectangle masked to its exact edges leaves
+        // the outer half of its stroke behind, and a stand that is gone but
+        // still faintly outlined looks like a printing fault.
+        var pad = strokeW / 2 + 0.05;
+        var mask = document.createElementNS(SVG_NS, 'rect');
+        mask.setAttribute('x', d.x - pad);
+        mask.setAttribute('y', d.y - pad);
+        mask.setAttribute('width',  d.w + pad * 2);
+        mask.setAttribute('height', d.h + pad * 2);
+        mask.setAttribute('data-removed-mask', num == null ? '' : num);
+        if (mask.classList) mask.classList.add('booth-removed-floor');
+        mask.setAttribute('fill', '#ffffff');       // the stylesheet's --plan-floor wins over this
+        mask.style.pointerEvents = 'none';
+        svgDoc.appendChild(mask);
+
+        // …and its neighbours' walls back on top of it.
+        sharedEdges(d, survivors, EDGE_TOL, strokeW / 2).forEach(function (e) {
+          var line = document.createElementNS(SVG_NS, 'line');
+          line.setAttribute('x1', e.x1); line.setAttribute('y1', e.y1);
+          line.setAttribute('x2', e.x2); line.setAttribute('y2', e.y2);
+          line.setAttribute('stroke', strokeC);
+          line.setAttribute('stroke-width', strokeW);
+          line.setAttribute('stroke-linecap', 'butt');
+          line.setAttribute('data-removed-edge', num == null ? '' : num);
+          line.style.pointerEvents = 'none';
+          svgDoc.appendChild(line);
+        });
+      });
+    }
 
     // Outlines first, then lettering, all above every mask (see splitDecor).
     splitDecor.forEach(function (el) { if (el.tagName === 'rect') svgDoc.appendChild(el); });
@@ -1092,7 +1321,7 @@
     // Both measurement caches describe nodes this is about to replace.
     glyphBoxCache = null;
     nameCache = {};
-    var added = '[data-overlay],[data-split-box],[data-split-label],[data-split-size]';
+    var added = '[data-overlay],[data-split-box],[data-split-label],[data-split-size],[data-removed-mask],[data-removed-edge]';
     Array.prototype.forEach.call(svgDoc.querySelectorAll(added), function (n) {
       if (n.parentNode) n.parentNode.removeChild(n);
     });
@@ -1139,10 +1368,15 @@
       .map(function (b) {
         var g = b.geometry;
         return b.boothNumber + ':' + Math.round(g.x) + ',' + Math.round(g.y) + ',' + Math.round(g.w) + ',' + Math.round(g.h) +
-               ':' + (b.displayNumber || '') + ':' + (b.sqm || 0);
+               ':' + (b.displayNumber || '') + ':' + (b.sqm || 0) +
+               // Taking a stand off the plan changes nothing else in here, so
+               // without this the page compared signatures, found them equal
+               // and never repainted: the stand stayed on screen until reload.
+               ':' + (b.removed === true ? 'x' : '');
       })
       .sort().join('|');
   }
 
-  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, clearLabelCache: clearLabelCache, fitImage: fitImage, paintAreaLogos: paintAreaLogos, areaHost: areaHost, visualBox: visualBox };
+  global.BoothMap = { attach: attach, clear: clear, signature: signature, rectGeom: rectGeom, fitLabel: fitLabel, clearLabelCache: clearLabelCache, fitImage: fitImage, paintAreaLogos: paintAreaLogos, areaHost: areaHost, visualBox: visualBox,
+                     sharedEdges: sharedEdges };
 })(window);

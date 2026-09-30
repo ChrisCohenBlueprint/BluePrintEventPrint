@@ -284,6 +284,11 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
           status: b.status,
           splitFrom: b.splitFrom || null,
           splitAxis: b.splitAxis || null,
+          // A stand taken off the plan. It travels so the printed plan paints
+          // hall floor over the rectangle the artwork still draws — a client
+          // proposal showing a stand nobody can book is worse here than
+          // anywhere, because it is the version they keep.
+          removed: b.removed === true,
         })),
     } : null;
 

@@ -139,6 +139,12 @@ function initConsent() {
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let booths      = {};      // boothNumber → booth
+// Stands taken off the plan, kept apart from `booths` above. Every list, count,
+// filter, tooltip and panel on this page reads `booths`, and a stand that is no
+// longer on the plan belongs in none of them — but the map still needs its
+// shape, because the artwork goes on drawing that rectangle and something has
+// to paint hall floor over it. See BoothMap.sharedEdges.
+let removedBooths = {};
 let selectedId  = null;
 let shortlist   = [];      // boothNumbers the visitor wants to enquire about
 
@@ -479,7 +485,7 @@ function tagBooths() {
   tagged = true;
   dropElementCache();      // attach() is about to build brand-new elements
 
-  const list = Object.values(booths).filter(b => b.geometry);
+  const list = Object.values(booths).concat(Object.values(removedBooths)).filter(b => b.geometry);
   const res = BoothMap.attach(svgDoc, list, {
     unit: UNIT,   // printed on a split cell's size, the way the plan prints its own
     onTag(el, n) {
@@ -1439,7 +1445,17 @@ const visualSig = (b) => [b.status, b.company || '', b.sponsored ? 1 : 0,
                           b.sponsorLogo || '', b.displayNumber || ''].join('|');
 const lastVisual = {};
 
-socket.on('state:full', (rows) => {
+socket.on('state:full', (allRows) => {
+  // Removed stands travel in the same broadcast and are split out here, once,
+  // so nothing below this line has to remember they exist.
+  const rows = [];
+  const stillGone = new Set();
+  allRows.forEach(b => {
+    if (b && b.removed === true) { removedBooths[b.boothNumber] = b; stillGone.add(b.boothNumber); }
+    else rows.push(b);
+  });
+  Object.keys(removedBooths).forEach(n => { if (!stillGone.has(n)) delete removedBooths[n]; });
+
   const incoming = new Set(rows.map(b => b.boothNumber));
   // Which stands actually changed appearance, worked out BEFORE the merge while
   // the previous values are still readable.
@@ -1474,13 +1490,15 @@ socket.on('state:full', (rows) => {
   renderDirectory();
 
   // First broadcast may arrive before the plan has finished downloading.
-  if (!tagged) { tagBooths(); lastMapSig = BoothMap.signature(rows); return; }
+  if (!tagged) { tagBooths(); lastMapSig = BoothMap.signature(allRows); return; }
 
   // A split/merge/reset changes the STRUCTURE (booths added/removed, geometry
   // moved), which one-shot tagging would never reflect without a reload. Detect
   // it via a structural fingerprint and re-tag the whole map; otherwise just
   // repaint the stands that changed.
-  const sig = BoothMap.signature(rows);
+  // allRows, not rows: a stand coming off the plan (or going back on) is exactly
+  // the structural change this fingerprint exists to catch.
+  const sig = BoothMap.signature(allRows);
   if (sig !== lastMapSig) { lastMapSig = sig; retagMap(); }
   else dirty.forEach(applyVisual);
 

@@ -71,6 +71,11 @@ function toPublic(b) {
     splitFrom: b.splitFrom || null,   // lets the client draw + number split cells
     splitAxis: b.splitAxis || null,   // 'vertical' | 'horizontal' — which edge is the divider
     merged: Array.isArray(b.mergedFrom) && b.mergedFrom.length > 0,   // a block the plan draws as several stands
+    // Taken off the plan. It is still sent — with its geometry — because the
+    // page has to know where the hole is in order to draw hall floor there
+    // instead of the stand the artwork still contains. Nothing else about it
+    // travels: it is not for sale, not clickable and not in any count.
+    removed: b.removed === true,
     viewers: b.viewers || 0,
     interest: b.clicks || 0,
   };
@@ -90,7 +95,9 @@ const toAdmin = (b) => b;
 async function setStatus(boothNumber, status, { company = null, actor = null, expect = null,
                                                 holdExpiresAt = undefined } = {}) {
   const before = await get(boothNumber);
-  if (!before) return null;
+  // A stand that has been taken off the plan cannot be booked, held or
+  // released. It reads as missing, which is what every caller already handles.
+  if (!before || before.removed === true) return null;
 
   const filter = { showId: config.showId, boothNumber };
   if (Array.isArray(expect) && expect.length) filter.status = { $in: expect };
@@ -530,7 +537,9 @@ async function move(fromNum, toNum, { actor = null } = {}) {
 
 async function stats() {
   const [agg] = await col().aggregate([
-    { $match: { showId: config.showId } },
+    // A stand taken off the plan is not floor space the show has to sell, so it
+    // leaves every total — the count, the square metres and the revenue alike.
+    { $match: { showId: config.showId, removed: { $ne: true } } },
     { $group: {
         _id: null,
         totalBooths: { $sum: 1 },
@@ -1173,6 +1182,82 @@ async function reset(boothNumber) {
   return { ok: false, reason: 'not_composite' };
 }
 
+/**
+ * Take a stand off the plan.
+ *
+ * A plan arrives with rectangles the show does not sell: a stand the organiser
+ * pulled, a block the designer drew that turned out to be a fire lane, two
+ * stands where the hall has one. Until now the only way to be rid of one was to
+ * merge it into a neighbour, which is a lie about the neighbour's size, or to
+ * re-import the artwork, which throws away everything anyone has done.
+ *
+ * The stand is kept, not destroyed. Its number stays reserved (nothing else can
+ * claim it), its geometry stays (the plan needs to know WHERE the hole is in
+ * order to draw the floor there), and restoreRemoved puts it back exactly as it
+ * was. Everything that counts stands — the totals, the bookings table, the
+ * dropdowns, an import's handwork guard — reads `removed` and passes it by.
+ *
+ * Refused for anything that is not a plain available stand:
+ *   • sold or held, or carrying a company — that is a booking, and deleting a
+ *     stand is not how a booking is cancelled.
+ *   • merged or split — its shape is half of a pair of records. Removing a
+ *     split cell would leave the parent's reset with a cell it cannot delete
+ *     and a restored parent overlapping it. Reset it first, then remove the
+ *     whole stand.
+ */
+async function remove(boothNumber, { actor = null, reason = '' } = {}) {
+  const booth = await get(boothNumber);
+  if (!booth) return { ok: false, reason: 'missing_booth' };
+  if (booth.removed === true) return { ok: false, reason: 'already_removed' };
+  if (booth.status !== 'available' || (booth.assignment && booth.assignment.company)) {
+    return { ok: false, reason: 'not_available' };
+  }
+  if (booth.mergeSnapshot || booth.splitSnapshot || booth.splitFrom) {
+    return { ok: false, reason: 'reset_first' };
+  }
+
+  // Conditional on it still being available, so a booking that lands between
+  // the read and this write survives rather than being quietly deleted.
+  const upd = await col().updateOne(
+    { showId: config.showId, boothNumber, status: 'available', removed: { $ne: true } },
+    { $set: { status: 'removed', removed: true, removedAt: new Date(),
+              removedBy: actor, removedReason: String(reason || '').slice(0, 200),
+              updatedAt: new Date(), updatedBy: actor },
+      // A removed stand is nobody's: an import must not read it as its own
+      // output and quietly resurrect it on the next upload.
+      $unset: { source: '' } }
+  );
+  if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
+  return { ok: true, boothNumber, sqm: booth.sqm || 0, listPrice: booth.listPrice || 0 };
+}
+
+/**
+ * Put a removed stand back on the plan, exactly as it was.
+ *
+ * Nothing was thrown away, so this is only the flags coming off. The stand
+ * returns available — a stand cannot be removed while it carries a booking, so
+ * there is never a booking to return it to.
+ */
+async function restoreRemoved(boothNumber, { actor = null } = {}) {
+  const booth = await get(boothNumber);
+  if (!booth) return { ok: false, reason: 'missing_booth' };
+  if (booth.removed !== true) return { ok: false, reason: 'not_removed' };
+
+  const upd = await col().updateOne(
+    { showId: config.showId, boothNumber, removed: true },
+    { $set: { status: 'available', updatedAt: new Date(), updatedBy: actor },
+      $unset: { removed: '', removedAt: '', removedBy: '', removedReason: '' } }
+  );
+  if (!upd.matchedCount) return { ok: false, reason: 'not_removed' };
+  return { ok: true, boothNumber };
+}
+
+/** Every stand currently off the plan, newest first — what Tools offers to put back. */
+const removedStands = () => col()
+  .find({ showId: config.showId, removed: true })
+  .project({ boothNumber: 1, displayNumber: 1, sqm: 1, geometry: 1, removedAt: 1, removedBy: 1, removedReason: 1 })
+  .toArray();
+
 // ─── Provenance ───────────────────────────────────────────────────────────────
 const IMPORT_SOURCE = 'artwork-import';
 const IMPORT_NOTE = 'Name read from the supplied floorplan artwork.';
@@ -1354,6 +1439,10 @@ function handworkFilter() {
     // import's own is someone's work — otherwise every re-import would refuse
     // on the areas the previous one created.
     { $and: [{ sponsored: true }, { source: { $ne: IMPORT_SOURCE } }] },
+    // A stand somebody took off the plan. An import re-reads the artwork, which
+    // still draws that rectangle, so without this every upload put the pulled
+    // stand back and the person who removed it had to remove it again.
+    { removed: true },
   ] };
 }
 
@@ -1374,7 +1463,7 @@ const isCommitted = (b) => {
 };
 const hasHandwork = (b) => {
   const a = b.assignment || {};
-  return !!(b.displayNumber || b.sponsorLogo || b.mergeSnapshot || b.splitSnapshot || b.splitFrom ||
+  return !!(b.removed === true || b.displayNumber || b.sponsorLogo || b.mergeSnapshot || b.splitSnapshot || b.splitFrom ||
             (Array.isArray(a.tags) && a.tags.length) || a.country ||
             (b.sponsored === true && b.source !== IMPORT_SOURCE));
 };
@@ -1969,7 +2058,7 @@ async function resetToBlankLayout({ apply = false, force = false, actor = 'reset
 module.exports = { col, all, get, toPublic, toAdmin, ensureIndexes, setStatus, updateDeal, move,
                    setDisplayNumber, setSponsored, setSponsorLogo, setTags, setCountry, removeTag,
                    recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany,
-                   split, splitCustom, reset,
+                   split, splitCustom, reset, remove, restoreRemoved, removedStands,
                    repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork,
                    commercialFilter, handworkFilter, countCommitted, countHandwork,
                    snapshot, listSnapshots, restoreSnapshot,

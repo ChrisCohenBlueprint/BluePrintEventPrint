@@ -120,6 +120,12 @@ async function sendLead(id, name, btn) {
 }
 
 let booths = {};  // live state
+// Stands taken off the plan. Held apart from `booths` because every table,
+// total, dropdown and panel in this console reads that one — a stand that is
+// not on the plan belongs in none of them. The map still gets these, because
+// the artwork goes on drawing their rectangles and something has to paint hall
+// floor over them. See BoothMap.sharedEdges.
+let removedBooths = {};
 let svgDoc = null;
 let selectedAdminId = null;
 
@@ -389,7 +395,7 @@ function tagAdminBooths() {
   if (!adminSvgReady || !Object.keys(booths).length || adminTagged) return;
   adminTagged = true;
 
-  BoothMap.attach(svgDoc, Object.values(booths).filter(b => b.geometry), {
+  BoothMap.attach(svgDoc, Object.values(booths).concat(Object.values(removedBooths)).filter(b => b.geometry), {
     unit: UNIT,   // printed on a split cell's size, the way the plan prints its own
     onTag(el, id) {
       el.classList.add('booth-interactive');
@@ -1610,6 +1616,42 @@ function renderStandActions(n) {
       reset.onclick = () => resetFromPanel(n);
     }
   }
+
+  // Take the stand off the plan. Offered on the same terms the server accepts
+  // it on, so the button is never there to be refused: a plain available stand,
+  // nobody's booking on it, not half of a merge or a split.
+  const remove = document.getElementById('aba-remove');
+  if (remove) {
+    remove.hidden = !canRemoveStand(b);
+    remove.onclick = () => removeStandFromPlan(n);
+  }
+}
+
+/** Mirrors the server's rules for booth:remove (see booths.remove). */
+function canRemoveStand(b) {
+  if (!b || b.removed === true) return false;
+  if (b.status !== 'available' || dealOf(b).company) return false;
+  return !(b.mergeSnapshot || b.splitSnapshot || b.splitFrom);
+}
+
+/**
+ * Take a stand off the plan from the stand panel.
+ *
+ * Spelled out in the dialog because it is the one action here that changes the
+ * DRAWING rather than a booking, and because what happens to the neighbours is
+ * the first thing anyone asks.
+ */
+async function removeStandFromPlan(boothNumber) {
+  const b = booths[boothNumber];
+  if (!canRemoveStand(b)) return adminToast('That stand cannot be removed — it is booked, merged or split.', 'error');
+  if (!await confirmDialog(
+    `Take stand ${shownN(boothNumber)} off the plan?\n\n` +
+    `The rectangle becomes hall floor. Any wall it shares with the stands around it stays drawn, so its neighbours are unchanged — only its own outline, number and size go.\n\n` +
+    `It leaves the totals, the bookings table and every dropdown, and its number stays reserved. Tools → Removed Stands puts it back exactly as it was.`,
+    { title: `Remove stand ${shownN(boothNumber)}`, confirmLabel: 'Remove it', danger: true })) return;
+  const res = await emitAck(socket, 'booth:remove', { boothNumber });
+  if (res && res.ok) adminToast(`Stand ${boothNumber} taken off the plan.`, 'ok');
+  else adminToast((res && res.error) || 'Could not remove that stand.', 'error');
 }
 
 /** What the release/un-book gate is asking for, in the operator's words. */
@@ -1842,6 +1884,19 @@ function populateToolDropdowns() {
       list.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))}</option>`).join('');
     sel.value = cur;
   });
+
+  // Removed stands — the only list on this page built from the other map.
+  const restoreSel = document.getElementById('restore-stand');
+  if (restoreSel) {
+    const cur = restoreSel.value;
+    const gone = Object.values(removedBooths)
+      .sort((a, b) => String(a.boothNumber).localeCompare(String(b.boothNumber), undefined, { numeric: true }));
+    restoreSel.innerHTML = gone.length
+      ? '<option value="">Select…</option>' + gone.map(b =>
+          `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))}${b.sqm ? ` — ${esc(b.sqm)} ${esc(UNIT)}` : ''}</option>`).join('')
+      : '<option value="">No stands have been removed</option>';
+    restoreSel.value = cur;
+  }
 
   const statusStand = document.getElementById('status-stand');
   const cur2 = statusStand.value;
@@ -2150,6 +2205,18 @@ document.getElementById('reset-form')?.addEventListener('submit', (e) => {
   });
 });
 
+// ─── Removed Stands (put one back) ────────────────────────────────────────────
+document.getElementById('restore-stand-form')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  return withPending(e.target.querySelector('button[type=submit]'), async () => {
+    const boothNumber = document.getElementById('restore-stand').value;
+    if (!boothNumber) return adminToast('Select a stand to put back.', 'error');
+    const res = await emitAck(socket, 'booth:restore-stand', { boothNumber });
+    if (res && res.ok) adminToast(`Stand ${boothNumber} is back on the plan.`, 'ok');
+    else adminToast((res && res.error) || 'Could not put that stand back.', 'error');
+  });
+});
+
 // ─── Status Form ──────────────────────────────────────────────────────────────
 document.getElementById('status-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -2227,7 +2294,17 @@ function safely(what, fn) {
   }
 }
 
-socket.on('state:full', (serverBooths) => {
+socket.on('state:full', (allBooths) => {
+  // Removed stands ride in the same broadcast and are split out here, once, so
+  // nothing below this line has to remember they exist.
+  const serverBooths = [];
+  const stillGone = new Set();
+  allBooths.forEach(b => {
+    if (b && b.removed === true) { removedBooths[b.boothNumber] = b; stillGone.add(b.boothNumber); }
+    else serverBooths.push(b);
+  });
+  Object.keys(removedBooths).forEach(n => { if (!stillGone.has(n)) delete removedBooths[n]; });
+
   const incoming = new Set(serverBooths.map(b => b.boothNumber));
   serverBooths.forEach(b => { booths[b.boothNumber] = b; });
   // Reconcile: drop booths the server no longer has (merged secondary, reset
@@ -2264,11 +2341,13 @@ socket.on('state:full', (serverBooths) => {
   safely('floorplan', () => {
     // Tag on the first state if the floorplan tab is already open; otherwise
     // loadAdminSVG() tags when the tab is first shown.
-    if (adminSvgReady && !adminTagged) { tagAdminBooths(); lastAdminSig = BoothMap.signature(serverBooths); return; }
+    if (adminSvgReady && !adminTagged) { tagAdminBooths(); lastAdminSig = BoothMap.signature(allBooths); return; }
     if (svgDoc && adminTagged) {
       // A split/merge/reset changes the plan's STRUCTURE; re-tag the whole map so
       // new cells appear and removed ones disappear without a page reload.
-      const sig = BoothMap.signature(serverBooths);
+      // allBooths, not serverBooths: a stand coming off the plan (or going back
+      // on) is precisely the structural change this fingerprint is here to catch.
+      const sig = BoothMap.signature(allBooths);
       if (sig !== lastAdminSig) { lastAdminSig = sig; retagAdminMap(); }
       else Object.values(booths).forEach(b => {
         const el = svgDoc.querySelector(`[data-booth="${CSS.escape(b.boothNumber)}"]`);

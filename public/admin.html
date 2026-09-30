@@ -277,6 +277,7 @@
           <button class="admin-btn" id="aba-release">🔓 Release</button>
           <button class="admin-btn" id="aba-split" title="Drag a divider across this stand to split it in two">✂️ Split</button>
           <button class="admin-btn warning" id="aba-reset" title="Undo this stand's split or merge">↩️ Reset</button>
+          <button class="admin-btn danger" id="aba-remove" title="Take this stand off the plan — the rectangle becomes hall floor">🗑️ Remove from plan</button>
         </div>
         <!-- Exhibitor profile: where they are from and what they do. Only
              meaningful once a stand is booked or held, and it is what the
@@ -700,6 +701,24 @@
             </div>
             <button type="submit" class="admin-btn warning full">
               <i data-lucide="undo-2"></i> Reset Stand
+            </button>
+          </form>
+        </div>
+
+        <!-- Removed stands — put back one the plan should not have lost -->
+        <div class="tool-card">
+          <div class="tool-header">
+            <i data-lucide="trash-2"></i>
+            <h3>Removed Stands</h3>
+          </div>
+          <p>Stands taken off the plan. The rectangle is painted out as hall floor and the walls it shared with its neighbours stay drawn, so the stands around it are unchanged. Nothing is destroyed — put one back and it returns exactly as it was, with its number still reserved.</p>
+          <form id="restore-stand-form" class="tool-form">
+            <div class="tool-field">
+              <label>Stand</label>
+              <select id="restore-stand" class="admin-select"><option value="">Select…</option></select>
+            </div>
+            <button type="submit" class="admin-btn success full">
+              <i data-lucide="undo-2"></i> Put It Back
             </button>
           </form>
         </div>

@@ -773,6 +773,42 @@ function register(io) {
       return { ok: true, ...r };
     }));
 
+    // Take a stand off the plan entirely — the plan says there is a stand here
+    // and there isn't. The rectangle becomes hall floor; the stand keeps its
+    // number and its shape so booth:restore-stand can put it straight back.
+    socket.on('booth:remove', requireAdmin(socket, 'booth:remove', async ({ boothNumber, reason }) => {
+      const n = stand(boothNumber);
+      const r = await booths.remove(n, { actor: socket.data.user, reason });
+      if (!r.ok) {
+        const why = r.reason === 'missing_booth'   ? 'that stand does not exist'
+                  : r.reason === 'already_removed' ? 'it is already off the plan'
+                  : r.reason === 'not_available'   ? 'the stand must be available — release the booking first'
+                  : r.reason === 'reset_first'     ? 'it was merged or split — reset it first'
+                  : r.reason;
+        return { ok: false, error: `Could not remove ${n} — ${why}.` };
+      }
+      track({ type: 'booth.remove', boothNumber: n, socket, meta: { sqm: r.sqm, listPrice: r.listPrice, reason: String(reason || '').slice(0, 200) || null } });
+      await refresh(); broadcastState(io);
+      log(io, `🗑️ Stand ${escapeHtml(n)} removed from the plan — Tools → Removed stands puts it back`, 'admin');
+      return { ok: true, boothNumber: n };
+    }));
+
+    // Put a removed stand back, exactly as it was.
+    socket.on('booth:restore-stand', requireAdmin(socket, 'booth:restore-stand', async ({ boothNumber }) => {
+      const n = stand(boothNumber);
+      const r = await booths.restoreRemoved(n, { actor: socket.data.user });
+      if (!r.ok) {
+        const why = r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'not_removed'   ? 'it is already on the plan'
+                  : r.reason;
+        return { ok: false, error: `Could not restore ${n} — ${why}.` };
+      }
+      track({ type: 'booth.restore_stand', boothNumber: n, socket });
+      await refresh(); broadcastState(io);
+      log(io, `↩️ Stand ${escapeHtml(n)} put back on the plan`, 'admin');
+      return { ok: true, boothNumber: n };
+    }));
+
     // Set (or clear) a stand's shown number — a display label only; the internal
     // identity (boothNumber) is unchanged, so nothing else needs to move.
     socket.on('booth:set-number', requireAdmin(socket, 'booth:set-number', async ({ boothNumber, displayNumber }) => {

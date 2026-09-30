@@ -1136,6 +1136,7 @@ router.get('/analytics/funnel', async (req, res, next) => {
 const AUDIT_TYPES = [
   'booth.status_change', 'deal.update', 'hold.create', 'hold.release', 'hold.expire',
   'hold.extend', 'booth.restore', 'booth.consolidate', 'booth.split', 'booth.reset',
+  'booth.remove', 'booth.restore_stand',
   'booth.move', 'booth.set_number', 'booth.set_tags', 'booth.set_country', 'booth.set_logo',
   'unmerge', 'unsplit', 'floorplan.upload', 'floorplan.revert', 'stands.import', 'settings.palette',
   'sponsor.create', 'sponsor.delete', 'sponsor.import', 'enquiry.forward',

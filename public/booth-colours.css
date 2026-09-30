@@ -33,6 +33,13 @@
      colour the stand already has. */
   --booth-marked: #f43f5e;
 
+  /* The hall floor — what is under a stand that has been taken off the plan.
+     The artwork still draws that rectangle, so it is painted over in this
+     colour. White matches every plan we have been given (the aisles are the
+     paper); an event drawn on a tinted floor sets this to the tint and the
+     hole disappears into it. */
+  --plan-floor: #ffffff;
+
   /* Aliases kept because the legend dots, tooltips and chips across the pages
      already refer to the palette by these names. */
   --yellow: var(--booth-sold);
@@ -41,6 +48,7 @@
 
 /* `!important` beats the artwork's own <style> block (.cls-10 / .cls-7 …) and
    the fill presentation attribute on the hit-area overlays BoothMap inserts. */
+.booth-removed-floor { fill: var(--plan-floor) !important; stroke: none !important; }
 .booth-available { fill: var(--booth-available) !important; }
 .booth-sold      { fill: var(--booth-sold)      !important; }
 .booth-sponsored { fill: var(--booth-sponsored) !important; }
