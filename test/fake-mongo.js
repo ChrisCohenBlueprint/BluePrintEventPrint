@@ -17,8 +17,15 @@
 const getPath = (doc, path) => path.split('.').reduce(
   (o, k) => (o == null ? undefined : (Array.isArray(o) && /^\d+$/.test(k) ? o[Number(k)] : o[k])), doc);
 
-function matchesOp(value, op, expected) {
+function matchesOp(value, op, expected, cond) {
   switch (op) {
+    // $options is not a test of its own — it is $regex's flags, and arrives as
+    // a sibling key in the same condition object.
+    case '$options': return true;
+    case '$regex': {
+      const flags = (cond && typeof cond.$options === 'string') ? cond.$options : '';
+      return new RegExp(expected, flags).test(String(value == null ? '' : value));
+    }
     case '$in':  return expected.some(e => eq(value, e));
     case '$nin': return !expected.some(e => eq(value, e));
     case '$ne':  return !eq(value, expected);
@@ -47,7 +54,7 @@ function matches(doc, filter) {
     if (cond && typeof cond === 'object' && !Array.isArray(cond) && !(cond instanceof Date)
         && Object.keys(cond).some(k => k.startsWith('$'))) {
       for (const [op, expected] of Object.entries(cond)) {
-        if (!matchesOp(value, op, expected)) return false;
+        if (!matchesOp(value, op, expected, cond)) return false;
       }
       continue;
     }

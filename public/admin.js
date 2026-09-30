@@ -235,11 +235,23 @@ async function consolidateMultiSelect() {
   // Merging reshapes the plan and destroys the other stands' identities, and it
   // was doing so the instant the button was pressed with nothing asked.
   const area = ids.reduce((a, n) => a + (booths[n]?.sqm || 0), 0);
+  // Selecting every cell of one split and merging them is that split being
+  // undone, and the server treats it as such — the original stand comes back
+  // with its own number and box rather than a block wearing a cell's label. Say
+  // so, because "merge" and "the stand you had comes back" are different
+  // promises.
+  const parent = ids.map(n => booths[n]).find(b => b && b.splitSnapshot
+    && (b.splitSnapshot.created || []).length + 1 === ids.length
+    && (b.splitSnapshot.created || []).every(c => ids.includes(c)));
   if (!await confirmDialog(
-    `Merge ${ids.map(n => shownN(n)).join(', ')} into one stand of about ${area} ${UNIT}?\n\n` +
-    'The other stand numbers disappear from the plan, the table and every dropdown. ' +
-    'Tools → Reset undoes it.',
-    { title: `Merge ${ids.length} stands`, confirmLabel: 'Merge them' })) return;
+    parent
+      ? `Put stand ${shownN(parent.boothNumber)} back together?\n\n` +
+        `You have selected every cell of its split, so this undoes the split: the stand returns whole, at its original number and size, and the cells go.`
+      : `Merge ${ids.map(n => shownN(n)).join(', ')} into one stand of about ${area} ${UNIT}?\n\n` +
+        'The other stand numbers disappear from the plan, the table and every dropdown. ' +
+        'Tools → Reset undoes it.',
+    { title: parent ? `Put stand ${shownN(parent.boothNumber)} back together` : `Merge ${ids.length} stands`,
+      confirmLabel: parent ? 'Put it back' : 'Merge them' })) return;
   if (btn) btn.disabled = true;
   socket.emit('booth:consolidate-many', { boothNumbers: ids }, (res) => {
     if (btn) btn.disabled = false;
@@ -686,10 +698,19 @@ function clearMultiSelect() {
 // only a fragment: undoing it means restoring its parent, which removes every
 // sibling too — so the cell's reset targets the parent. A cell whose parent
 // has no snapshot (a leftover from before snapshots existed) is just removed.
+// A stand may carry a merge AND a split — merged then divided, or divided then
+// merged with what is next to it. The server undoes the LATER one and leaves
+// the other for a second reset, so the button has to name the same step, or it
+// promises an un-merge and performs an un-split. Mirrors booths.splitIsLatest.
+const shapeStamp = (snap) => (snap ? (snap.at ? new Date(snap.at).getTime() : 0) : -1);
+const splitIsLatest = (b) => !!(b && b.splitSnapshot) && shapeStamp(b.splitSnapshot) >= shapeStamp(b.mergeSnapshot);
+
 function resetTargetOf(b) {
   if (!b) return null;
-  if (b.mergeSnapshot) return { target: b.boothNumber, kind: 'unmerge' };
-  if (b.splitSnapshot) return { target: b.boothNumber, kind: 'unsplit' };
+  const more = !!(b.mergeSnapshot && b.splitSnapshot);   // a second reset follows this one
+  if (b.splitSnapshot && splitIsLatest(b)) return { target: b.boothNumber, kind: 'unsplit', more };
+  if (b.mergeSnapshot) return { target: b.boothNumber, kind: 'unmerge', more };
+  if (b.splitSnapshot) return { target: b.boothNumber, kind: 'unsplit', more };
   if (b.splitFrom) {
     const parent = booths[b.splitFrom];
     if (parent && parent.splitSnapshot && (parent.splitSnapshot.created || []).includes(b.boothNumber)) {
@@ -701,8 +722,12 @@ function resetTargetOf(b) {
 }
 
 function resetDescription(r) {
-  if (r.kind === 'unmerge') return `un-merge stand ${shownN(r.target)} back into its original stands`;
-  if (r.kind === 'unsplit') return `undo the split of stand ${shownN(r.target)} — its cells are removed and the whole stand comes back`;
+  // One step per reset, so say which step, and say when there is another
+  // behind it — otherwise a stand that was merged and then split looks as if
+  // the reset only half worked.
+  const then = r.more ? ' (a second Reset undoes the step before it)' : '';
+  if (r.kind === 'unmerge') return `un-merge stand ${shownN(r.target)} back into its original stands${then}`;
+  if (r.kind === 'unsplit') return `undo the split of stand ${shownN(r.target)} — its cells are removed and the whole stand comes back${then}`;
   return `remove the leftover cell ${shownN(r.target)}`;
 }
 
@@ -859,8 +884,10 @@ const SPLIT_NS = 'http://www.w3.org/2000/svg';
 // where the split would be accepted: available, unsold, not already a merge or
 // a split parent, and big enough to leave 1 m² on each side.
 function canSplitOnMap(b) {
+  // A merged block may be divided — the merge is kept and Reset unwinds the two
+  // in turn. A stand already split may not: re-carving one is the custom split.
   return !!b && b.status === 'available' && !dealOf(b).company
-      && !b.mergeSnapshot && !b.splitSnapshot && !!b.geometry && (b.sqm || 0) >= 2;
+      && !b.splitSnapshot && !!b.geometry && (b.sqm || 0) >= 2;
 }
 
 function enterSplitMode(id) {

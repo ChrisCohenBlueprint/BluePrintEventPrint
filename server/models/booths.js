@@ -668,6 +668,44 @@ function contiguousMerge(g1, g2) {
 }
 
 /**
+ * When a shaping happened — the ordering a chain of them depends on.
+ *
+ * A stand may be merged and then split, or split and then merged, and it then
+ * carries both snapshots. Only the LATER one can be undone: putting back a
+ * footprint from under a shaping that came after it restores a stand on top of
+ * cells that still exist, and doubles the area of the hall. Every snapshot
+ * written from now on is stamped; rows written before this carry no stamp and
+ * only ever hold one snapshot, so nothing is ever compared against nothing.
+ */
+const stampOf = (snap) => (snap ? (snap.at ? new Date(snap.at).getTime() : 0) : -1);
+/** Is the split the most recent thing done to this stand? */
+const splitIsLatest = (b) => !!(b && b.splitSnapshot) && stampOf(b.splitSnapshot) >= stampOf(b.mergeSnapshot);
+
+/**
+ * Putting a split back together, cell for cell, IS undoing the split.
+ *
+ * Merging them as if they were ordinary neighbours would work arithmetically —
+ * the cells sum back to the whole, because a split divides exactly — but it
+ * would leave the stand wearing the first cell's label ("500a") across the
+ * whole of the original, bound to a footprint the artwork does not draw, and
+ * with the split's own snapshot still hanging off it. Undoing the split gives
+ * back the stand that was there: its number, its written box, its size.
+ *
+ * Only when the SELECTION IS EXACTLY the split — every cell, nothing else — and
+ * only when the split is the last thing that happened to the parent. A merge
+ * laid on top of it has to come off first.
+ *
+ * @returns the parent stand, or null when this selection is not that.
+ */
+function wholeSplitOf(docs, nums) {
+  return docs.find(d => splitIsLatest(d)
+    && Array.isArray(d.splitSnapshot.created)
+    && d.splitSnapshot.created.length + 1 === nums.length
+    && nums.includes(d.boothNumber)
+    && d.splitSnapshot.created.every(c => nums.includes(c))) || null;
+}
+
+/**
  * Merge `secondary` into `primary`: the primary absorbs the combined area, list
  * price and footprint, and the secondary is deleted. The geometry becomes the
  * bounding box of the two, so the merged stand still maps onto the plan.
@@ -677,6 +715,13 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
   let b = await get(secondaryNum);
   if (!a || !b) return { ok: false, reason: 'missing_booth' };
   if (primaryNum === secondaryNum) return { ok: false, reason: 'same_booth' };
+
+  // A two-cell split being put back together is that split being undone.
+  const whole2 = wholeSplitOf([a, b], [primaryNum, secondaryNum]);
+  if (whole2) {
+    const r = await reset(whole2.boothNumber);
+    return r.ok ? { ok: true, primary: await get(whole2.boothNumber), unsplit: true } : r;
+  }
 
   // Where the two stands actually are on the plan (see footprintOf).
   let [fa, fb] = await footprints([a, b]);
@@ -699,14 +744,15 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
     return { ok: false, reason: 'not_available' };
   }
 
-  // A stand already shaped by a split can't also be merged without first being
-  // reset — otherwise it would carry two composite snapshots at once, or leave
-  // a dangling split parent/child reference. (Growing an existing merge is fine:
-  // the primary may already have a mergeSnapshot; the secondary may not, or it
-  // would nest.)
-  if (a.splitSnapshot || a.splitFrom || b.splitSnapshot || b.splitFrom || b.mergeSnapshot) {
-    return { ok: false, reason: 'reset_first' };
-  }
+  // A stand shaped by a split may now be merged — merging two cells back
+  // together, or a cell into the stand next door, is a thing people do. What it
+  // cannot do is NEST: the secondary is about to be deleted, and a merge of its
+  // own would go with it, so a secondary that is itself a merged block has to
+  // be reset first. (Growing an existing merge is fine — that is the primary.)
+  //
+  // Carrying a merge AND a split at once is now legitimate, and `reset` undoes
+  // whichever came last; see the `at` stamps below.
+  if (b.mergeSnapshot) return { ok: false, reason: 'reset_first' };
 
   // The two stands must actually touch AND tile a contiguous rectangle —
   // otherwise the merged bounding box swallows everything between/around them.
@@ -730,6 +776,12 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
   const mergeSnapshot = a.mergeSnapshot
     || { self: { geometry: a.geometry, sqm: a.sqm, listPrice: a.listPrice }, parts: [] };
   mergeSnapshot.parts = [...mergeSnapshot.parts, b];
+  // When this shaping happened. A stand may now carry a merge and a split at
+  // once (merge then split, or split then merge), and reset has to undo the
+  // LATER one — undoing them in the wrong order restores a footprint over the
+  // top of cells that still exist. Growing an existing merge re-stamps it,
+  // which is right: the merge is, again, the most recent thing done here.
+  mergeSnapshot.at = new Date();
 
   const $set = {
     sqm: (a.sqm || 0) + (b.sqm || 0),
@@ -788,9 +840,22 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
   for (const n of nums) { const d = await get(n); if (!d) return { ok: false, reason: 'missing_booth' }; docs.push(d); }
   for (const d of docs) {
     if (d.status !== 'available' || (d.assignment && d.assignment.company)) return { ok: false, reason: 'not_available' };
-    if (d.splitSnapshot || d.splitFrom || d.mergeSnapshot) return { ok: false, reason: 'reset_first' };
+    // Split cells and split parents may be merged (see consolidate). Whether a
+    // stand that is ALREADY a block may join depends on which end of the merge
+    // it lands on, which is not known until the survivor is picked below.
     if (!d.geometry) return { ok: false, reason: 'no_geometry' };
   }
+  // The whole of one split, selected: undo it rather than re-merge it.
+  const whole = wholeSplitOf(docs, nums);
+  if (whole) {
+    // Read off the cells BEFORE the reset: it is the reset that takes the
+    // snapshot off the stand, and the driver may well have handed us the very
+    // document it is about to change.
+    const cells = [...whole.splitSnapshot.created];
+    const r = await reset(whole.boothNumber);
+    return r.ok ? { ok: true, primary: await get(whole.boothNumber), absorbed: cells, unsplit: true } : r;
+  }
+
   const geoms = await footprints(docs);   // where they are on the plan, not as written
   const box = { x: Math.min(...geoms.map(g => g.x)), y: Math.min(...geoms.map(g => g.y)) };
   box.w = Math.max(...geoms.map(g => g.x + g.w)) - box.x;
@@ -823,14 +888,29 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
   docs.forEach((d, i) => { if (((geoms[i].y - geoms[si].y) || (geoms[i].x - geoms[si].x)) < 0) si = i; });
   const survivorNum = nums[si], survivor = docs[si];
   const others = docs.filter((_, i) => i !== si);
+
+  // A block may GROW — the survivor carrying a merge of its own is fine, and
+  // its parts are simply added to. What it may not do is swallow another block:
+  // the absorbed stand's record is deleted, and the merge inside it, holding
+  // the only copies of the stands IT absorbed, would go with it.
+  for (const o of others) if (o.mergeSnapshot) return { ok: false, reason: 'reset_first', blockedBy: o.boothNumber };
+
   const totalSqm   = docs.reduce((s, d) => s + (d.sqm || 0), 0);
   const totalPrice = docs.reduce((s, d) => s + (d.listPrice || 0), 0);
-  const mergeSnapshot = { self: { geometry: survivor.geometry, sqm: survivor.sqm, listPrice: survivor.listPrice }, parts: others };
+  // Growing a block EXTENDS its snapshot rather than replacing it: `self` stays
+  // the survivor's footprint before its FIRST merge, so one reset still walks
+  // all the way back to the stands it started as. Replacing it recorded the
+  // block as its own original and stranded everything absorbed before.
+  const mergeSnapshot = survivor.mergeSnapshot
+    ? { ...survivor.mergeSnapshot, parts: [...(survivor.mergeSnapshot.parts || []), ...others] }
+    : { self: { geometry: survivor.geometry, sqm: survivor.sqm, listPrice: survivor.listPrice }, parts: others };
+  mergeSnapshot.at = new Date();   // see consolidate: reset undoes the later shaping first
 
   const upd = await col().updateOne(
     { showId: config.showId, boothNumber: survivorNum, status: 'available' },
     { $set: { geometry: box, sqm: totalSqm, listPrice: totalPrice,
-              mergedFrom: others.map(o => o.boothNumber), mergeSnapshot, updatedAt: new Date(), updatedBy: actor } }
+              mergedFrom: [...(survivor.mergedFrom || []), ...others.map(o => o.boothNumber)],
+              mergeSnapshot, updatedAt: new Date(), updatedBy: actor } }
   );
   if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
 
@@ -866,12 +946,13 @@ async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, 
   // Also lock a stand that carries a company even if its status somehow reads
   // 'available' (a glitched write) — a purchased stand must never be divided.
   if (b.status !== 'available' || (b.assignment && b.assignment.company)) return { ok: false, reason: 'not_available' };
-  // A stand already shaped by a merge or an earlier split of its own must be
-  // reset first — splitting a merged stand would leave it carrying both a
-  // merge and a split snapshot, which reset can only half-undo. (A split CHILD
-  // may be split again — reset refuses to unwind a parent whose child is split,
-  // so grandchildren can't be orphaned.)
-  if (b.mergeSnapshot || b.splitSnapshot) return { ok: false, reason: 'reset_first' };
+  // A merged block may be divided — the merge and the split are both kept, and
+  // `reset` undoes them one at a time, newest first. What still has to be reset
+  // first is a stand ALREADY split: re-carving one is splitCustom's job, and
+  // two split snapshots on one stand would lose the first set of cells. (A
+  // split CHILD may be split again — reset refuses to unwind a parent whose
+  // child is split, so grandchildren can't be orphaned.)
+  if (b.splitSnapshot) return { ok: false, reason: 'reset_first' };
   const n = Math.max(2, Math.min(6, parts | 0));
   // Carve the stand where it appears on the plan (see footprintOf): the cells
   // are drawn by the page at exactly the boxes stored here.
@@ -943,7 +1024,8 @@ async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, 
   // restore the parent exactly.
   // The snapshot keeps the box AS WRITTEN (b.geometry, not the footprint): it
   // is what a reset puts back, and what binds the stand to its artwork shape.
-  const splitSnapshot = { self: { geometry: b.geometry, sqm: totalSqm, listPrice: totalPrice }, created: nums };
+  const splitSnapshot = { self: { geometry: b.geometry, sqm: totalSqm, listPrice: totalPrice },
+                          created: nums, at: new Date() };   // see consolidate: reset undoes the later shaping first
 
   // Conditional on the stand still being available: if it was booked between
   // the read above and here, matchedCount is 0 and nothing else is touched, so
@@ -986,9 +1068,14 @@ async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, 
  * cells with the admin's OWN numbers and sizes. `parts` is [{ number, sqm }].
  * The sizes must add up to the stand's total; the geometry is divided in those
  * proportions along `axis`. Each cell is a split cell (so the plan masks the
- * stale baked figures and draws the given number + size), the survivor keeps the
- * original identity, and any merge is subsumed (reset restores THIS block, not
- * the pre-merge originals — reset before re-carving to get those back).
+ * stale baked figures and draws the given number + size), and the survivor keeps
+ * the original identity.
+ *
+ * A merged block keeps its merge. It used to be thrown away here — the block was
+ * re-carved and the records of every stand it had absorbed went with it, so the
+ * originals could never come back. Now both shapings are kept and `reset` undoes
+ * them one at a time, newest first: once to put the block back, again to split
+ * it into the stands it was made from.
  */
 async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = null } = {}) {
   const b = await get(boothNum);
@@ -1056,7 +1143,7 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
   // footprint — this is the only split that overwrites the parent's
   // displayNumber and splitAxis, so it is the only one whose reset must put them
   // back. The prior values are recorded for exactly that.
-  const splitSnapshot = { custom: true,
+  const splitSnapshot = { custom: true, at: new Date(),   // see consolidate: reset undoes the later shaping first
                           self: { geometry: b.geometry, sqm: totalSqm, listPrice: totalPrice,   // as written — what a reset puts back
                                   displayNumber: b.displayNumber ?? null, splitAxis: b.splitAxis ?? null },
                           created: nums };
@@ -1067,7 +1154,7 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
               displayNumber: p0.displayNumber, displayNumberKey: displayKey(p0.displayNumber),
               splitSnapshot,
               splitAxis: vertical ? 'vertical' : 'horizontal', updatedAt: new Date(), updatedBy: actor },
-      $unset: { mergeSnapshot: '', mergedFrom: '' } }   // the re-carve subsumes any merge
+    }
   );
   if (!primRes.matchedCount) return { ok: false, reason: 'not_available' };
 
@@ -1093,10 +1180,17 @@ async function reset(boothNumber) {
   if (!booth) return { ok: false, reason: 'missing_booth' };
   if (booth.status !== 'available') return { ok: false, reason: 'not_available' };
 
+  // A stand may carry BOTH a merge and a split — merged and then divided, or
+  // divided and then merged with what is next to it. Only one step is undone
+  // per reset, and it has to be the LATER one: undoing a merge under a split
+  // would restore the pre-merge stands on top of cells that still exist, and
+  // undoing a split under a merge would restore a footprint that the merge has
+  // since grown past. Reset again to unwind the step before it.
+  //
   // Un-merge. Restore the parent FIRST, conditional on it still being available
   // — if it was booked between the read and now, abort without re-inserting the
   // parts, so we never leave a booked merged stand overlapping restored parts.
-  if (booth.mergeSnapshot) {
+  if (booth.mergeSnapshot && !splitIsLatest(booth)) {
     const snap = booth.mergeSnapshot;
     const upd = await col().updateOne(
       { showId: config.showId, boothNumber, status: 'available' },
@@ -1123,9 +1217,23 @@ async function reset(boothNumber) {
     // those first.
     for (const num of snap.created || []) {
       const child = await get(num);
-      if (!child) continue;
+      if (!child) {
+        // Gone — but gone WHERE? A cell absorbed by a merge still occupies its
+        // floor space, inside whatever swallowed it. Restoring the parent over
+        // the top would draw the original stand across a block that is still
+        // being sold, and double-count the area. Undo that merge first.
+        const into = await col().findOne({ showId: config.showId, mergedFrom: num });
+        if (into) return { ok: false, reason: 'child_absorbed', child: num, into: into.boothNumber };
+        continue;
+      }
+      if (child.removed === true)       return { ok: false, reason: 'child_removed', child: num };
       if (child.status !== 'available') return { ok: false, reason: 'child_booked' };
       if (child.splitSnapshot)          return { ok: false, reason: 'child_split' };
+      // A cell that has since SWALLOWED something is not this split's cell any
+      // more — it is a block, and the stands inside it live only in its
+      // snapshot. Deleting it to restore the parent would destroy them and take
+      // their floor space out of the hall with them. Undo that merge first.
+      if (child.mergeSnapshot)          return { ok: false, reason: 'child_merged', child: num };
     }
     // Restore the parent first (conditional), then remove the cells — each
     // delete conditional on the cell still being available so a booking landing

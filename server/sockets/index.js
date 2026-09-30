@@ -669,9 +669,16 @@ function register(io) {
       if (!r.ok) {
         const why = r.reason === 'not_adjacent' ? 'the stands are not next to each other'
                   : r.reason === 'not_available' ? 'both stands must be available'
-                  : r.reason === 'reset_first'   ? 'one of the stands was already merged or split — reset it first'
+                  : r.reason === 'reset_first'   ? 'one of them is a merged block, and a block cannot be absorbed into another — reset it first'
                   : r.reason;
         return { ok: false, error: `Could not merge — ${why}.` };
+      }
+      // A two-cell split put back together is that split undone, not a merge.
+      if (r.unsplit) {
+        track({ type: 'booth.reset', boothNumber: p, socket, meta: { type: 'unsplit', changed: [s], via: 'merge-selection' } });
+        await refresh(); broadcastState(io);
+        log(io, `↩️ Stand ${escapeHtml(p)} put back together — its split was undone`, 'admin');
+        return { ok: true, primary: p, unsplit: true };
       }
       track({ type: 'booth.consolidate', boothNumber: p, socket, meta: { secondary: s } });
       await refresh();
@@ -687,12 +694,21 @@ function register(io) {
       if (!r.ok) {
         const why = r.reason === 'not_contiguous' ? 'the stands must sit next to each other with no gaps'
                   : r.reason === 'not_available' ? 'every stand must be available'
-                  : r.reason === 'reset_first'   ? 'one of the stands is already merged or split — reset it first'
+                  : r.reason === 'reset_first'   ? `${r.blockedBy ? `stand ${r.blockedBy} is` : 'one of them is'} a merged block, and a block cannot be absorbed into another — reset it first`
                   : r.reason === 'need_two'      ? 'select at least two stands'
                   : r.reason === 'missing_booth' ? 'one of the stands no longer exists — refresh and try again'
                   : r.reason === 'no_geometry'   ? 'one of the stands has no shape to merge'
                   : r.reason;
         return { ok: false, error: `Could not merge — ${why}.` };
+      }
+      // Selecting every cell of one split and merging them is that split being
+      // undone — the server does exactly that, so the trail and the log have to
+      // say so rather than record a merge that did not happen.
+      if (r.unsplit) {
+        track({ type: 'booth.reset', boothNumber: r.primary.boothNumber, socket, meta: { type: 'unsplit', changed: r.absorbed, via: 'merge-selection' } });
+        await refresh(); broadcastState(io);
+        log(io, `↩️ Stand ${escapeHtml(r.primary.boothNumber)} put back together — its split was undone`, 'admin');
+        return { ok: true, primary: r.primary.boothNumber, absorbed: r.absorbed, unsplit: true };
       }
       track({ type: 'booth.consolidate', boothNumber: r.primary.boothNumber, socket, meta: { many: r.absorbed } });
       await refresh();
@@ -713,7 +729,7 @@ function register(io) {
       const n = stand(boothNumber);
       const r = await booths.split(n, { parts, axis, firstSqm, actor: socket.data.user });
       if (!r.ok) {
-        const why = r.reason === 'reset_first' ? 'it was already merged or split — reset it first'
+        const why = r.reason === 'reset_first' ? 'it is already split — reset it first, or use a custom split to re-carve it'
                   : r.reason === 'not_available' ? 'the stand must be available'
                   : r.reason === 'too_small' ? 'the stand is too small to divide that many ways'
                   : r.reason === 'bad_ratio' ? 'each side must keep at least 1 m²'
@@ -761,6 +777,12 @@ function register(io) {
                   : r.reason === 'not_available' ? 'the stand must be available'
                   : r.reason === 'child_booked'  ? 'one of its split cells has been booked — release it first'
                   : r.reason === 'child_split'   ? 'one of its split cells was split again — reset that cell first'
+                  // A cell that has since been merged with something holds the
+                  // only record of what it absorbed. Naming the cell matters:
+                  // the admin has to know which stand to reset first.
+                  : r.reason === 'child_merged'  ? `its cell ${r.child} has been merged with another stand — reset ${r.child} first`
+                  : r.reason === 'child_absorbed' ? `its cell ${r.child} was absorbed into stand ${r.into} — reset ${r.into} first`
+                  : r.reason === 'child_removed' ? `its cell ${r.child} was taken off the plan — put it back first`
                   : r.reason;
         return { ok: false, error: `Could not reset ${n} — ${why}.` };
       }
