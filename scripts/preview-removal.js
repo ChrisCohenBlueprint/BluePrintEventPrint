@@ -252,11 +252,26 @@ async function shots() {
 
 async function serve() {
   const app = buildApp(SEED + PANEL);
-  app.listen(PORT, () => {
-    console.log(`\n  Stand removal preview → http://127.0.0.1:${PORT}/floorplan`);
-    console.log('  The real page, the real artwork, stands held in memory. No database.');
-    console.log('  Click a stand on the plan, then Remove. Ctrl-C to stop.\n');
-  });
+  // If 3111 is taken — the page harness, a dev server, a previous run left
+  // behind — say so and move to a free port rather than exiting with a stack
+  // trace, which reads as "the preview is broken" when it is nothing of the
+  // kind. The whole point of this script is that it just comes up.
+  const open = (port, fallback) => {
+    const server = app.listen(port);
+    server.once('error', (e) => {
+      if (e.code !== 'EADDRINUSE' || !fallback) { console.error(e); process.exit(1); }
+      console.log(`\n  Port ${port} is already in use — using a free one instead.`);
+      open(0, false);
+    });
+    server.once('listening', () => {
+      const url = `http://127.0.0.1:${server.address().port}/floorplan`;
+      console.log(`\n  Stand removal preview → ${url}`);
+      console.log('  The real page, the real artwork, stands held in memory. No database.');
+      console.log('  Click a stand on the plan, then Remove. Ctrl-C to stop.');
+      console.log('  Leave this running — the link only answers while it is.\n');
+    });
+  };
+  open(PORT, true);
 }
 
 if (process.argv.includes('--shots')) shots().catch(e => { console.error(e); process.exit(1); });
