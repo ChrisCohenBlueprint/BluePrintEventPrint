@@ -8,6 +8,7 @@ booths-backup-*.json
 
 atlas-booths-backup-*.json
 
-# Screenshots written by scripts/preview-removal.js --shots
-preview-before.png
-preview-after.png
+# Screenshots written while driving the sandbox
+preview-*.png
+pp-*.png
+probe-*.png
