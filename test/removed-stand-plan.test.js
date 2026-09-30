@@ -123,6 +123,15 @@ const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 
       edges,
       victimStillBound: !!svg.querySelector(`[data-booth="${d.victim}"]`),
       neighbourStillBound: !!svg.querySelector(`[data-booth="${d.neighbour}"]`),
+      // The stand's own rectangle has to leave the DRAWING, not merely be
+      // painted over. The artwork strokes a stand down the centre of its edge,
+      // so paint has to stop within a whisker of where that stroke stops, and
+      // at that distance the paint's anti-aliased edge blends what is beneath:
+      // the stand came off the plan wearing a faint grey outline of itself.
+      srcHidden: (function () {
+        var el = svg.querySelector(`[data-removed-src="${d.victim}"]`);
+        return !!el && getComputedStyle(el).display === 'none';
+      })(),
     };
   }, { victim, neighbour });
 
@@ -132,6 +141,7 @@ const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 
         `mask ${after.maskFill} vs hall ${after.hallFill}`);
   check('and the paint answers no clicks', after.maskInert);
   check('the stand itself is no longer bound to the artwork', !after.victimStillBound);
+  check('and its rectangle is out of the drawing, not just painted over', after.srcHidden);
   check('its neighbour still is', after.neighbourStillBound);
 
   const onWall = after.edges.filter(e => Math.abs(e.x1 - wall) < 1 && Math.abs(e.x2 - wall) < 1);
@@ -148,9 +158,16 @@ const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 
   const restored = await page.evaluate(n => ({
     masks: document.querySelectorAll('#svg-mount svg [data-removed-mask]').length,
     edges: document.querySelectorAll('#svg-mount svg [data-removed-edge]').length,
+    hidden: document.querySelectorAll('#svg-mount svg [data-removed-src]').length,
     bound: !!document.querySelector(`#svg-mount svg [data-booth="${n}"]`),
+    drawn: (function () {
+      var el = document.querySelector(`#svg-mount svg [data-booth="${n}"]`);
+      return !!el && getComputedStyle(el).display !== 'none';
+    })(),
   }), victim);
   check('putting it back binds it to the artwork again', restored.bound);
+  check('and the rectangle is drawn once more — hiding it is undone, not permanent',
+        restored.drawn && restored.hidden === 0, `${restored.hidden} still hidden`);
   check('and takes the paint away with it', restored.masks === 0 && restored.edges === 0,
         `${restored.masks} masks, ${restored.edges} lines`);
 

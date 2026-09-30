@@ -437,13 +437,21 @@
       if (!visualCache[i]) visualCache[i] = visualBox(artwork[i]) || geoms[i];
       return visualCache[i];
     }
-    function drawnBoxOf(g) {
-      if (!g) return null;
+    function artworkIndexOf(g) {
+      if (!g) return -1;
       for (var vi = 0; vi < artwork.length; vi++) {
-        if (geoms[vi] && sameGeom(geoms[vi], g)) return drawnAt(vi);
+        if (geoms[vi] && sameGeom(geoms[vi], g)) return vi;
       }
-      return g;
+      return -1;
     }
+    function drawnBoxOf(g) {
+      var i = artworkIndexOf(g);
+      return i > -1 ? drawnAt(i) : g;
+    }
+    // Rectangles a PREVIOUS attach hid because their stand was off the plan.
+    // Restored first, every time: a stand that has come back must be drawn
+    // again, and one that is still gone is hidden again a few lines below.
+    unhideRemoved(svgDoc);
     // Largest legitimate stand dimension, used to reject absurdly-large geometry
     // that has no artwork cell to clamp against. Measured on the primary pool
     // only: the spare pool can hold the hall outline, and letting that set the
@@ -769,11 +777,31 @@
 
       deadBoxes.forEach(function (d, gi) {
         var num = gone[gi] && gone[gi].boothNumber;
-        // The floor. Inflated by half a stroke so the removed stand's OWN
-        // outline goes with it — a rectangle masked to its exact edges leaves
-        // the outer half of its stroke behind, and a stand that is gone but
-        // still faintly outlined looks like a printing fault.
-        var pad = strokeW / 2 + 0.05;
+
+        // Take the stand's rectangle OUT of the drawing, rather than painting
+        // over it. Painting over it does not work: the artwork strokes a stand
+        // down the centre of its edge, so the paint has to stop within a
+        // whisker of where that stroke stops, and at that distance the mask's
+        // own anti-aliased edge blends whatever is beneath it — the stand came
+        // off the plan wearing a faint grey outline of itself. Widening the
+        // paint only moves the problem onto the neighbours' walls. Hiding the
+        // element leaves nothing underneath to bleed through.
+        var src = artworkIndexOf(gone[gi].geometry);
+        var hidden = false;
+        if (src > -1 && artwork[src].style) {
+          artwork[src].setAttribute('data-removed-src', num == null ? '' : num);
+          artwork[src].style.display = 'none';
+          hidden = true;
+        }
+
+        // The floor, over the stand's own footprint. Still needed with the
+        // rectangle hidden: the plan letters its number and its size INSIDE the
+        // stand, as separate shapes, and those have to go too. Where the
+        // rectangle could not be hidden — a stand the artwork draws as part of
+        // a block, so there is no element that is only this stand — the paint
+        // is stretched by a stroke's width to cover the outline as well, and
+        // the hairline above is the price.
+        var pad = hidden ? 0 : strokeW * 0.75 + 0.1;
         var mask = document.createElementNS(SVG_NS, 'rect');
         mask.setAttribute('x', d.x - pad);
         mask.setAttribute('y', d.y - pad);
@@ -1378,10 +1406,26 @@
     return missed;
   }
 
+  /**
+   * Put back every artwork rectangle a removal hid.
+   *
+   * The hiding is an inline style on the plan's OWN element, which survives a
+   * repaint — so it has to be undone deliberately, or a stand put back on the
+   * plan would stay invisible until the page was reloaded.
+   */
+  function unhideRemoved(svgDoc) {
+    var hidden = svgDoc.querySelectorAll('[data-removed-src]');
+    for (var i = 0; i < hidden.length; i++) {
+      hidden[i].removeAttribute('data-removed-src');
+      if (hidden[i].style) hidden[i].style.display = '';
+    }
+  }
+
   function clear(svgDoc) {
     // Both measurement caches describe nodes this is about to replace.
     glyphBoxCache = null;
     nameCache = {};
+    unhideRemoved(svgDoc);
     var added = '[data-overlay],[data-split-box],[data-split-label],[data-split-size],[data-removed-mask],[data-removed-edge]';
     Array.prototype.forEach.call(svgDoc.querySelectorAll(added), function (n) {
       if (n.parentNode) n.parentNode.removeChild(n);
