@@ -1034,6 +1034,21 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 /* The catalogue card carries a list under its form, so it is given the full
    width of the tools grid rather than being squeezed into one column. */
 .tool-card-wide { grid-column: 1 / -1; }
+
+/* ─── Plan history ────────────────────────────────────────────────────────────
+   One row per change, newest first, each a point the plan can be put back to.
+   Kept deliberately plain: this is a list someone reads down in a hurry when
+   something has gone wrong, not a feature to be admired. */
+.history-list { max-height: 420px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.history-row { display: flex; align-items: center; gap: 12px; padding: 9px 12px;
+               border-bottom: 1px solid var(--border); font-size: 13px; }
+.history-row:last-child { border-bottom: 0; }
+.history-row .hr-when { color: var(--muted); font-size: 11.5px; white-space: nowrap; min-width: 110px; }
+.history-row .hr-what { flex: 1; min-width: 0; }
+.history-row .hr-what b { font-weight: 600; }
+.history-row .hr-detail { color: var(--muted); font-size: 11.5px; }
+.history-row .admin-btn { padding: 5px 10px; font-size: 12px; white-space: nowrap; }
+.history-empty { padding: 14px 12px; color: var(--muted); font-size: 12.5px; }
 .tag-new-row { grid-template-columns: 1fr 90px; align-items: end; }
 .tag-color-input {
   width: 100%; height: 37px; padding: 3px; cursor: pointer;

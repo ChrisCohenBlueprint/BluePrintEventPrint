@@ -97,7 +97,7 @@ const EVENTS = {
   'booth:consolidate-many': (p) => booths.consolidateMany(p.boothNumbers, { actor: 'preview' }),
   'booth:split':            (p) => booths.split(p.boothNumber, { parts: p.parts, axis: p.axis, firstSqm: p.firstSqm, actor: 'preview' }),
   'booth:split-custom':     (p) => booths.splitCustom(p.boothNumber, { axis: p.axis, parts: p.parts, actor: 'preview' }),
-  'booth:reset':            (p) => booths.reset(p.boothNumber),
+  'booth:reset':            (p) => booths.reset(p.boothNumber, { actor: 'preview' }),
   'booth:remove':           (p) => booths.remove(p.boothNumber, { actor: 'preview', reason: p.reason }),
   'booth:restore-stand':    (p) => booths.restoreRemoved(p.boothNumber, { actor: 'preview' }),
   'booth:set-number':       (p) => booths.setDisplayNumber(p.boothNumber, p.displayNumber, { actor: 'preview' }),
@@ -229,6 +229,21 @@ function buildApp() {
   app.post('/preview/reseed', (_q, res) => { reseed(); res.json({ ok: true }); });
 
   // ── Everything else the console asks for on the way up ──────────────────────
+  // The plan's history, for real — the model's own, so going back here does
+  // exactly what going back on the live console does. The password gate the
+  // live route puts in front of applying is the one thing skipped: there is no
+  // account to check it against, and the whole hall is a throwaway.
+  app.get('/api/history', async (req, res) => {
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    res.json(await run(() => booths.history({ limit })));
+  });
+  app.post('/api/history/:id/restore', async (req, res) => {
+    const apply = req.body && req.body.apply === true;
+    const r = await run(() => booths.restoreSnapshot(String(req.params.id), { apply, actor: 'preview' }));
+    if (!r.ok) return res.status(404).json({ error: 'That point no longer exists.' });
+    res.json(r);
+  });
+
   app.get('/api/me', (_q, res) => res.json({ user: 'preview', role: 'owner' }));
   app.get('/api/shows', (_q, res) => res.json([{ id: SHOW, slug: 'lex', name: 'LEX — sandbox', current: true }]));
   app.get('/api/holds', (_q, res) => res.json([]));

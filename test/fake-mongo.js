@@ -161,11 +161,33 @@ function fakeDb(initial = {}) {
   const collection = (name) => {
     const docs = () => docsIn(name);
     const find = (filter = {}) => {
-      let spec = null;
+      let spec = null, order = null, cap = null;
       const cursor = {
         project: (s) => { spec = s; return cursor; },
-        sort: () => cursor, limit: () => cursor,
-        toArray: async () => docs().filter(d => matches(d, filter)).map(d => project(d, spec)),
+        // sort and limit used to be accepted and ignored. Anything that reads
+        // "the newest N" — the plan's history, the list of snapshots — then
+        // came back in insertion order and uncapped, so a test could assert on
+        // an ordering the real database would not have produced. They are the
+        // whole meaning of those queries, so they are applied.
+        sort: (o) => { order = o; return cursor; },
+        limit: (n) => { cap = n; return cursor; },
+        toArray: async () => {
+          let rows = docs().filter(d => matches(d, filter));
+          if (order) {
+            const keys = Object.entries(order);
+            rows = rows.slice().sort((a, b) => {
+              for (const [k, dir] of keys) {
+                const av = getPath(a, k), bv = getPath(b, k);
+                if (av === bv) continue;
+                const less = av == null ? true : bv == null ? false : av < bv;
+                return (less ? -1 : 1) * (dir < 0 ? -1 : 1);
+              }
+              return 0;
+            });
+          }
+          if (cap != null) rows = rows.slice(0, cap);
+          return rows.map(d => project(d, spec));
+        },
       };
       calls.push(['find', name, filter]);
       return cursor;

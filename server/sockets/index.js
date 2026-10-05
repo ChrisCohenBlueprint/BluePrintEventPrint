@@ -771,7 +771,10 @@ function register(io) {
     // Undo a merge or split (or clear a stray leftover cell).
     socket.on('booth:reset', requireAdmin(socket, 'booth:reset', async ({ boothNumber }) => {
       const n = stand(boothNumber);
-      const r = await booths.reset(n);
+      // The actor travels so the plan's history can say who undid what; reset
+      // was the one reshaping operation that never carried one, and its row
+      // read "unknown" next to everybody else's name.
+      const r = await booths.reset(n, { actor: socket.data.user });
       if (!r.ok) {
         const why = r.reason === 'not_composite' ? 'this stand was not merged or split'
                   : r.reason === 'not_available' ? 'the stand must be available'

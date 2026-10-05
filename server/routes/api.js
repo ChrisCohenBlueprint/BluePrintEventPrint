@@ -1137,6 +1137,7 @@ const AUDIT_TYPES = [
   'booth.status_change', 'deal.update', 'hold.create', 'hold.release', 'hold.expire',
   'hold.extend', 'booth.restore', 'booth.consolidate', 'booth.split', 'booth.reset',
   'booth.remove', 'booth.restore_stand',
+  'booth.history_restore',
   'booth.move', 'booth.set_number', 'booth.set_tags', 'booth.set_country', 'booth.set_logo',
   'unmerge', 'unsplit', 'floorplan.upload', 'floorplan.revert', 'stands.import', 'settings.palette',
   'sponsor.create', 'sponsor.delete', 'sponsor.import', 'enquiry.forward',
@@ -1292,6 +1293,58 @@ router.post('/holds/:boothNumber/extend', async (req, res, next) => {
  * but it is stamped into the audit trail either way, so a restore is never an
  * unattributed change of company.
  */
+/**
+ * The plan's history, and the way back into it.
+ *
+ * Every change to the SHAPE of the hall leaves a point holding the whole hall
+ * as it stood immediately before it (see booths.history). This is the only way
+ * anyone who is not at a terminal can reach them — until now the snapshots were
+ * written faithfully and read by nothing but a CLI script, which is a recovery
+ * route in the same sense that a fire exit nobody can find is one.
+ */
+router.get('/history', async (req, res, next) => {
+  try {
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    res.json(await booths.history({ limit }));
+  } catch (e) { next(e); }
+});
+
+/**
+ * Put the hall back to one of those points.
+ *
+ * Dry by default: a GET-shaped answer describing what it WOULD do, because this
+ * replaces the event's entire inventory and the number of stands it is about to
+ * replace is the thing worth reading before agreeing. `apply` does it, behind
+ * the same secret every destructive route asks for — and the hall as it stands
+ * right now is stored first, so going back is itself something to come back
+ * from.
+ */
+router.post('/history/:id/restore', async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const apply = req.body?.apply === true;
+    if (!apply) {
+      const plan = await booths.restoreSnapshot(id, { apply: false });
+      if (!plan.ok) {
+        return res.status(404).json({ error: plan.reason === 'empty_snapshot'
+          ? 'That point holds no stands — restoring it would empty the event.'
+          : 'That point no longer exists.' });
+      }
+      return res.json(plan);
+    }
+    if (!await confirmDestructive(req, res, 'the plan was not put back')) return;
+    const r = await booths.restoreSnapshot(id, { apply: true, actor: req.admin?.user || null });
+    if (!r.ok) {
+      return res.status(r.reason === 'snapshot_failed' ? 500 : 404).json({ error: r.reason === 'snapshot_failed'
+        ? 'The hall as it stands could not be stored first, so nothing was changed.'
+        : 'That point no longer exists.' });
+    }
+    track({ type: 'booth.history_restore', boothNumber: null, actor: req.admin?.user || 'unknown',
+            meta: { id, stands: r.stands, replaced: r.replacing, previous: r.previousSnapshot } });
+    res.json(r);
+  } catch (e) { next(e); }
+});
+
 router.post('/booths/:boothNumber/restore', async (req, res, next) => {
   try {
     const n = String(req.params.boothNumber);

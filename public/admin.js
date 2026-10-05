@@ -160,7 +160,7 @@ function showAdminSection(sec) {
 
   if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
   if (sec === 'bookings') renderBookingsTable();
-  if (sec === 'tools') { populateToolDropdowns(); loadShows(); }
+  if (sec === 'tools') { populateToolDropdowns(); loadShows(); loadHistory(); }
   if (sec === 'settings') loadPlans();
   if (sec === 'leads') loadLeads();
   if (sec === 'analytics') loadAnalytics();
@@ -2263,6 +2263,92 @@ document.getElementById('reset-form')?.addEventListener('submit', (e) => {
   });
 });
 
+// ─── Plan history ─────────────────────────────────────────────────────────────
+/**
+ * Every change to the shape of the plan, as a point to go back to.
+ *
+ * The console had no way back from a change beyond the one offered in the
+ * moment: ten seconds of Undo on a toast, and Reset for the stand in front of
+ * you. Anything older than that was recoverable only by someone who knew the
+ * snapshots existed and could reach a terminal, which is not a way back.
+ *
+ * Rendered newest first, because the thing being looked for is almost always
+ * "what did I just do".
+ */
+async function loadHistory() {
+  const box = document.getElementById('history-list');
+  if (!box) return;
+  let rows;
+  try { rows = await api('/api/history?limit=50'); }
+  catch (e) { box.innerHTML = `<div class="history-empty">Could not load the history — ${esc(e.message || 'try again')}.</div>`; return; }
+
+  if (!rows.length) {
+    box.innerHTML = '<div class="history-empty">Nothing has been changed yet. Merge, split or remove a stand and the step back appears here.</div>';
+    return;
+  }
+  box.innerHTML = '';
+  rows.forEach((p) => {
+    const row = document.createElement('div');
+    row.className = 'history-row';
+    const when = new Date(p.at);
+    const stands = (p.boothNumbers || []).map(shownN).join(', ');
+    row.innerHTML =
+      `<span class="hr-when">${esc(when.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</span>` +
+      `<span class="hr-what"><b>${esc(p.label)}</b>` +
+      (stands ? ` — ${esc(stands)}` : '') +
+      `<div class="hr-detail">${esc(p.actor || 'unknown')} · ${p.stands} stands stored</div></span>`;
+    const btn = document.createElement('button');
+    btn.className = 'admin-btn';
+    // Named for what it does to the hall, not for the row it sits on: this puts
+    // the plan back to how it was BEFORE that change, which is not the same
+    // sentence as "undo this row" once several changes sit on top of it.
+    btn.textContent = '↩ Go back to here';
+    btn.onclick = () => restoreHistoryPoint(p, btn);
+    row.appendChild(btn);
+    box.appendChild(row);
+  });
+}
+
+async function restoreHistoryPoint(point, btn) {
+  return withPending(btn, async () => {
+    // What it WOULD do, read from the server rather than guessed at, because
+    // the number of stands about to be replaced is the thing worth seeing
+    // before agreeing to replace them.
+    let plan;
+    try { plan = await api(`/api/history/${encodeURIComponent(point.id)}/restore`, { method: 'POST', body: JSON.stringify({}) }); }
+    catch (e) { return adminToast(e.message || 'Could not read that point.', 'error'); }
+
+    const lost = plan.logosNotRestored || [];
+    const pw = await askSecret(
+      `The plan goes back to how it stood just before "${point.label}" on ` +
+      `${new Date(point.at).toLocaleString()}.
+
+` +
+      `${plan.stands} stands are put back, replacing the ${plan.replacing} on the plan now. ` +
+      `Everything done since is undone — including any merges, splits and removals.
+
+` +
+      (lost.length ? `Sponsor logos are not stored in a point; ${lost.length} will need re-uploading (${lost.slice(0, 6).map(shownN).join(', ')}${lost.length > 6 ? '…' : ''}).
+
+` : '') +
+      'The hall as it stands right now is stored first, so this is itself undoable.',
+      { title: 'Put the plan back', confirmLabel: 'Put it back' });
+    if (pw === null) return;
+
+    try {
+      const r = await api(`/api/history/${encodeURIComponent(point.id)}/restore`, {
+        method: 'POST',
+        headers: { 'X-Confirm-Password': pw },
+        body: JSON.stringify({ apply: true }),
+      });
+      adminToast(`The plan is back to ${new Date(point.at).toLocaleString()} — ${r.stands} stands.`, 'ok');
+      loadHistory();
+    } catch (e) {
+      adminToast(e.message || 'Could not put the plan back.', 'error');
+    }
+  });
+}
+
 // ─── Removed Stands (put one back) ────────────────────────────────────────────
 document.getElementById('restore-stand-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -2377,6 +2463,9 @@ socket.on('state:full', (allBooths) => {
   safely('overview', updateOverview);
   safely('bookings table', refreshBookingsTable);
   safely('tool dropdowns', populateToolDropdowns);
+  // A change made on the plan — or by a colleague — is a new point, and the
+  // list is useless if it only shows what was there when the tab was opened.
+  if (document.getElementById('section-tools')?.classList.contains('active')) safely('plan history', loadHistory);
   safely('stand search list', populateAdminSearchList);
   safely('activity tags', renderTagCatalogue);   // "used on N stands" moves with the booths
   // A broadcast is a state CHANGE, which is the only thing that can start or

@@ -1175,7 +1175,7 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
   return { ok: true, created };
 }
 
-async function reset(boothNumber) {
+async function reset(boothNumber, { actor = null } = {}) {
   const booth = await get(boothNumber);
   if (!booth) return { ok: false, reason: 'missing_booth' };
   if (booth.status !== 'available') return { ok: false, reason: 'not_available' };
@@ -1477,12 +1477,148 @@ async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId
 
   const back = await snapshot('pre-restore', current, { actor, showId });
   if (!back.ok) return { ok: false, reason: 'snapshot_failed', detail: back.error };
+  // Going back is a change like any other, so it takes its place in the
+  // history. Without this the hall as it stood before a restore was stored
+  // faithfully and shown nowhere — so the one change that replaces the entire
+  // plan was the single one that could not be walked back out of from the
+  // console, which is exactly backwards.
+  await snapshots().updateOne(
+    { showId, snapshotId: back.snapshotId, header: true },
+    { $set: { history: true, op: 'restore', label: 'Plan put back to an earlier point',
+              detail: snapshotId, boothNumbers: [] } }
+  );
 
   await col().deleteMany({ showId });
   // `_id` is dropped: these are new documents in the live collection, and
   // re-using the stored ids would collide with anything not yet deleted.
   await col().insertMany(stored.map(({ _id, sponsorLogoOmitted, ...b }) => ({ ...b, showId })));
   return { ok: true, ...plan, previousSnapshot: back.snapshotId };
+}
+
+
+// ─── The plan's history ───────────────────────────────────────────────────────
+/**
+ * Every change to the shape of a hall, as a point you can go back to.
+ *
+ * A per-action undo is not a mechanism, it is a courtesy. The removal toast
+ * carried an Undo for ten seconds, and the first person to delete a stand found
+ * it an hour later and had nothing: the stand was recoverable, but only by
+ * someone who knew that Tools held a list of removed stands, and that is not a
+ * way back, it is a thing you have to have been told.
+ *
+ * So each change records the WHOLE hall as it was immediately before it, under
+ * an id of its own, and any of those points can be put back — repeatedly, in
+ * any order, however long afterwards. Undoing the last change and winding the
+ * plan back to where it stood on Tuesday are then the same operation, and
+ * nothing depends on a countdown or on remembering where a tool lives.
+ *
+ * It is the snapshot machinery that already existed, now written on ordinary
+ * changes rather than only on the three bulk operations that could destroy an
+ * event. A hall of 262 stands is 93 KB, so the two hundred points kept here are
+ * about 18 MB — the cost of never having to say "that cannot be undone".
+ *
+ * What is NOT recorded: bookings. A sale, a hold and a release have their own
+ * undo, which restores the booking without touching the rest of the hall, and
+ * they happen hundreds of times where a merge happens once. The history is
+ * about the SHAPE of the plan.
+ */
+const HISTORY_KEEP = Number(process.env.HISTORY_KEEP || 200);
+
+/** Each tracked operation, and how to describe it to the person reading. */
+const HISTORY_LABELS = {
+  consolidate:     'Stands merged',
+  consolidateMany: 'Stands merged',
+  split:           'Stand split',
+  splitCustom:     'Stand re-carved',
+  reset:           'Merge or split undone',
+  remove:          'Stand taken off the plan',
+  restoreRemoved:  'Stand put back on the plan',
+  move:            'Booking moved',
+  setDisplayNumber: 'Stand renumbered',
+};
+
+/**
+ * Keep only the newest points, so a collection that is written on every change
+ * cannot grow without bound. The TTL index covers age; this covers volume.
+ */
+async function pruneHistory(showId = config.showId) {
+  const headers = await snapshots()
+    .find({ showId, header: true, history: true }).sort({ at: -1 }).toArray();
+  const stale = headers.slice(HISTORY_KEEP);
+  for (const h of stale) {
+    await snapshots().deleteMany({ showId, snapshotId: h.snapshotId });
+  }
+  return stale.length;
+}
+
+/**
+ * Store the hall exactly as these rows have it, as a point to come back to.
+ *
+ * Called with the rows read BEFORE the change, and only once the change has
+ * actually happened — a refused operation has nothing to undo, and a point for
+ * it would be a step backwards that moves nothing.
+ */
+async function writeHistoryPoint(op, rows, { actor = null, detail = '', boothNumbers = [] } = {}) {
+  const snap = await snapshot(op, rows, { actor });
+  if (!snap.ok) return snap;
+  await snapshots().updateOne(
+    { showId: config.showId, snapshotId: snap.snapshotId, header: true },
+    { $set: { history: true, op, label: HISTORY_LABELS[op] || op, detail, boothNumbers } }
+  );
+  await pruneHistory();
+  return snap;
+}
+
+/** The points this event can be put back to, newest first. */
+async function history({ showId = config.showId, limit = 50 } = {}) {
+  const rows = await snapshots()
+    .find({ showId, header: true, history: true }).sort({ at: -1 }).limit(limit).toArray();
+  return rows.map(r => ({
+    id: r.snapshotId, at: r.at, op: r.op,
+    label: r.label || r.op, detail: r.detail || '',
+    boothNumbers: r.boothNumbers || [], actor: r.takenBy || null, stands: r.count || 0,
+  }));
+}
+
+/**
+ * Wrap a reshaping operation so it leaves a point behind it.
+ *
+ * The hall is read before the call and written only if the call reports
+ * success, so the stored point is the hall as it stood the instant before the
+ * change — which is exactly what going back to it has to restore.
+ *
+ * Only the EXPORTED functions are wrapped. consolidateMany undoes a split by
+ * calling reset() directly, and that inner call must not leave a point of its
+ * own: the one operation the admin performed is one step back, not two.
+ */
+function tracked(op, fn) {
+  return async function (...args) {
+    // A COPY, taken before the call. The rows a driver hands back are not
+    // guaranteed to be detached from what the change is about to write — and
+    // when they are not, the "before" picture quietly becomes the "after" one,
+    // so the point recorded restores the very change it was meant to undo.
+    // structuredClone keeps the Dates as Dates, which JSON would not.
+    const before = structuredClone(await col().find({ showId: config.showId }).toArray());
+    const r = await fn(...args);
+    if (r && r.ok !== false) {
+      // The actor travels in the options object every one of these takes last.
+      const opts = args.find(a => a && typeof a === 'object' && !Array.isArray(a) && 'actor' in a) || {};
+      const nums = args.filter(a => typeof a === 'string');
+      try {
+        await writeHistoryPoint(op, before, {
+          actor: opts.actor || null,
+          boothNumbers: Array.isArray(args[0]) ? args[0] : nums,
+          detail: Array.isArray(args[0]) ? args[0].join(', ') : nums.join(' → '),
+        });
+      } catch (e) {
+        // A failed history write must never fail the change itself: the hall is
+        // already reshaped, and throwing here would report an error for work
+        // that was done. It is logged and the operation stands.
+        console.error(`History point for "${op}" failed —`, e.message);
+      }
+    }
+    return r;
+  };
 }
 
 // ─── What an import must not destroy ──────────────────────────────────────────
@@ -2163,10 +2299,26 @@ async function resetToBlankLayout({ apply = false, force = false, actor = 'reset
   return { ok: true, ...plan, inserted: docs.length, snapshotId: snap.snapshotId };
 }
 
-module.exports = { col, all, get, toPublic, toAdmin, ensureIndexes, setStatus, updateDeal, move,
-                   setDisplayNumber, setSponsored, setSponsorLogo, setTags, setCountry, removeTag,
-                   recomputeListPrices, incrementClicks, stats, consolidate, consolidateMany,
-                   split, splitCustom, reset, remove, restoreRemoved, removedStands,
+/**
+ * The operations that reshape a hall, each leaving a point to come back to.
+ *
+ * Wrapped HERE and nowhere else: the module's own calls go to the bare
+ * functions above, so an operation built out of others — consolidateMany
+ * undoing a split through reset — is one step back for the admin, not two.
+ */
+module.exports = { col, all, get, toPublic, toAdmin, ensureIndexes, setStatus, updateDeal,
+                   move: tracked('move', move),
+                   setDisplayNumber: tracked('setDisplayNumber', setDisplayNumber),
+                   setSponsored, setSponsorLogo, setTags, setCountry, removeTag,
+                   recomputeListPrices, incrementClicks, stats,
+                   consolidate: tracked('consolidate', consolidate),
+                   consolidateMany: tracked('consolidateMany', consolidateMany),
+                   split: tracked('split', split),
+                   splitCustom: tracked('splitCustom', splitCustom),
+                   reset: tracked('reset', reset),
+                   remove: tracked('remove', remove),
+                   restoreRemoved: tracked('restoreRemoved', restoreRemoved),
+                   removedStands, history, pruneHistory,
                    repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork,
                    commercialFilter, handworkFilter, countCommitted, countHandwork,
                    snapshot, listSnapshots, restoreSnapshot,
