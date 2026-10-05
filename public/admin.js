@@ -1691,8 +1691,13 @@ async function removeStandFromPlan(boothNumber) {
   // is one of eleven cards on a long page, and nothing about a stand quietly
   // vanishing says to go looking there — so the first person to remove one had
   // no way to put it back that they could find.
-  window.UI.toastAction(`Stand ${shownN(boothNumber)} taken off the plan.`,
-    { ...TOAST, kind: 'ok', ms: 10000, label: 'Undo',
+  // No countdown: this one does not expire. Tools -> Plan History holds the
+  // hall as it stood before every change, so the button here is a convenience
+  // for the next few seconds, not the only chance — and it says so, because a
+  // ticking number that means nothing is worse than no number at all.
+  window.UI.toastAction(
+    `Stand ${shownN(boothNumber)} taken off the plan. Tools \u2192 Plan History goes back to it at any time.`,
+    { ...TOAST, kind: 'ok', ms: 9000, countdown: false, label: 'Undo',
       onAction: async () => {
         const back = await emitAck(socket, 'booth:restore-stand', { boothNumber });
         adminToast(back && back.ok

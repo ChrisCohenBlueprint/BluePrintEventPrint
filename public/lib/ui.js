@@ -90,7 +90,7 @@
    *
    * Resolves when the window closes either way, so the caller can clean up.
    */
-  function toastAction(msg, { label, onAction, kind = '', ms = 10000, id = 'toast', cls = 'toast', show = '' } = {}) {
+  function toastAction(msg, { label, onAction, kind = '', ms = 10000, id = 'toast', cls = 'toast', show = '', countdown = true } = {}) {
     const node = toast(msg, kind, { id, cls, show, ms });
     if (!label || typeof onAction !== 'function') return node;
 
@@ -105,7 +105,12 @@
     node.appendChild(btn);
 
     // A countdown, because "you have a few seconds" is only useful if you can
-    // see how many are left.
+    // see how many are left — and ONLY where the few seconds are real. Where
+    // the change can be undone at any time afterwards (a stand taken off the
+    // plan, which Tools -> Plan History goes back to for ever), a ticking
+    // number says the opposite of the truth and hurries someone into a
+    // decision they could have taken calmly. Those pass countdown: false.
+    if (!countdown) return node;
     const left = el('span', 'toast-count', '');
     node.appendChild(left);
     const until = Date.now() + ms;
