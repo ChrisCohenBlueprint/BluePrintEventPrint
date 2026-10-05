@@ -48,11 +48,14 @@
     if (!document.body) return setTimeout(mount, 100);
     var css = document.createElement('style');
     css.textContent =
-      '#pv-bar{position:fixed;left:0;right:0;bottom:0;z-index:99999;display:flex;align-items:center;gap:10px;' +
-      'padding:7px 14px;background:#ecfdf5;border-top:2px solid #10b981;' +
+      // Along the TOP. At the bottom it covered the console's own toasts — the
+      // one carrying the Undo after a stand is taken off the plan, which is
+      // precisely the thing this sandbox exists to let someone try.
+      '#pv-bar{position:fixed;left:0;right:0;top:0;z-index:99999;display:flex;align-items:center;gap:10px;' +
+      'padding:7px 14px;background:#ecfdf5;border-bottom:2px solid #10b981;' +
       'font:13px/1.3 Raleway,system-ui,sans-serif;color:#064e3b}' +
-      '#pv-bar.warn{background:#fffbeb;border-top-color:#f59e0b;color:#78350f}' +
-      '#pv-bar.bad{background:#fef2f2;border-top-color:#ef4444;color:#7f1d1d}' +
+      '#pv-bar.warn{background:#fffbeb;border-bottom-color:#f59e0b;color:#78350f}' +
+      '#pv-bar.bad{background:#fef2f2;border-bottom-color:#ef4444;color:#7f1d1d}' +
       '#pv-bar .tag{font-size:10px;font-weight:800;letter-spacing:.09em;background:#064e3b;color:#fff;' +
       'padding:3px 7px;border-radius:4px}' +
       '#pv-bar.warn .tag{background:#78350f} #pv-bar.bad .tag{background:#7f1d1d}' +
@@ -60,7 +63,7 @@
       '#pv-bar i{font-style:normal;opacity:.8}' +
       '#pv-bar button{margin-left:10px;padding:5px 10px;border-radius:6px;cursor:pointer;' +
       'border:1px solid currentColor;background:transparent;color:inherit;font:inherit}' +
-      'body{padding-bottom:42px}';
+      'body{padding-top:40px}';
     document.head.appendChild(css);
     var bar = document.createElement('div');
     bar.id = 'pv-bar';

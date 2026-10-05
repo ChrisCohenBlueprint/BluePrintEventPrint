@@ -1685,8 +1685,21 @@ async function removeStandFromPlan(boothNumber) {
     `It leaves the totals, the bookings table and every dropdown, and its number stays reserved. Tools → Removed Stands puts it back exactly as it was.`,
     { title: `Remove stand ${shownN(boothNumber)}`, confirmLabel: 'Remove it', danger: true })) return;
   const res = await emitAck(socket, 'booth:remove', { boothNumber });
-  if (res && res.ok) adminToast(`Stand ${boothNumber} taken off the plan.`, 'ok');
-  else adminToast((res && res.error) || 'Could not remove that stand.', 'error');
+  if (!res || !res.ok) return adminToast((res && res.error) || 'Could not remove that stand.', 'error');
+  // Undo where the change was made, the way releasing a booking offers it (see
+  // offerUndoRelease). Tools → Removed Stands is the permanent way back, but it
+  // is one of eleven cards on a long page, and nothing about a stand quietly
+  // vanishing says to go looking there — so the first person to remove one had
+  // no way to put it back that they could find.
+  window.UI.toastAction(`Stand ${shownN(boothNumber)} taken off the plan.`,
+    { ...TOAST, kind: 'ok', ms: 10000, label: 'Undo',
+      onAction: async () => {
+        const back = await emitAck(socket, 'booth:restore-stand', { boothNumber });
+        adminToast(back && back.ok
+          ? `Stand ${shownN(boothNumber)} is back on the plan.`
+          : ((back && back.error) || 'Could not put that stand back.'),
+          back && back.ok ? 'ok' : 'error');
+      } });
 }
 
 /** What the release/un-book gate is asking for, in the operator's words. */
@@ -1919,6 +1932,16 @@ function populateToolDropdowns() {
       list.map(b => `<option value="${esc(b.boothNumber)}">Stand ${esc(shownB(b))}</option>`).join('');
     sel.value = cur;
   });
+
+  // How many stands are off the plan, on the Tools tab that puts them back.
+  // Without it the only trace of a removal is the stand no longer being there,
+  // and nothing tells you it can be undone at all.
+  const removedBadge = document.getElementById('removed-badge');
+  if (removedBadge) {
+    const n = Object.keys(removedBooths).length;
+    removedBadge.textContent = String(n);
+    removedBadge.classList.toggle('hidden', n === 0);
+  }
 
   // Removed stands — the only list on this page built from the other map.
   const restoreSel = document.getElementById('restore-stand');
