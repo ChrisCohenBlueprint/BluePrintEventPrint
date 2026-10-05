@@ -14,6 +14,7 @@
     "check:browser": "node scripts/browser-check.js",
     "check": "npm run check:security && npm run check:browser",
     "preview": "node scripts/preview-plan.js",
+    "removed": "node scripts/removed-stands.js",
     "validate:artwork": "node scripts/validate-artwork.js",
     "test": "node test/run-all.js"
   },
