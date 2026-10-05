@@ -12,3 +12,6 @@ atlas-booths-backup-*.json
 preview-*.png
 pp-*.png
 probe-*.png
+
+# The sandbox hall, carried between runs by scripts/preview-plan.js
+scripts/.preview-state.json

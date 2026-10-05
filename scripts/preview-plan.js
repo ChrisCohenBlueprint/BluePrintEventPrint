@@ -82,7 +82,61 @@ function seedStands() {
     };
   });
 }
-function reseed() { db = fakeDb({ booths: seedStands() }); }
+/**
+ * The hall survives a restart.
+ *
+ * It did not, and that cost a real afternoon: a stand was taken off the plan,
+ * the sandbox was restarted underneath it, and the stand, the history and the
+ * way back all went at once. A workbench whose state evaporates whenever
+ * somebody else touches the process is no use for trying something and coming
+ * back to it.
+ *
+ * The whole stand-in database is written beside this script after every change
+ * and read back at boot. "Reload the hall" is then the only thing that throws
+ * work away, which is the one place it should be.
+ *
+ * Dates go through JSON as strings, so anything shaped like a timestamp is
+ * turned back into a Date on the way in — the model compares them (a merge
+ * against a split, newest first) and a string would sort the same but compare
+ * as a different type.
+ */
+const STATE_FILE = path.join(__dirname, '.preview-state.json');
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+const reviveDates = (v) => {
+  if (typeof v === 'string') return ISO.test(v) ? new Date(v) : v;
+  if (Array.isArray(v)) return v.map(reviveDates);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const [k, val] of Object.entries(v)) out[k] = reviveDates(val);
+    return out;
+  }
+  return v;
+};
+
+function save() {
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify(db.store)); }
+  catch (e) { console.error('Could not save the sandbox hall —', e.message); }
+}
+
+function load() {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return false;
+    const store = reviveDates(JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')));
+    if (!store || !Array.isArray(store.booths) || !store.booths.length) return false;
+    // fakeDb stamps its own _id on insert, so the stored ones are dropped and
+    // the collections handed over as they are.
+    db = fakeDb({});
+    Object.entries(store).forEach(([name, rows]) => {
+      db.store[name] = rows;
+    });
+    return true;
+  } catch (e) {
+    console.error('Could not read the saved hall, starting fresh —', e.message);
+    return false;
+  }
+}
+
+function reseed() { db = fakeDb({ booths: seedStands() }); save(); }
 
 /**
  * The socket events the console fires, and the model call behind each.
@@ -218,6 +272,7 @@ function buildApp() {
     try {
       const r = await run(() => fn(payload || {}));
       if (r && r.ok) {
+        save();
         return res.json({ ...r, primary: r.primary && r.primary.boothNumber ? r.primary.boothNumber : r.primary });
       }
       res.json({ ok: false, error: `Could not do that — ${explain(r)}.` });
@@ -241,6 +296,7 @@ function buildApp() {
     const apply = req.body && req.body.apply === true;
     const r = await run(() => booths.restoreSnapshot(String(req.params.id), { apply, actor: 'preview' }));
     if (!r.ok) return res.status(404).json({ error: 'That point no longer exists.' });
+    if (apply) save();
     res.json(r);
   });
 
@@ -274,7 +330,10 @@ function buildApp() {
   return app;
 }
 
-reseed();
+// Pick up where the last run left off; seed from the artwork only if there is
+// nothing to pick up.
+const resumed = load();
+if (!resumed) reseed();
 const app = buildApp();
 const open = (port, fallback) => {
   const server = app.listen(port);
@@ -289,9 +348,13 @@ const open = (port, fallback) => {
     const sqm = db.store.booths.reduce((s, b) => s + b.sqm, 0);
     console.log(`\n  Admin console  → ${base}/admin      ← merge, split, reset, remove`);
     console.log(`  Public plan    → ${base}/floorplan  ← the same hall as a visitor sees it`);
-    console.log(`\n  ${n} stands, ${sqm.toLocaleString()} m², read off the real artwork.`);
+    const off = db.store.booths.filter(b => b.removed).length;
+    console.log(`\n  ${n} stands, ${sqm.toLocaleString()} m², ` +
+                (resumed ? 'carried over from the last run.' : 'read off the real artwork.'));
+    if (off) console.log(`  ${off} of them are off the plan — Tools → Plan History, or Removed Stands, puts them back.`);
     console.log('  The real console and the REAL server model; the database is a stand-in.');
-    console.log('  No login, nothing reaches Atlas, and nothing survives Ctrl-C.');
+    console.log('  No login, and nothing reaches Atlas. The hall now SURVIVES a restart —');
+    console.log('  "Reload the hall" is the only thing that throws your work away.');
     console.log('  Leave this running — the links only answer while it is.\n');
   });
 };
