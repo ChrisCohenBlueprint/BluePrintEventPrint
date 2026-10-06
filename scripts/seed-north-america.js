@@ -18,13 +18,45 @@
  *   node scripts/seed-north-america.js --apply    do it
  *   --force                                       override the import's refusal
  *
- * The event is fixed: it only ever acts on the show with slug "lna".
+ * The event is fixed: it only ever acts on the show with slug "lna", and the
+ * header says so. It used to print the DEFAULT event there while acting on
+ * North America, and to ignore --show; a --show naming any other event is now
+ * refused, because the drawing this restores is North America's and nobody
+ * else's.
+ *
+ * The plan goes back as a revision of its own, and what was live before is
+ * kept as one too. If the stand import is then refused, the plan that was
+ * live is put back as well: the stands stayed where they were, so the drawing
+ * they sit on must too.
  */
-const { begin, end, close } = require('./lib/run');
 const { seedNorthAmerica, SLUG } = require('../server/services/seed-artwork');
 
+// Named before the runner reads the arguments, so its header — database,
+// event, mode — names the event this acts on. Either spelling of a --show the
+// person typed is left alone, for the check below to judge.
+if (!process.argv.some(a => a === '--show' || a.startsWith('--show='))) process.argv.push('--show', SLUG);
+
+const { begin, end, close } = require('./lib/run');
+const showsModel = require('../server/models/shows');
+const showContext = require('../server/show-context');
+const floorplans = require('../server/models/floorplans');
+
 async function main() {
-  const { apply, force } = await begin(`Seed North America from the shipped artwork (event "${SLUG}")`);
+  const { apply, force, showId } = await begin(`Seed North America from the shipped artwork (event "${SLUG}")`);
+
+  const lna = showsModel.bySlug(SLUG);
+  if (!lna || lna.showId !== showId) {
+    console.error(`This restores North America's plan, on the event "${SLUG}" only — it was asked for ${showId}. ` +
+                  'Nothing was done.');
+    await close();
+    process.exit(2);
+  }
+
+  // What is live now, as a revision, so a refused import can put it back.
+  // Adopting it is a write, so only when writing.
+  const wasLive = apply
+    ? await showContext.runAs(showId, async () => { await floorplans.adopt(); return floorplans.liveRevisionId(); })
+    : null;
 
   const r = await seedNorthAmerica({ apply, force });
 
@@ -40,7 +72,17 @@ async function main() {
   for (const w of r.warnings || []) console.log(`  warning    ${w}`);
 
   if (r.importRefused) {
-    console.log(`\nThe import was REFUSED: ${r.importRefused}. The plan is restored; the stands are untouched.`);
+    let putBack = !r.artworkRestored;
+    if (r.artworkRestored) {
+      try {
+        const back = await showContext.runAs(showId, () =>
+          (wasLive ? floorplans.makeLive(wasLive, { actor: 'deploy' }) : floorplans.remove()));
+        putBack = back === true || !!(back && back.ok);
+      } catch (e) { console.error(`  plan       could not be put back — ${e.message}`); }
+    }
+    console.log(`\nThe import was REFUSED: ${r.importRefused}. ` +
+                (putBack ? 'The plan that was live is live again; the stands are untouched.'
+                         : 'The stands are untouched, but the plan that was live could NOT be put back — make it live again from Settings → Versions.'));
     console.log('That is the guard doing its job. --force only if you are certain.');
   } else if (r.ok && !r.dryRun) {
     console.log(`\n  imported   ${r.imported} stand(s) — ${r.sold} sold, ${r.available} available, ${r.held} on hold`);
