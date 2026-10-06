@@ -79,8 +79,13 @@ const findAuth = (username) =>
   );
 
 /**
- * Create or overwrite an account. Used by the bootstrap and by the create-admin
- * script. The account starts un-enrolled; 2FA is set up on first login.
+ * Create an account. The account starts un-enrolled; 2FA is set up on first
+ * login. Used by the bootstrap, the Team tab and `admin-account.js create`,
+ * each only for a username that does not exist yet.
+ *
+ * Not for a password reset: over an existing account it replaces the password
+ * WITHOUT ending the sessions already issued for it. setPassword() is the
+ * reset, and it does.
  */
 async function upsert({ username, password, role = 'admin', displayName, email }) {
   const uname = String(username).toLowerCase().trim();
@@ -89,18 +94,17 @@ async function upsert({ username, password, role = 'admin', displayName, email }
     passwordHash: await hashPassword(password),
     updatedAt: new Date(),
   };
-  // Profile fields are optional and only written when supplied, so re-running
-  // upsert to reset a password never blanks a rep's name or email.
+  // Profile fields are optional and only written when supplied, so a call that
+  // lands on an existing account never blanks a rep's name or email.
   if (displayName != null) $set.displayName = String(displayName).trim().slice(0, 60);
   if (email != null)       $set.email = String(email).trim().slice(0, 120);
 
   await col().updateOne(
     { username: uname },
     { $set,
-      // Role is set only on INSERT, never overwritten. Otherwise the
-      // break-glass "reset password" path (admin-account.js create annie …)
-      // would re-run upsert with the default role:'admin' and silently DEMOTE
-      // the owner, locking everyone out of team management.
+      // Role is set only on INSERT, never overwritten, so a call that does
+      // land on an existing account can never silently DEMOTE the owner to
+      // the default role:'admin' and lock everyone out of team management.
       $setOnInsert: {
         role: cleanRole(role),
         totpSecret: null,
