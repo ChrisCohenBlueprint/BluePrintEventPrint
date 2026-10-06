@@ -28,6 +28,7 @@ const booths       = require('./server/models/booths');
 const sponsors     = require('./server/models/sponsors');
 const holdsSvc     = require('./server/services/holds');
 const tracking   = require('./server/services/tracking');
+const inFlight   = require('./server/lib/in-flight');
 
 // Last-resort safety net: an unhandled promise rejection anywhere (a stray
 // un-awaited DB call in a timer, say) would otherwise terminate the process on
@@ -321,13 +322,15 @@ async function start() {
   // that had just been told to reload reconnected to a process that was gone.
   // Now: stop reporting healthy, close the socket layer so clients are told to
   // reconnect (and do so against the new instance), let the in-flight HTTP
-  // requests finish, then flush the analytics buffer and close the database.
-  // A hard deadline underneath it all, because a shutdown that hangs is worse
-  // than one that is slightly rude — Render will SIGKILL us anyway.
+  // requests and socket handlers finish, then flush the analytics buffer and
+  // close the database. A hard deadline underneath it all, because a shutdown
+  // that hangs is worse than one that is slightly rude — Render will SIGKILL us
+  // anyway.
   const shutdown = async (sig) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n${sig} — draining…`);
+    const began = Date.now();
 
     const deadline = setTimeout(() => {
       console.error('Shutdown took longer than 10s — exiting anyway.');
@@ -342,6 +345,13 @@ async function start() {
       // Already closed by io.close() in the normal case — this covers the case
       // where it was not, and never rejects.
       await new Promise((resolve) => server.close(() => resolve()));
+      // Closing a socket does not stop a handler it had already started. The
+      // database used to be closed right here regardless, cutting a multi-step
+      // write — hold-then-book, an enquiry and its history — in half on every
+      // deploy that landed mid-way through one. Wait for them, but only until
+      // two seconds before the deadline, which the flush and close still need.
+      const settled = await inFlight.drain(Math.max(0, 8_000 - (Date.now() - began)));
+      if (!settled) console.error(`${inFlight.count()} socket handler(s) still running — closing anyway.`);
       await tracking.flush();
       await db.close();
       console.log('Closed cleanly.');

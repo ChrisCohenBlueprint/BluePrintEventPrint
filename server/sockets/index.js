@@ -12,6 +12,7 @@ const users     = require('../models/users');
 const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
 const { track, socketIp } = require('../services/tracking');
+const inFlight  = require('../lib/in-flight');
 const { socketAuth, requireAdmin: requireAdminAuth,
         checkSecretThrottle, registerSecretFailure, clearSecretFailures } = require('../auth');
 
@@ -301,16 +302,20 @@ function broadcastViewers(io) {
  * show the socket belongs to. The show part matters as much as the error part —
  * an enquiry submitted from the North America plan must be stored against North
  * America, and that is decided here rather than in each handler.
+ *
+ * And it is counted as in flight until it settles (server/lib/in-flight.js), so
+ * a deploy's shutdown waits for an enquiry that is half-way through being
+ * stored instead of closing the database underneath it.
  */
 function safe(type, handler, socket) {
-  return async (...args) => {
+  return (...args) => inFlight.run(async () => {
     const run = () => handler(...args);
     try {
       return await (socket && socket.data.showId
         ? showContext.runAs(socket.data.showId, run)
         : run());
     } catch (e) { console.error(`✗ ${type} failed:`, e.stack || e.message); }
-  };
+  });
 }
 
 // ─── Per-show broadcast rooms ────────────────────────────────────────────────
