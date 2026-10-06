@@ -1527,7 +1527,7 @@ function submitWaitlist(n) {
   emitWithTimeout('inquiry:submit', payload, (res) => {
     btn.disabled = false;
     btn.textContent = 'Notify me';
-    if (res && res.ok) {
+    if (res && (res.ok || res.duplicate)) {   // a duplicate: the first one went
       forgetRequestId('waitlist');
       waitlisted.push(n);
       renderPanel(n, { force: true });
@@ -1595,6 +1595,32 @@ function requestIdFor(kind, payload) {
 }
 function forgetRequestId(kind) { delete pendingRequest[kind]; }
 
+/**
+ * Say what a stored enquiry went without.
+ *
+ * The server keeps only the stands, packages and areas that exist in this
+ * event when the enquiry arrives, and lists what it dropped by the key it was
+ * sent (server/models/inquiries.js). It can happen between the last broadcast
+ * and the send — a stand merged away a second before Send — so the success
+ * message says plainly which, rather than thanking the visitor for something
+ * that was not recorded. `named` turns those keys back into what the visitor
+ * saw.
+ */
+function showDropped(dropped, named) {
+  const el = document.getElementById('eq-dropped');
+  if (!el) return;
+  const lists = dropped && typeof dropped === 'object' ? dropped : {};
+  const items = ['stands', 'sponsors', 'areas'].flatMap(kind =>
+    (Array.isArray(lists[kind]) ? lists[kind] : []).map(k => named?.[kind]?.get(String(k)) || String(k)));
+  if (!items.length) { el.hidden = true; el.textContent = ''; return; }
+  const list = items.length === 1 ? items[0]
+             : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+  el.textContent = items.length === 1
+    ? `${list} was not included — it is no longer on this plan.`
+    : `${list} were not included — they are no longer on this plan.`;
+  el.hidden = false;
+}
+
 function initForm() {
   const form    = document.getElementById('enquiry-form');
   const errBox  = document.getElementById('eq-errors');
@@ -1623,6 +1649,7 @@ function initForm() {
       errBox.classList.add('hidden');
       if (svgDoc) svgDoc.querySelectorAll('.booth-shortlisted').forEach(el => el.classList.remove('booth-shortlisted'));
       clearEnquiryNotes();       // about the enquiry already sent, not this one
+      showDropped(null);
       renderShortlist();
       syncSponsorPanel();
       if (selectedId) renderPanel(selectedId, { force: true });
@@ -1650,6 +1677,14 @@ function initForm() {
       areaKeys: areaShortlist.slice(),
     };
     payload.requestId = requestIdFor('enquiry', payload);
+    // What each item is called on screen now, for saying which the server
+    // left out — by the time it answers, a stand it dropped may be gone from
+    // the page as well.
+    const named = {
+      stands:   new Map(payload.boothNumbers.map(n => [n, `Stand ${shownN(n)}`])),
+      sponsors: new Map(payload.sponsorKeys.map(k => [k, sponsorCache[k]?.name || k])),
+      areas:    new Map(payload.areaKeys.map(k => [k, areaByKey(k)?.label || k])),
+    };
 
     submit.disabled = true;
     submit.textContent = 'Sending…';
@@ -1662,10 +1697,13 @@ function initForm() {
       lucide.createIcons();
       syncSendButton();       // still disabled if the reason was being offline
 
-      if (res && res.ok) {
+      // A duplicate is the server recognising a retry of an enquiry it has
+      // already stored (see requestIdFor): the original went, so this did.
+      if (res && (res.ok || res.duplicate)) {
         submitted = true;
         forgetRequestId('enquiry');
         clearEnquiryNotes();     // what it said was true of the enquiry just sent
+        showDropped(res.dropped, named);
         form.classList.add('hidden');
         document.getElementById('eq-footer').hidden = true;   // hide the Send bar
         document.getElementById('eq-shortlist').classList.add('hidden');

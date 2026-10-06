@@ -559,6 +559,10 @@ body {
 .eq-success svg { width: 34px; height: 34px; color: #16a34a; margin-bottom: 10px; }
 .eq-success h4 { font-size: 16px; margin-bottom: 6px; }
 .eq-success p  { font-size: 13px; color: var(--muted); line-height: 1.55; }
+.eq-success .eq-dropped {
+  margin-top: 10px; padding: 8px 10px; border-radius: 8px; text-align: left;
+  background: rgba(249,115,22,.10); border: 1px solid rgba(249,115,22,.35); color: #9a3412;
+}
 
 .btn-shortlist {
   width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px;

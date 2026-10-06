@@ -95,6 +95,36 @@ const HEX32 = /^[0-9a-f]{32}$/;
   check('kept across its retry', wl.length === 2 && HEX32.test(wl[0].requestId || '') && wl[0].requestId === wl[1].requestId);
   check('and its own, not the enquiry\'s', wl.length && !s.some(p => p.requestId === wl[0].requestId));
 
+  console.log('\nWhat the server says back');
+  // The answers the server can now give (server/models/inquiries.js): a
+  // retry of one already stored is replayed as a success marked duplicate,
+  // and a stored enquiry says which of its items no longer existed.
+  const shown = () => page.evaluate(() => ({
+    success: !document.getElementById('eq-success').classList.contains('hidden'),
+    dropped: (document.getElementById('eq-dropped')?.hidden === false
+      ? document.getElementById('eq-dropped').textContent.replace(/\s+/g, ' ').trim() : ''),
+    errors: document.getElementById('eq-errors').textContent,
+  }));
+  const sendWith = async (ack, stands) => {
+    await page.evaluate(({ ack, stands }) => {
+      document.getElementById('eq-again').click();
+      stands.forEach(n => { selectBooth(n); toggleShortlist(n); });
+      window.__acks['inquiry:submit'] = ack;
+    }, { ack, stands });
+    await page.click('#eq-submit');
+    await page.clock.runFor(200);
+    return shown();
+  };
+  let v = await sendWith({ ok: true, id: 'x', dropped: { stands: ['104'], sponsors: [], areas: [] } }, ['100', '104']);
+  check('a stored enquiry that lost an item is still sent', v.success, JSON.stringify(v));
+  check('and the visitor is told plainly what was left out', /Stand 104 was not included/.test(v.dropped)
+        && /no longer on this plan/.test(v.dropped), v.dropped);
+  v = await sendWith({ ok: true, id: 'x', duplicate: true }, ['100']);
+  check('a replayed duplicate is a success', v.success && v.dropped === '', JSON.stringify(v));
+  const refusal = 'Those stands or options are no longer on this plan. Please refresh the page and choose again.';
+  v = await sendWith({ ok: false, errors: [refusal] }, ['100']);
+  check('a refusal is shown in the server\'s own words', !v.success && v.errors === refusal, v.errors);
+
   check('the page raised no errors', errors.length === 0, errors.slice(0, 2).join(' | '));
   await srv.close();
   finish();

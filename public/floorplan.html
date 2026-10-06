@@ -256,6 +256,10 @@
           <i data-lucide="check-circle"></i>
           <h4>Enquiry sent</h4>
           <p>Thanks — our team will be in touch shortly about the stands and options you selected.</p>
+          <!-- Anything the server left out because it no longer exists in this
+               event (a stand merged away between the last broadcast and the
+               send). The enquiry is stored without it, so say which. -->
+          <p class="eq-dropped" id="eq-dropped" hidden></p>
           <!-- The card used to be hidden for good, while "Add to enquiry" went
                on silently toggling the shortlist underneath it. A visitor who
                finds two more stands after sending needs a way back. -->
