@@ -687,7 +687,6 @@ async function stats() {
         _id: null,
         totalBooths: { $sum: 1 },
         totalSqm:    { $sum: '$sqm' },
-        totalRevenue:{ $sum: '$listPrice' },
         availableBooths: { $sum: { $cond: [{ $eq: ['$status', 'available'] }, 1, 0] } },
         soldBooths:      { $sum: { $cond: [{ $eq: ['$status', 'sold'] },      1, 0] } },
         heldBooths:      { $sum: { $cond: [{ $eq: ['$status', 'held'] },      1, 0] } },
@@ -695,16 +694,32 @@ async function stats() {
         soldSqm:  { $sum: { $cond: [{ $eq: ['$status', 'sold'] },      '$sqm', 0] } },
         heldSqm:  { $sum: { $cond: [{ $eq: ['$status', 'held'] },      '$sqm', 0] } },
         availRev: { $sum: { $cond: [{ $eq: ['$status', 'available'] }, '$listPrice', 0] } },
-        earnedRev:{ $sum: { $cond: [{ $eq: ['$status', 'sold'] },      '$listPrice', 0] } },
-        heldRev:  { $sum: { $cond: [{ $eq: ['$status', 'held'] },      '$listPrice', 0] } },
     } },
   ]).toArray();
+
+  // The revenue on a BOOKED stand is the price agreed for it where one was
+  // agreed, and its list price only where none was. "Revenue Earned" summed
+  // list prices whatever the deal said, so a stand sold at a discount, or at a
+  // premium, was counted at a price nobody is paying. Summed here rather than
+  // in the pipeline above: a negotiated price that is missing and one that is
+  // null have to read the same, which the aggregation's own comparison does
+  // not do.
+  const booked = await col().find({ showId: config.showId, removed: { $ne: true }, status: { $in: ['sold', 'held'] } })
+    .project({ status: 1, listPrice: 1, assignment: 1 }).toArray();
+  const agreed = (b) => (b.assignment && b.assignment.actualPrice != null ? Number(b.assignment.actualPrice) || 0 : (b.listPrice || 0));
+  const earnedRev = booked.filter(b => b.status === 'sold').reduce((sum, b) => sum + agreed(b), 0);
+  const heldRev = booked.filter(b => b.status === 'held').reduce((sum, b) => sum + agreed(b), 0);
 
   const base = { totalBooths: 0, availableBooths: 0, soldBooths: 0, heldBooths: 0,
                  totalSqm: 0, availSqm: 0, soldSqm: 0, heldSqm: 0,
                  totalRevenue: 0, earnedRev: 0, availRev: 0, heldRev: 0 };
   const { _id, ...rest } = agg || {};
-  return { ...base, ...rest };
+  const out = { ...base, ...rest, earnedRev, heldRev };
+  // The floor's value is what its three parts add up to — agreed for what is
+  // booked, list for what is still for sale — so the breakdown's rows and its
+  // total row agree.
+  out.totalRevenue = out.availRev + earnedRev + heldRev;
+  return out;
 }
 
 /**

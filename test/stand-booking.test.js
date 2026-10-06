@@ -300,6 +300,32 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
           JSON.stringify(body.tagsDropped));
   } finally { server.close(); }
 
+  console.log('\nThe rate keeps its cents, and revenue is what was agreed');
+  const settings = require('../server/models/settings');
+  db = fakeDb({ booths: [], settings: [] });
+  let rate = await run(() => settings.setRate(45.5));
+  check('45.5 is stored as 45.5, not 46', rate.ok && rate.ratePerSqm === 45.5 && db.store.settings[0].ratePerSqm === 45.5,
+        JSON.stringify(rate));
+  rate = await run(() => settings.setRate(0.4));
+  check('0.4 is a rate, not 0', rate.ok && rate.ratePerSqm === 0.4, JSON.stringify(rate));
+  rate = await run(() => settings.setRate(0.001));
+  check('a rate that is nothing to the cent is refused, not stored as 0',
+        !rate.ok && db.store.settings[0].ratePerSqm === 0.4, JSON.stringify(rate));
+
+  db = fakeDb({ booths: [
+    stand('R1', { status: 'sold', assignment: { ...EMPTY(), company: 'Discount Co', actualPrice: 4000 } }),
+    stand('R2', { status: 'sold', assignment: { ...EMPTY(), company: 'List Co' } }),
+    stand('R3', { status: 'held', assignment: { ...EMPTY(), company: 'Premium Co', actualPrice: 7000 } }),
+    stand('R4'),
+    stand('R5', { status: 'removed', removed: true }),
+  ] });
+  const st = await run(() => booths.stats());
+  check('revenue earned counts the price agreed, or the list price where none was',
+        st.earnedRev === 4000 + 5400, String(st.earnedRev));
+  check('held revenue the same way', st.heldRev === 7000, String(st.heldRev));
+  check('and the floor value is what its parts add up to', st.totalRevenue === st.earnedRev + st.heldRev + st.availRev &&
+        st.availRev === 5400, JSON.stringify({ total: st.totalRevenue, avail: st.availRev }));
+
   const f = out.filter(x => !x).length;
   console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);
   process.exit(f ? 1 : 0);
