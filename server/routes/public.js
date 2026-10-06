@@ -61,8 +61,9 @@ router.get('/countries', (_req, res) => {
  * the repo — which is what keeps the event already running working with no
  * migration and no upload.
  *
- * Cached hard but keyed by version, so a newly uploaded plan is fetched rather
- * than the browser reusing the old one.
+ * Revalidated on every fetch, the stored plan and the shipped one alike, so a
+ * plan made live is fetched rather than the browser reusing the old one; an
+ * unchanged plan costs a 304 and no bytes.
  */
 router.get('/floorplan.svg', async (req, res, next) => {
   try {
@@ -109,9 +110,14 @@ router.get('/floorplan.svg', async (req, res, next) => {
       return res.send(artwork);
     }
     // Nothing uploaded for this show: the artwork that ships with the app.
+    // Revalidated like the stored artwork, for the same reason and one more:
+    // when this event's first plan goes live, every open page re-fetches this
+    // URL, and a copy held for five minutes handed them the shipped drawing
+    // from their own cache with the new stands bound over it. sendFile gives
+    // it an ETag, so an unchanged file still answers 304.
     const file = path.join(__dirname, '..', '..', 'public',
                            String(config.floorplanSvg).replace(/^\//, ''));
-    res.set('Cache-Control', 'public, max-age=300');
+    res.set('Cache-Control', 'no-cache');
     return res.sendFile(file);
   } catch (e) { next(e); }
 });
