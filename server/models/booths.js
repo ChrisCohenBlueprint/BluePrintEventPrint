@@ -578,11 +578,15 @@ async function setDisplayNumber(boothNumber, value, { actor = null } = {}) {
  */
 async function move(fromNum, toNum, { actor = null } = {}) {
   if (fromNum === toNum) return { ok: false, reason: 'same_booth' };
-  const from = await get(fromNum);
-  const to   = await get(toNum);
+  const from = detach(await get(fromNum));
+  const to   = detach(await get(toNum));
   if (!from || !to) return { ok: false, reason: 'missing_booth' };
-  if (from.status === 'available') return { ok: false, reason: 'nothing_to_move' };  // no booking on the source
-  if (to.status !== 'available')   return { ok: false, reason: 'to_not_available' };
+  // Only a sale or a hold is a booking to move. Anything else used to count —
+  // a stand taken off the plan included, whose 'removed' status landed on the
+  // destination without the flag that goes with it, while the source came
+  // back 'available' still flagged as removed.
+  if (from.removed === true || !['sold', 'held'].includes(from.status)) return { ok: false, reason: 'nothing_to_move' };
+  if (to.removed === true || to.status !== 'available') return { ok: false, reason: 'to_not_available' };
 
   const movedStatus = from.status;   // captured before any write, so it can't alias
   const a = from.assignment || {};
@@ -594,23 +598,50 @@ async function move(fromNum, toNum, { actor = null } = {}) {
   const assignment = { company: a.company || null, contactId: a.contactId || null, actualPrice: newActual,
                        notes: a.notes || '', tags: Array.isArray(a.tags) ? a.tags : [], country: a.country || null };
 
+  // A HELD booking is a countdown, and the countdown moves with it unchanged.
+  // Its hold DOCUMENT is the record of that hold — who placed it, for which
+  // contact and session, until when — and it is re-pointed rather than
+  // replaced. The socket layer used to drop it and write a fresh 24-hour one,
+  // so a 7-day hold with a day left became 24 hours, an expired hold not yet
+  // swept was revived, a hold with no expiry at all became 24 hours, and the
+  // contact and session were lost.
+  const holdsCol = getDb().collection('holds');
+  const holdDocs = movedStatus === 'held'
+    ? await holdsCol.find({ showId: config.showId, boothNumber: fromNum }).toArray() : [];
+  const holdDoc = holdDocs[0] || null;
+  // The expiry the stand carries, or failing that its document's: a date, null
+  // (never expires) — or, for a hold that has neither, nothing, so the
+  // destination is judged by its document exactly as the source was.
+  const carriedExpiry = from.holdExpiresAt !== undefined ? from.holdExpiresAt
+    : (holdDoc ? (holdDoc.expiresAt ?? null) : undefined);
+
   // Claim the destination FIRST, only while it is still available — so we can
   // never overwrite a booking that landed on it a moment ago.
   //
-  // A HELD booking carries an expiry, and that expiry has to land on the
-  // destination in this same write. The socket layer re-points the hold
-  // DOCUMENT two steps later; until it does, a destination marked held with no
-  // expiry and no document is exactly what the sweep reclaims, so the stand an
-  // exhibitor was just moved onto went back on sale within the minute. Carrying
-  // it here closes that window on the model side, whatever the caller does
-  // afterwards. `source` goes for the reason in setStatus: a person moved this.
+  // The expiry has to land on the destination in this same write: a stand
+  // marked held with no expiry and no document is exactly what the sweep
+  // reclaims, so until the document follows, the expiry is what keeps the
+  // stand an exhibitor was just moved onto from going back on sale.
+  // `source` goes for the reason in setStatus: a person moved this.
   const $claim = { status: movedStatus, assignment, updatedAt: new Date(), updatedBy: actor };
-  if (movedStatus === 'held') $claim.holdExpiresAt = from.holdExpiresAt ?? null;
+  if (movedStatus === 'held' && carriedExpiry !== undefined) $claim.holdExpiresAt = carriedExpiry;
   const claim = await col().updateOne(
-    { showId: config.showId, boothNumber: toNum, status: 'available' },
+    { showId: config.showId, boothNumber: toNum, status: 'available', removed: { $ne: true } },
     { $set: $claim, $unset: { source: '' } }
   );
   if (!claim.matchedCount) return { ok: false, reason: 'to_not_available' };
+
+  // The hold document follows the booking before the source is freed, so a
+  // stop between the two leaves one hold on two held stands — visible, and
+  // put right by a release — rather than a document stranded on a stand that
+  // is for sale, where the next hold on it fails on one-hold-per-stand.
+  if (holdDoc) {
+    await holdsCol.deleteMany({ showId: config.showId, boothNumber: toNum });   // a leftover on the free destination
+    await holdsCol.updateOne({ _id: holdDoc._id },
+      { $set: { boothNumber: toNum, movedFrom: fromNum, movedAt: new Date(), movedBy: actor } });
+    // A stand only ever holds one; any duplicate an older version left goes.
+    if (holdDocs.length > 1) await holdsCol.deleteMany({ showId: config.showId, boothNumber: fromNum });
+  }
 
   // Free the source, only if it still holds the booking we just moved.
   const freed = await col().updateOne(
@@ -630,6 +661,10 @@ async function move(fromNum, toNum, { actor = null } = {}) {
       { $set: { status: 'available', assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null }, updatedAt: new Date(), updatedBy: actor },
         $unset: { holdExpiresAt: '' } }
     );
+    if (holdDoc) {
+      await holdsCol.updateOne({ _id: holdDoc._id },
+        { $set: { boothNumber: fromNum }, $unset: { movedFrom: '', movedAt: '', movedBy: '' } });
+    }
     return { ok: false, reason: 'move_conflict' };
   }
 
@@ -639,6 +674,7 @@ async function move(fromNum, toNum, { actor = null } = {}) {
     fromSqm: from.sqm, toSqm: to.sqm,
     fromListPrice: from.listPrice, toListPrice: to.listPrice,
     newActualPrice: newActual,
+    holdExpiresAt: movedStatus === 'held' ? (carriedExpiry ?? null) : undefined,
   };
 }
 
@@ -1946,7 +1982,7 @@ async function restoreDrawingSettings(svg, { actor = null } = {}) {
  * overwritten. The CURRENT stands are snapshotted first, so an ill-judged
  * restore is itself reversible.
  */
-async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId = config.showId } = {}) {
+async function restorePoint(snapshotId, { apply = false, actor = null, showId = config.showId } = {}) {
   const rows = await snapshots().find({ showId, snapshotId, header: { $ne: true } }).toArray();
   if (!rows.length) {
     // Told apart deliberately. A snapshot taken of an event that had no stands
@@ -2152,6 +2188,25 @@ async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId
   return { ok: true, ...plan, previousSnapshot: back.snapshotId };
 }
 
+
+/**
+ * restorePoint, holding the plan lock while it writes.
+ *
+ * Applying a point writes stand after stand and may switch the drawing; a
+ * publish or a stand import doing the same at that moment would interleave
+ * with it, each reading the hall the other is halfway through rewriting. Both
+ * of those hold the event's plan lock for their whole sequence, so applying a
+ * point holds it too. A dry run writes nothing and does not wait. (The lock
+ * lives with the drawings in floorplans.js; on a build without it, the restore
+ * runs as it always did.)
+ */
+async function restoreSnapshot(snapshotId, opts = {}) {
+  const { apply = false, showId = config.showId } = opts;
+  if (apply && typeof floorplans.withPlanLock === 'function') {
+    return floorplans.withPlanLock(showId, () => restorePoint(snapshotId, opts));
+  }
+  return restorePoint(snapshotId, opts);
+}
 
 // ─── The plan's history ───────────────────────────────────────────────────────
 /**

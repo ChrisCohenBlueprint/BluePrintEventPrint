@@ -44,6 +44,10 @@ async function ensureIndexes() {
  */
 async function create({ boothNumber, company, contactId = null, sessionId = null,
                         durationMs = config.defaultHoldMs, actor = null }) {
+  // A length that is not a number of milliseconds makes an Invalid Date, which
+  // is stored as 1970 — so the "hold" was released within the minute, after a
+  // log line promising it "until Invalid Date". Refused rather than guessed.
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return { ok: false, reason: 'bad_duration' };
   const booth = await booths.get(boothNumber);
   if (!booth) return { ok: false, reason: 'no_such_booth' };
   if (booth.status !== 'available') return { ok: false, reason: 'not_available' };
@@ -86,6 +90,7 @@ const drop = (boothNumber) => col().deleteMany({ showId: config.showId, boothNum
  * minute. This always leaves a matching document behind.
  */
 async function forceHold(boothNumber, { company = 'Pending', durationMs = config.defaultHoldMs, actor = null } = {}) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return { ok: false, reason: 'bad_duration' };
   const now = new Date();
   const expiresAt = new Date(now.getTime() + durationMs);
   // The booth's own expiry is pushed into the future BEFORE anything else.
@@ -95,9 +100,14 @@ async function forceHold(boothNumber, { company = 'Pending', durationMs = config
   // caller set the status — left a gap in which the sweep flipped the stand
   // back to available and abandoned the hold document that had just been
   // written for it.
-  await booths.col().updateOne(
-    { showId: config.showId, boothNumber },
+  //
+  // Only a stand that is on the plan. This wrote an expiry and a hold document
+  // for a stand taken off the plan (or one that does not exist) before the
+  // caller ever found out it could not be held.
+  const claimed = await booths.col().updateOne(
+    { showId: config.showId, boothNumber, removed: { $ne: true } },
     { $set: { holdExpiresAt: expiresAt } });
+  if (!claimed.matchedCount) return { ok: false, reason: 'no_such_booth' };
   await drop(boothNumber);
   await col().insertOne({ showId: config.showId, boothNumber, company, contactId: null,
                           sessionId: null, createdAt: now, expiresAt, createdBy: actor });
@@ -105,13 +115,27 @@ async function forceHold(boothNumber, { company = 'Pending', durationMs = config
   return { ok: true, expiresAt };
 }
 
+/**
+ * Free a held or sold stand.
+ *
+ * Says what happened: `{ ok: false, reason }` when there was nothing to
+ * release — no such stand, one taken off the plan, or one already available.
+ * The result was ignored, so every one of those was acked as a release, logged
+ * as "released" and written into the audit trail.
+ */
 async function release(boothNumber, { actor = null } = {}) {
+  // The hold document goes first: should the process stop between the two
+  // writes, a held stand with no document is what the sweep releases anyway,
+  // which is the outcome asked for.
   await drop(boothNumber);
   // Release frees a held OR sold stand back to available (blanking the exhibitor
   // and clearing the deal). The admin action is password-gated in the socket
   // handler, so an accidental click can't silently drop a sale.
-  await booths.setStatus(boothNumber, 'available', { company: null, actor, expect: ['held', 'sold'] });
+  const r = await booths.setStatus(boothNumber, 'available', { company: null, actor, expect: ['held', 'sold'] });
+  if (!r) return { ok: false, reason: 'no_such_booth' };
+  if (!r.changed) return { ok: false, reason: 'not_booked', status: r.before.status };
   track({ type: 'hold.release', boothNumber, meta: {}, actor });
+  return { ok: true, before: r.before };
 }
 
 const active = () => col().find({ showId: config.showId }).sort({ expiresAt: 1 }).toArray();

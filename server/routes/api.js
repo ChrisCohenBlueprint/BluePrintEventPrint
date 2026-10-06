@@ -1410,24 +1410,6 @@ router.post('/holds/:boothNumber/extend', async (req, res, next) => {
 });
 
 /**
- * Put a released booking back.
- *
- * Release destroys a booking outright — the company, the negotiated price, the
- * notes, the tags — and the only recovery was to retype all of it from memory.
- * This restores the snapshot the console held immediately before the release.
- *
- * Two things make it safe. It is gated exactly as Release is, so it is no
- * easier to perform than the thing it reverses. And it REFUSES unless the stand
- * is still available: if someone has taken it in the meantime, restoring would
- * quietly overwrite their booking, which is a worse outcome than the one being
- * undone.
- *
- * The snapshot travelling from the client grants no authority an admin does not
- * already have — booth:book already lets them assign any stand to any company —
- * but it is stamped into the audit trail either way, so a restore is never an
- * unattributed change of company.
- */
-/**
  * The plan's history, and the way back into it.
  *
  * Every change to the SHAPE of the hall leaves a point holding the whole hall
@@ -1516,6 +1498,24 @@ router.post('/history/:id/restore', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+/**
+ * Put a released booking back.
+ *
+ * Release destroys a booking outright — the company, the negotiated price, the
+ * notes, the tags — and the only recovery was to retype all of it from memory.
+ * This restores the snapshot the console held immediately before the release.
+ *
+ * Two things make it safe. It is gated exactly as Release is, so it is no
+ * easier to perform than the thing it reverses. And it REFUSES unless the stand
+ * is still available: if someone has taken it in the meantime, restoring would
+ * quietly overwrite their booking, which is a worse outcome than the one being
+ * undone.
+ *
+ * The snapshot travelling from the client grants no authority an admin does not
+ * already have — booth:book already lets them assign any stand to any company —
+ * but it is stamped into the audit trail either way, so a restore is never an
+ * unattributed change of company.
+ */
 router.post('/booths/:boothNumber/restore', async (req, res, next) => {
   try {
     const n = String(req.params.boothNumber);
@@ -1554,8 +1554,20 @@ router.post('/booths/:boothNumber/restore', async (req, res, next) => {
         actor: req.admin?.user || null,
       });
     }
+    // Through the catalogue, exactly as the tag picker is: a tag deleted since
+    // the release must not come back onto the stand. Only the ones that still
+    // exist are restored, up to the per-stand limit, and the rest are named.
+    let tagsDropped = [];
     if (Array.isArray(snap.tags) && snap.tags.length) {
-      await booths.setTags(n, snap.tags, { actor: req.admin?.user || null });
+      const tagsModel = require('../models/tags');
+      const valid = await tagsModel.validKeys();
+      const keep = [...new Set(snap.tags.map(String))].filter(k => valid.has(k));
+      tagsDropped = snap.tags.map(String).filter(k => !keep.includes(k));
+      if (keep.length) {
+        await booths.setTags(n, keep.slice(0, tagsModel.MAX_PER_BOOTH),
+                             { valid, max: tagsModel.MAX_PER_BOOTH, actor: req.admin?.user || null });
+        tagsDropped.push(...keep.slice(tagsModel.MAX_PER_BOOTH));
+      }
     }
     if (snap.country) {
       await booths.setCountry(n, snap.country, { actor: req.admin?.user || null });
@@ -1566,7 +1578,7 @@ router.post('/booths/:boothNumber/restore', async (req, res, next) => {
 
     try { await sockets.notifyStands(); } catch (e) { console.error('Restore broadcast failed:', e.message); }
 
-    res.json({ ok: true, boothNumber: n, status, company });
+    res.json({ ok: true, boothNumber: n, status, company, ...(tagsDropped.length ? { tagsDropped } : {}) });
   } catch (e) { next(e); }
 });
 

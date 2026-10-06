@@ -12,6 +12,14 @@
  *                        re-booked to someone else, handed them to the next
  *                        company to take the stand.
  *   a sale has a name  — a stand sold to an empty prompt was booked as nobody.
+ *   a hold keeps time  — moving a held booking reset its countdown to 24 hours
+ *                        and dropped its contact; a length of 1e10 hours was
+ *                        stored as 1970.
+ *   the truth, in order — a release that released nothing reported success;
+ *                        a booking dropped its hold before writing the sale;
+ *                        a forced hold on a removed stand wrote its document
+ *                        before anything said the stand was gone; a released
+ *                        booking was put back with tags deleted since.
  *
  * Driven through the real model, the real hold service and the real socket
  * handlers, against a filter-applying stand-in for the database.
@@ -166,6 +174,131 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
         String(now('401').assignment.actualPrice));
   ack = await emit('booth:update-deal', { boothNumber: '401', actualPrice: null });
   check('while null still clears it', ack.ok === true && now('401').assignment.actualPrice === null);
+
+  console.log('\nMoving a held booking moves its hold, countdown and all');
+  const sevenDayHold = hours(30);          // a 7-day hold with a day and a bit left
+  db = fakeDb({
+    booths: [stand('501', { status: 'held', holdExpiresAt: sevenDayHold,
+                            assignment: { ...EMPTY(), company: 'Mover Co', contactId: 'c-mover' } }),
+             stand('502')],
+    holds: [{ showId: SHOW, boothNumber: '501', company: 'Mover Co', contactId: 'c-mover', sessionId: 'sess-1',
+              createdAt: new Date(Date.now() - 6 * 86_400_000), expiresAt: sevenDayHold, createdBy: 'chris' }],
+  });
+  ack = await emit('booth:move', { from: '501', to: '502' });
+  check('the move lands', ack.ok === true && now('502').status === 'held' && now('501').status === 'available',
+        JSON.stringify(ack.error || ack.status));
+  check('with the day it had left, not a fresh 24 hours',
+        +now('502').holdExpiresAt === +sevenDayHold, String(now('502').holdExpiresAt));
+  check('its hold document follows it, contact and session intact',
+        holdOf('502').length === 1 && holdOf('502')[0].contactId === 'c-mover' &&
+        holdOf('502')[0].sessionId === 'sess-1' && +holdOf('502')[0].expiresAt === +sevenDayHold,
+        JSON.stringify(db.store.holds));
+  check('and nothing is left behind on the stand it left', holdOf('501').length === 0);
+
+  db = fakeDb({
+    booths: [stand('503', { status: 'held', holdExpiresAt: null, assignment: { ...EMPTY(), company: 'Plan Reserved Co' } }),
+             stand('504')],
+    holds: [{ showId: SHOW, boothNumber: '503', company: 'Plan Reserved Co', source: 'artwork-import' }],
+  });
+  await emit('booth:move', { from: '503', to: '504' });
+  check('a hold that never expires still never expires after a move',
+        now('504').status === 'held' && now('504').holdExpiresAt === null && holdOf('504').length === 1 &&
+        holdOf('504')[0].expiresAt === undefined, String(now('504').holdExpiresAt));
+
+  db = fakeDb({
+    booths: [stand('505', { status: 'held', holdExpiresAt: past(), assignment: { ...EMPTY(), company: 'Lapsed Co' } }),
+             stand('506')],
+    holds: [{ showId: SHOW, boothNumber: '505', company: 'Lapsed Co', expiresAt: past() }],
+  });
+  await emit('booth:move', { from: '505', to: '506' });
+  check('and a hold that had already run out is not revived by moving it',
+        (await run(() => holds.reconcile())).join() === '506' && now('506').status === 'available');
+
+  console.log('\nA stand taken off the plan is not a booking to move, nor a place to move one');
+  db = fakeDb({ booths: [stand('601', { status: 'removed', removed: true }), stand('602'),
+                         stand('603', { status: 'sold', assignment: { ...EMPTY(), company: 'Real Co' } }),
+                         stand('604', { status: 'removed', removed: true })], holds: [] });
+  let mv = await run(() => booths.move('601', '602', { actor: 'chris' }));
+  check('moving from a removed stand is refused', !mv.ok && mv.reason === 'nothing_to_move', JSON.stringify(mv));
+  check('and both stands are as they were', now('601').status === 'removed' && now('602').status === 'available');
+  mv = await run(() => booths.move('603', '604', { actor: 'chris' }));
+  check('moving onto a removed stand is refused', !mv.ok && mv.reason === 'to_not_available', JSON.stringify(mv));
+  check('and the booking stays put', now('603').status === 'sold' && now('604').status === 'removed');
+
+  console.log('\nForcing a hold onto a stand off the plan writes nothing');
+  db = fakeDb({ booths: [stand('701', { status: 'removed', removed: true })], holds: [] });
+  ack = await emit('admin:setStatus', { boothNumber: '701', status: 'held', company: 'Ghost Co' });
+  check('it is refused as not found', ack.ok === false && /not found/.test(ack.error), JSON.stringify(ack));
+  check('with no hold document written for it', holdOf('701').length === 0, JSON.stringify(db.store.holds));
+  check('and no expiry stamped on it', now('701').holdExpiresAt === undefined);
+
+  console.log('\nA hold is as long as it says, within reason');
+  db = fakeDb({ booths: [stand('801'), stand('802'), stand('803'), stand('804')], holds: [] });
+  ack = await emit('booth:hold', { boothNumber: '801', company: 'Long Co', hours: 1e10 });
+  const longest = now('801').holdExpiresAt;
+  check('an enormous length is cut to 30 days, not stored as 1970',
+        ack.ok === true && longest instanceof Date && !isNaN(longest) &&
+        Math.abs(longest - Date.now() - 30 * 86_400_000) < 60_000, String(longest));
+  ack = await emit('booth:hold', { boothNumber: '802', company: 'Forever Co', hours: Infinity });
+  check('Infinity is refused, not an Invalid Date', ack.ok === false && now('802').status === 'available', JSON.stringify(ack));
+  ack = await emit('booth:hold', { boothNumber: '803', company: 'Words Co', hours: 'soon' });
+  check('so is a length that is not a number', ack.ok === false && now('803').status === 'available');
+  ack = await emit('booth:hold', { boothNumber: '804', company: 'Default Co' });
+  check('no length at all is the usual 24 hours', ack.ok === true &&
+        Math.abs(now('804').holdExpiresAt - Date.now() - 86_400_000) < 60_000);
+  check('and no log line promises a hold "until Invalid Date"', !logged().some(m => /Invalid Date/.test(m)));
+
+  console.log('\nA release that released nothing says so');
+  db = fakeDb({ booths: [stand('901'), stand('902', { status: 'removed', removed: true }),
+                         stand('903', { status: 'held', holdExpiresAt: hours(3), assignment: { ...EMPTY(), company: 'Let Go Co' } })],
+                holds: [{ showId: SHOW, boothNumber: '903', company: 'Let Go Co', expiresAt: hours(3) }] });
+  const logsBefore = logged().length;
+  ack = await emit('booth:release', { boothNumber: '901', password: 'pw' });
+  check('an available stand is not "released"', ack.ok === false && /nothing to release/.test(ack.error), JSON.stringify(ack));
+  ack = await emit('booth:release', { boothNumber: '902', password: 'pw' });
+  check('nor one taken off the plan', ack.ok === false && now('902').status === 'removed', JSON.stringify(ack));
+  ack = await emit('booth:release', { boothNumber: '999', password: 'pw' });
+  check('nor one that does not exist', ack.ok === false && /not found/.test(ack.error), JSON.stringify(ack));
+  check('and none of them was logged as released', logged().length === logsBefore, logged().slice(logsBefore).join(' | '));
+  ack = await emit('booth:release', { boothNumber: '903', password: 'pw' });
+  check('a real hold is released, and says so', ack.ok === true && now('903').status === 'available' &&
+        holdOf('903').length === 0 && logged().some(m => /Stand 903 released/.test(m)),
+        JSON.stringify(ack));
+
+  console.log('\nBooking a held stand writes the sale before it lets go of the hold');
+  db = fakeDb({ booths: [stand('951', { status: 'held', holdExpiresAt: null, assignment: { ...EMPTY(), company: 'Plan Co' } })],
+                holds: [{ showId: SHOW, boothNumber: '951', company: 'Plan Co', source: 'artwork-import' }] });
+  ack = await emit('booth:book', { boothNumber: '951', company: 'Plan Co' });
+  const sale = db.calls.findIndex(c => c[0] === 'updateOne' && c[1] === 'booths' && c[3] && c[3].$set && c[3].$set.status === 'sold');
+  const dropped = db.calls.findIndex(c => c[0] === 'deleteMany' && c[1] === 'holds');
+  check('the sale lands and the hold goes', ack.ok === true && now('951').status === 'sold' && holdOf('951').length === 0);
+  check('in that order, so a stop between them never leaves a hold with no document',
+        sale > -1 && dropped > sale, `sale@${sale} drop@${dropped}`);
+
+  console.log('\nPutting a released booking back checks its tags against the catalogue');
+  const express = require('express');
+  const api = require('../server/routes/api');
+  db = fakeDb({ booths: [stand('981')], holds: [],
+                tags: [{ showId: SHOW, key: 'oils', label: 'Oils' }, { showId: SHOW, key: 'additives', label: 'Additives' }] });
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => { req.admin = { user: 'chris' }; showContext.runAs(SHOW, next); });
+  app.use('/api', api);
+  const server = app.listen(0);
+  await new Promise(r => server.once('listening', r));
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/booths/981/restore`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Confirm-Password': 'pw' },
+      body: JSON.stringify({ status: 'sold', assignment: { company: 'Back Again Ltd', tags: ['oils', 'deleted-since', 'additives'] } }),
+    });
+    const body = await res.json();
+    check('the booking comes back', res.status === 200 && now('981').status === 'sold' &&
+          now('981').assignment.company === 'Back Again Ltd', JSON.stringify(body));
+    check('with the tags that still exist', now('981').assignment.tags.join() === 'oils,additives',
+          JSON.stringify(now('981').assignment.tags));
+    check('and the deleted one is named, not restored', (body.tagsDropped || []).join() === 'deleted-since',
+          JSON.stringify(body.tagsDropped));
+  } finally { server.close(); }
 
   const f = out.filter(x => !x).length;
   console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);

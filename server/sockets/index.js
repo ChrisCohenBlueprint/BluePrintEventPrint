@@ -467,14 +467,18 @@ function register(io) {
       // refuses it too, this only says so in words.
       const name = String(company ?? '').trim();
       if (!name) return { ok: false, error: `Give the exhibitor's name to book Stand ${n}.` };
-      // Clear any hold document first, but without flipping status to available.
-      await holdsSvc.drop(n);
       // Only book from available/held — if another admin booked it in the
       // meantime the conditional write won't match, and we say so rather than
       // overwriting their exhibitor.
       const r = await booths.setStatus(n, 'sold', { company: name, actor: socket.data.user, expect: ['available', 'held'] });
       if (!r) return { ok: false, error: `Stand ${n} not found.` };
       if (!r.changed) return { ok: false, error: `Stand ${n} is already taken — reload to see the latest.` };
+      // The hold document goes AFTER the sale is written. Dropped first, a stop
+      // between the two left a hold the plan declared — no expiry, and now no
+      // document — that the next sweep released: the sale never landed and the
+      // stand went back on sale. A sold stand with a leftover document is
+      // ignored by the sweep, and a later release clears it.
+      await holdsSvc.drop(n);
       track({ type: 'booth.status_change', boothNumber: n, socket,
               meta: { from: r.before.status, to: 'sold', company: name } });
       await refresh(); broadcastState(io);
@@ -483,13 +487,24 @@ function register(io) {
 
     socket.on('booth:hold', requireAdmin(socket, 'booth:hold', async ({ boothNumber, company, hours }) => {
       const n  = stand(boothNumber);
-      const ms = Number(hours) > 0 ? Number(hours) * 3600_000 : config.defaultHoldMs;
+      // Any number of hours used to be accepted: 1e10 or Infinity made an
+      // Invalid Date, stored as 1970, so the hold was released within the
+      // minute after logging "until Invalid Date". No length means the default;
+      // a length is clamped to what extending a hold allows — an hour to 30
+      // days — and anything that is not a positive number is refused.
+      let ms = config.defaultHoldMs;
+      if (hours !== undefined && hours !== null && hours !== '') {
+        const h = Number(hours);
+        if (!Number.isFinite(h) || h <= 0) return { ok: false, error: 'Give the hold a length in hours — from 1 to 720.' };
+        ms = Math.max(1, Math.min(h, 24 * 30)) * 3600_000;
+      }
       const r  = await holdsSvc.create({ boothNumber: n, company: company || 'Pending',
                                          durationMs: ms, actor: socket.data.user });
       if (!r.ok) {
         // The ack IS the failure report. Emitting error:action as well raised a
         // second toast for the same refusal.
-        const reason = r.reason === 'not_available' ? 'it is not available' : r.reason;
+        const reason = r.reason === 'not_available' ? 'it is not available'
+                     : r.reason === 'no_such_booth' ? 'there is no such stand' : r.reason;
         return { ok: false, error: `Stand ${n} could not be held — ${reason}.` };
       }
       await refresh(); broadcastState(io);
@@ -564,10 +579,17 @@ function register(io) {
       const gate = await confirmSecret([password], 'stand not released');
       if (!gate.ok) return gate;
       const n = stand(boothNumber);
-      const before = await booths.get(n);
-      await holdsSvc.release(n, { actor: socket.data.user });
+      // Only a release that released something is acked, logged and audited.
+      // It used to report success for a stand that does not exist, is already
+      // available, or is off the plan — and wrote "released" rows for each.
+      const r = await holdsSvc.release(n, { actor: socket.data.user });
+      if (!r.ok) {
+        return { ok: false, error: r.reason === 'no_such_booth'
+          ? `Stand ${n} not found.`
+          : `Stand ${n} is not booked or on hold — there was nothing to release.` };
+      }
       track({ type: 'booth.status_change', boothNumber: n, socket,
-              meta: { from: before?.status, to: 'available' } });
+              meta: { from: r.before.status, to: 'available' } });
       await refresh(); broadcastState(io);
       log(io, `🔓 Stand ${escapeHtml(n)} released`, 'release');
     }));
@@ -605,7 +627,10 @@ function register(io) {
       if (!allowed.includes(status)) return { ok: false, error: 'Status must be available, held or sold.' };
       const n = stand(boothNumber);
       const before = await booths.get(n);
-      if (!before) return { ok: false, error: `Stand ${n} not found.` };
+      // A stand taken off the plan cannot be booked, held or released — and
+      // must be refused HERE, before forceHold below writes a hold document and
+      // an expiry for it, which it used to do before setStatus said "not found".
+      if (!before || before.removed === true) return { ok: false, error: `Stand ${n} not found.` };
       // Blank company on a status change used to wipe an existing exhibitor, so
       // an empty field keeps the one already there. A SALE still has to end up
       // naming somebody — see booth:book.
@@ -636,13 +661,20 @@ function register(io) {
       // forceHold always writes a hold document, even when the stand is not
       // currently available. holdsSvc.create refuses in that case, which used to
       // leave the stand 'held' with no hold doc — reclaimed by the sweep in 60s.
-      if (status === 'held') await holdsSvc.forceHold(n, { company: holder || 'Pending', actor: socket.data.user });
-      else await holdsSvc.drop(n);
+      if (status === 'held') {
+        const held = await holdsSvc.forceHold(n, { company: holder || 'Pending', actor: socket.data.user });
+        if (!held.ok) return { ok: false, error: `Stand ${n} not found.` };
+      } else await holdsSvc.drop(n);
 
       const r = await booths.setStatus(n, status, { company: holder, actor: socket.data.user });
       // Bare `return` here acked {ok:true} for a stand that no longer exists —
-      // the very failure the comment above warns about.
-      if (!r) return { ok: false, error: `Stand ${n} not found.` };
+      // the very failure the comment above warns about. Taken off the plan in
+      // the instant since the check above, it must not keep the hold document
+      // just written for it either.
+      if (!r) {
+        if (status === 'held') await holdsSvc.drop(n);
+        return { ok: false, error: `Stand ${n} not found.` };
+      }
       track({ type: 'booth.status_change', boothNumber: n, socket,
               meta: { from: r.before.status, to: status, forced: true } });
       await refresh(); broadcastState(io);
@@ -662,13 +694,9 @@ function register(io) {
                   : r.reason;
         return { ok: false, error: `Could not move — ${why}.` };
       }
-      // A held booking carries a hold document; move it to the new stand so the
-      // expiry sweep doesn't reclaim the destination (held with no doc) in 60s,
-      // and doesn't leave a stale doc on the freed source.
-      if (r.status === 'held') {
-        await holdsSvc.drop(f);
-        await holdsSvc.forceHold(t, { company: r.company || 'Pending', actor: socket.data.user });
-      }
+      // A held booking's hold document travels with it, inside the model, with
+      // its own expiry, contact and session — see booths.move. It used to be
+      // dropped here and replaced by a fresh 24-hour one.
       track({ type: 'booth.move', boothNumber: t, socket, meta: {
         from: f, to: t, company: r.company, status: r.status,
         fromSqm: r.fromSqm, toSqm: r.toSqm, fromListPrice: r.fromListPrice, toListPrice: r.toListPrice,
