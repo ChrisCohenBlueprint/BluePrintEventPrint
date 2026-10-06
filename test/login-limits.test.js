@@ -187,6 +187,35 @@ const count = (arr, status) => arr.filter(r => r.status === status).length;
     check('five misses spend an enrolment token too, and say what that costs',
           r.status === 440 && r.data.reason === 'too_many_codes' && /fresh QR code/.test(r.data.error || ''),
           `${r.status} ${JSON.stringify(r.data)}`);
+
+    console.log('\nA database error is answered');
+    const realFind = users.findByUsername, realSession = auth.sessionUser, realRevoke = auth.revokeSession;
+    const boom = async () => { throw new Error('database unavailable'); };
+    users.findByUsername = boom;
+    try {
+      const pw = [];
+      for (let i = 0; i < IP_MAX + 2; i++) pw.push(await post('/login', { username: 'carol', password: 'x' }, '10.5.0.1'));
+      check('the password step answers 503 rather than hanging',
+            pw.every(x => x.status === 503 && /unavailable/.test(x.data.error || '')), pw.map(x => x.status).join(','));
+      check('and an outage is charged to nobody: the address is not refused', !pw.some(x => x.status === 429));
+      token = auth.signPending('carol', 'verify');
+      const v1 = await post('/login/verify', { pending: token, token: GOOD }, '10.5.0.2');
+      const v2 = await post('/login/verify', { pending: token, token: GOOD }, '10.5.0.2');
+      check('the code step answers 503, and gives its slot back', v1.status === 503 && v2.status === 503,
+            `${v1.status}, ${v2.status}`);
+      auth.sessionUser = boom;
+      const me = await fetch(`${base}/api/me`);
+      const page = await fetch(`${base}/login`);
+      check('so do /api/me and the login page', me.status === 503 && page.status === 503, `${me.status}, ${page.status}`);
+      auth.revokeSession = boom;
+      const bye = await post('/logout', {}, '10.5.0.3');
+      check('and signing out still clears the cookie', bye.status === 200 && /bp_admin=;/.test(bye.cookie || ''), bye.status);
+    } finally {
+      users.findByUsername = realFind; auth.sessionUser = realSession; auth.revokeSession = realRevoke;
+    }
+    users.findByUsername = realFind;
+    r = await post('/login', { username: 'carol', password: 'carol-correct-password' }, '10.5.0.1');
+    check('and once it is back, sign-in works from the same address', r.status === 200, r.status);
   } finally {
     server.close();
   }

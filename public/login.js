@@ -36,10 +36,18 @@
     setTimeout(() => $(focusEl)?.focus(), 30);
   }
 
+  // A request that never reaches the server rejects rather than answering.
+  // Uncaught, that left the button disabled on "Checking…" for good, so it is
+  // turned into an answer like any other failure.
   async function post(url, body) {
-    const res = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch {
+      return { ok: false, status: 0, data: { error: 'Could not reach the server. Check your connection and try again.' } };
+    }
     let data = {};
     try { data = await res.json(); } catch {}
     return { ok: res.ok, status: res.status, data };

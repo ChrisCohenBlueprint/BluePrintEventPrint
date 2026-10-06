@@ -169,14 +169,29 @@ const safeNext = (v, role) => {
   return v;
 };
 
+// ─── A database error is answered ─────────────────────────────────────────────
+// Express 4 does not catch a rejected async handler. A database error in any
+// of these routes left the request open until the browser gave up — the
+// sign-in form sat on "Checking…" with nothing to say why. Every handler here
+// is wrapped, and an error is answered with a 503 the form can show.
+function unavailable(req, res, e) {
+  console.error(`✗ ${req.method} ${req.path} failed:`, e.stack || e.message);
+  if (res.headersSent) return;
+  res.status(503).json({ ok: false, error: 'Sign-in is unavailable for a moment. Please try again shortly.' });
+}
+const answered = (handler) => async (req, res) => {
+  try { await handler(req, res); }
+  catch (e) { unavailable(req, res, e); }
+};
+
 // ─── Pages ────────────────────────────────────────────────────────────────────
-router.get('/login', async (req, res) => {
+router.get('/login', answered(async (req, res) => {
   // Checked across ALL tiers, not just admin — otherwise a signed-in rep who
   // hits /login is shown the form again instead of their dashboard.
   const live = await auth.sessionUser(req, auth.ALL_ROLES);
   if (live) return res.redirect(safeNext(req.query.next, live.role));
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'login.html'));
-});
+}));
 
 // Logout must be POST: a GET that clears the cookie lets any page force-log an
 // admin out with <img src="/logout">. The GET here is now inert — it only
@@ -185,14 +200,14 @@ router.get('/login', async (req, res) => {
 // cookie alone only asks the browser to forget it; a copy taken beforehand —
 // off a shared machine, out of a proxy log — stayed valid for the rest of its
 // twelve hours, so "log out" protected nobody who had actually lost it.
-router.post('/logout', async (req, res) => {
+router.post('/logout', answered(async (req, res) => {
   // A database that is down must not stop someone signing out: clear the cookie
   // either way and log the part that failed.
   try { await auth.revokeSession(req); }
   catch (e) { console.error('Logout could not revoke the session token:', e.message); }
   auth.clearSessionCookie(res);
   res.json({ ok: true });
-});
+}));
 router.get('/logout',  (req, res) => res.redirect('/login'));
 
 /**
@@ -201,12 +216,14 @@ router.get('/logout',  (req, res) => res.redirect('/login'));
  * The place is claimed here, before the step's first await (see reserveIp), and
  * handed back however the step ends. A step that fails charges its failure
  * (noteIpFailure) before handing the place back, so the two are never both
- * missing from the count.
+ * missing from the count. A database error is answered (see unavailable) and
+ * charged to nobody: it says nothing about who is guessing.
  */
 const attempt = (step) => async (req, res) => {
   const release = reserveIp(req.ip);
   if (!release) return res.status(429).json({ ok: false, error: 'Too many attempts. Try again in a few minutes.' });
   try { await step(req, res); }
+  catch (e) { unavailable(req, res, e); }
   finally { release(); }
 };
 
@@ -309,6 +326,8 @@ router.post('/login/enrol', attempt(async (req, res) => {
 
     auth.consumePending(req.body?.pending);   // one successful use per pending token
     const user = await users.findByUsername(username);
+    // Deleted in the moments since the code was accepted: nothing to sign in to.
+    if (!user) return res.status(401).json({ ok: false, error: 'Please start again.' });
     auth.setSessionCookie(res, user);
     res.json({ ok: true, next: safeNext(req.body?.next, user.role) });
   } finally { endCodeStep(username); }
@@ -342,10 +361,10 @@ router.post('/login/verify', attempt(async (req, res) => {
 }));
 
 // Who am I — lets the admin page show the signed-in user and a logout control.
-router.get('/api/me', async (req, res) => {
+router.get('/api/me', answered(async (req, res) => {
   const s = await auth.sessionUser(req, auth.ALL_ROLES);
   if (!s) return res.status(401).json({ error: 'Not signed in' });
   res.json({ user: s.user, role: s.role, home: auth.homeFor(s.role) });
-});
+}));
 
 module.exports = router;
