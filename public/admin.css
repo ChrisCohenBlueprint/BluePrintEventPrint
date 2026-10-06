@@ -1213,6 +1213,7 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .csv-report.err { border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
 .csv-head { font-weight: 700; margin-bottom: 4px; }
 .csv-line { color: var(--muted); }
+.csv-line.csv-detail { padding-left: 12px; }   /* one package's changes, under "Update N" */
 .csv-err  { color: var(--red); }
 
 .csv-help { margin-top: 14px; font-size: 12.5px; }

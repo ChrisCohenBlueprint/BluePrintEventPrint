@@ -6577,7 +6577,22 @@ document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e
       const plan = await send(text, { dryRun: true });
       const parts = [];
       if (plan.created.length) parts.push(list(`Add ${plan.created.length}`, plan.created));
-      if (plan.updated.length) parts.push(list(`Update ${plan.updated.length}`, plan.updated));
+      // Each update says what it changes — "Lanyards: price €5,000 → €5,500" —
+      // where it used to give only the package's name, which read the same for
+      // a file that moved one price as for one that rewrote every package.
+      if (plan.updated.length) {
+        parts.push(line(`Update ${plan.updated.length}:`, 'csv-line'));
+        plan.updated.forEach(u => parts.push(line(
+          u.detail ? `${u.name || u.key}: ${u.detail}` : (u.name || u.key), 'csv-line csv-detail')));
+      }
+      // Rows that change nothing are not written, and are counted rather than
+      // listed — a re-uploaded catalogue is mostly these.
+      const unchanged = (plan.unchanged || []).length;
+      if (unchanged) {
+        parts.push(line(unchanged === 1
+          ? 'Unchanged: 1 row matches the catalogue already and is left alone.'
+          : `Unchanged: ${unchanged} rows match the catalogue already and are left alone.`, 'csv-line'));
+      }
       if (plan.removed.length) parts.push(list(`REMOVE ${plan.removed.length}`, plan.removed));
       plan.errors.forEach(er => parts.push(line(`Row ${er.line}: ${er.error}`, 'csv-err')));
       // The server refuses removals when any row failed, because the file cannot
@@ -6607,7 +6622,10 @@ document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e
 
       const done = await send(text, { dryRun: false });
       show([
-        line(`Imported: ${done.created.length} added, ${done.updated.length} updated${done.removed.length ? `, ${done.removed.length} removed` : ''}.`, 'csv-head'),
+        line(`Imported: ${done.created.length} added, ${done.updated.length} updated` +
+             `${(done.unchanged || []).length ? `, ${done.unchanged.length} unchanged` : ''}` +
+             `${done.removed.length ? `, ${done.removed.length} removed` : ''}.`, 'csv-head'),
+        ...done.updated.filter(u => u.detail).map(u => line(`${u.name || u.key}: ${u.detail}`, 'csv-line csv-detail')),
         ...done.errors.map(er => line(`Row ${er.line}: ${er.error}`, 'csv-err')),
       ], 'ok');
       adminToast('Sponsorship catalogue updated.', 'ok');
