@@ -2301,7 +2301,8 @@ async function loadHistory() {
       `<span class="hr-when">${esc(when.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</span>` +
       `<span class="hr-what"><b>${esc(p.label)}</b>` +
       (stands ? ` — ${esc(stands)}` : '') +
-      `<div class="hr-detail">${esc(p.actor || 'unknown')} · ${p.stands} stands stored</div></span>`;
+      `<div class="hr-detail">${esc(p.actor || 'unknown')} · ${p.stands} stands stored` +
+      (p.revisionLabel ? ` · on plan ${esc(p.revisionLabel)}` : '') + `</div></span>`;
     const btn = document.createElement('button');
     btn.className = 'admin-btn';
     // Named for what it does to the hall, not for the row it sits on: this puts
@@ -2333,6 +2334,9 @@ async function restoreHistoryPoint(point, btn) {
       `Everything done since is undone — including any merges, splits and removals.
 
 ` +
+      (plan.artwork ? `The floorplan goes back to ${plan.artwork.label} as well — visitors see it at the same link.
+
+` : '') +
       (lost.length ? `Sponsor logos are not stored in a point; ${lost.length} will need re-uploading (${lost.slice(0, 6).map(shownN).join(', ')}${lost.length > 6 ? '…' : ''}).
 
 ` : '') +
@@ -2346,7 +2350,8 @@ async function restoreHistoryPoint(point, btn) {
         headers: { 'X-Confirm-Password': pw },
         body: JSON.stringify({ apply: true }),
       });
-      adminToast(`The plan is back to ${new Date(point.at).toLocaleString()} — ${r.stands} stands.`, 'ok');
+      adminToast(`The plan is back to ${new Date(point.at).toLocaleString()} — ${r.stands} stands` +
+        (r.artwork ? `, on ${r.artwork.label}.` : '.'), 'ok');
       loadHistory();
     } catch (e) {
       adminToast(e.message || 'Could not put the plan back.', 'error');
@@ -2852,7 +2857,9 @@ function auditText(r) {
     case 'booth.set_tags':      return `Activities set on ${n}`;
     case 'booth.set_country':   return `Country set on ${n}`;
     case 'booth.set_logo':      return `Sponsor logo ${m.logo === '' ? 'removed from' : 'set on'} ${n}`;
-    case 'floorplan.upload':    return `Floorplan uploaded${m.bytes ? ` (${Math.round(m.bytes / 1024)} KB)` : ''}`;
+    case 'floorplan.upload':    return `Floorplan ${m.revision ? `${m.revision} ` : ''}uploaded${m.revision ? ' as a draft' : ''}${m.bytes ? ` (${Math.round(m.bytes / 1024)} KB)` : ''}`;
+    case 'floorplan.publish':   return `Floorplan ${m.revision || ''} made live`;
+    case 'floorplan.discard':   return 'Draft floorplan discarded';
     case 'floorplan.revert':    return 'Floorplan reverted to the shipped plan';
     case 'stands.import':       return `Stands ${m.mode === 'update' ? 'updated from a re-issued plan' : 'imported from the artwork'}${m.imported ? ` — ${m.imported}` : ''}`;
     case 'settings.palette':    return m.use === 'app' ? 'Colours set back to the app\'s own'
@@ -4331,6 +4338,14 @@ function planCard(row, isCurrent) {
   name.className = 'plan-name';
   name.textContent = row.name || row.showId;
   head.appendChild(name);
+  // Which revision of the plan the public link is showing: LEX27, LEX27.1 …
+  if (row.label) {
+    const lbl = document.createElement('span');
+    lbl.className = 'plan-label';
+    lbl.textContent = row.label;
+    lbl.title = 'The version of the plan visitors see now. The public link never changes.';
+    head.appendChild(lbl);
+  }
   if (isCurrent) {
     const badge = document.createElement('span');
     badge.className = 'plan-badge';
@@ -4380,7 +4395,10 @@ function planCard(row, isCurrent) {
   const up = document.createElement('button');
   up.type = 'button';
   up.className = 'admin-btn';
-  up.textContent = row.uploaded ? 'Replace' : 'Upload';
+  // A new file never replaces the plan outright: it lands as a draft beside
+  // the live one, and goes live only from the check that follows.
+  up.textContent = row.uploaded ? 'New version' : 'Upload';
+  up.title = 'Uploaded as a draft. Visitors keep seeing the live plan until you make the draft live.';
   up.onclick = () => pickPlan(row);
 
   const dl = document.createElement('a');
@@ -4427,20 +4445,181 @@ function planCard(row, isCurrent) {
   sch.hidden = !row.boothCount;
   sch.onclick = () => downloadSchedule(row, sch);
 
-  actions.append(up, dl, imp, col, sch, rm);
+  // Every plan this event has been given, and the way back to any of them.
+  const ver = document.createElement('button');
+  ver.type = 'button';
+  ver.className = 'admin-btn';
+  ver.textContent = 'Versions';
+  ver.hidden = !row.uploaded && !row.draft;
+  ver.onclick = () => openRevisions(row);
 
-  // Only where there is something to lose.
+  actions.append(up, dl, imp, ver, col, sch, rm);
+
   const parts = [head, preview, meta];
   if (specLine) parts.push(specLine);
-  if (row.boothCount > 0) {
+  if (row.draft) parts.push(draftPanel(row));
+  // Only where there is something to lose.
+  if (row.boothCount > 0 && !row.draft) {
     const warn = document.createElement('div');
     warn.className = 'plan-warn';
-    warn.textContent = `${row.boothCount} stands are positioned against this plan. After replacing it with a re-issued drawing, use Read stands → Update from this plan to move them to where the new drawing puts them. Bookings are kept.`;
+    warn.textContent = `${row.boothCount} stands are positioned against this plan. A new version is uploaded as a draft: you see what it does to them, and make it live with their bookings kept. Visitors see no change until then.`;
     parts.push(warn);
   }
   parts.push(actions);
   card.append(...parts);
   return card;
+}
+
+/**
+ * The upload waiting to go live, on the card of the event it belongs to.
+ *
+ * Its own preview beside the live one, so the two drawings can be compared
+ * before anyone commits, and the one button that matters: check it against
+ * the stands, which is where it is made live from.
+ */
+function draftPanel(row) {
+  const d = row.draft;
+  const box = document.createElement('div');
+  box.className = 'plan-draft';
+
+  const head = document.createElement('div');
+  head.className = 'plan-draft-head';
+  const t = document.createElement('strong');
+  t.textContent = `Draft ${d.label}`;
+  const chip = document.createElement('span');
+  chip.className = 'plan-draft-chip';
+  chip.textContent = 'Not live yet';
+  head.append(t, chip);
+
+  const img = document.createElement('img');
+  img.className = 'plan-preview is-draft';
+  img.loading = 'lazy';
+  img.alt = `Draft ${d.label}`;
+  img.src = `/api/floorplan/revisions/${encodeURIComponent(d.revisionId)}/svg`;
+
+  const meta = document.createElement('div');
+  meta.className = 'plan-meta';
+  const kb = d.bytes ? ` · ${(d.bytes / 1024).toFixed(0)} KB` : '';
+  meta.textContent = `${d.filename}${kb} · uploaded ${new Date(d.uploadedAt).toLocaleDateString('en-GB')}` +
+                     (d.uploadedBy ? ` by ${d.uploadedBy}` : '') +
+                     (d.spec ? ` · artwork check ${d.spec.passed}/${d.spec.total}` : '');
+
+  const acts = document.createElement('div');
+  acts.className = 'plan-draft-actions';
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'admin-btn primary';
+  go.textContent = 'Check & make live';
+  go.title = 'Read this draft against the stands on the event, then make it live with every booking kept.';
+  go.onclick = () => previewStands(row, { revision: d });
+  const drop = document.createElement('button');
+  drop.type = 'button';
+  drop.className = 'admin-btn';
+  drop.textContent = 'Discard';
+  drop.title = 'Set this draft aside. It is kept under Versions; the live plan is not touched.';
+  drop.onclick = () => discardDraft(row, d);
+  acts.append(go, drop);
+
+  box.append(head, img, meta, acts);
+  return box;
+}
+
+async function discardDraft(row, rev) {
+  if (!await confirmDialog(
+    `Set ${rev.label} aside? Visitors never saw it, and it stays listed under Versions if you want it later.`,
+    { title: `Discard draft ${rev.label}`, confirmLabel: 'Discard it' })) return;
+  try {
+    await api(`/api/floorplan/revisions/${encodeURIComponent(rev.revisionId)}/discard`, {
+      method: 'POST', headers: { 'X-Show': row.slug },
+    });
+    adminToast(`${rev.label} discarded — the live plan is unchanged.`, 'ok');
+  } catch (e) {
+    adminToast(e.message || 'Could not discard that draft.', 'error');
+  }
+  document.getElementById('stand-report')?.remove();
+  loadPlans();
+}
+
+/**
+ * Every version of an event's plan, newest first, with the way back to each.
+ *
+ * Making an old version live again runs through exactly the same check as a
+ * new draft: what it does to the stands is read first, and bookings are kept.
+ */
+const REVISION_STATUS = { live: 'Live', draft: 'Draft', superseded: 'Earlier', discarded: 'Discarded' };
+
+async function openRevisions(row) {
+  document.getElementById('revisions-panel')?.remove();
+  let list;
+  try {
+    list = await api('/api/floorplan/revisions', { headers: { 'X-Show': row.slug } });
+  } catch (e) {
+    return adminToast(`Could not load the versions — ${e.message}`, 'error');
+  }
+
+  const box = document.createElement('div');
+  box.id = 'revisions-panel';
+  box.className = 'spec-report';
+  const head = document.createElement('div');
+  head.className = 'spec-report-head';
+  head.append(Object.assign(document.createElement('strong'),
+    { textContent: `${row.name || row.showId} — versions of the plan` }));
+  const close = document.createElement('button');
+  close.type = 'button'; close.className = 'admin-btn'; close.textContent = 'Close';
+  close.onclick = () => box.remove();
+  head.appendChild(close);
+
+  const note = document.createElement('p');
+  note.className = 'spec-report-note';
+  note.textContent = `Visitors always use the same link — /floorplan/${row.slug} — and see whichever version is live.`;
+
+  const table = document.createElement('div');
+  table.className = 'revision-list';
+  if (!list.length) table.textContent = 'Nothing uploaded yet — this event shows the plan shipped with the app.';
+  const when = (d) => d ? new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  list.forEach(rev => {
+    const r = document.createElement('div');
+    r.className = 'revision-row is-' + rev.status;
+    const name = document.createElement('span');
+    name.className = 'revision-label';
+    name.textContent = rev.label;
+    const st = document.createElement('span');
+    st.className = 'revision-status';
+    st.textContent = REVISION_STATUS[rev.status] || rev.status;
+    const info = document.createElement('span');
+    info.className = 'revision-info';
+    info.textContent = `${rev.filename} · uploaded ${when(rev.uploadedAt)}${rev.uploadedBy ? ` by ${rev.uploadedBy}` : ''}` +
+      (rev.publishedAt && rev.status !== 'draft' ? ` · live from ${when(rev.publishedAt)}` : '');
+
+    const acts = document.createElement('span');
+    acts.className = 'revision-actions';
+    const view = document.createElement('a');
+    view.className = 'admin-btn';
+    view.href = `/api/floorplan/revisions/${encodeURIComponent(rev.revisionId)}/svg`;
+    view.target = '_blank';
+    view.rel = 'noopener';
+    view.textContent = 'View';
+    const dl = document.createElement('a');
+    dl.className = 'admin-btn';
+    dl.href = `/api/floorplan/revisions/${encodeURIComponent(rev.revisionId)}/svg?original=1`;
+    dl.setAttribute('download', `${rev.label}.svg`);
+    dl.textContent = 'Download';
+    acts.append(view, dl);
+    if (rev.status !== 'live') {
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'admin-btn' + (rev.status === 'draft' ? ' primary' : '');
+      go.textContent = rev.status === 'draft' ? 'Check & make live' : 'Make live again';
+      go.onclick = () => { box.remove(); previewStands(row, { revision: rev }); };
+      acts.appendChild(go);
+    }
+    r.append(name, st, info, acts);
+    table.appendChild(r);
+  });
+
+  box.append(head, note, table);
+  document.getElementById('section-settings')?.prepend(box);
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /**
@@ -4720,13 +4899,16 @@ async function openPalettePanel(row, { fresh = false } = {}) {
  * every stand on the event, so it happens only after someone has seen the
  * numbers and typed the admin password.
  */
-async function previewStands(row) {
+async function previewStands(row, { revision = null } = {}) {
   document.getElementById('stand-report')?.remove();
-  adminToast(`Reading ${row.name || row.showId}…`);
+  adminToast(`Reading ${revision ? revision.label : row.name || row.showId}…`);
 
   let p;
   try {
-    p = await api('/api/stands/preview', { headers: { 'X-Show': row.slug } });
+    // A revision that is not live is read against the stands as they are now —
+    // nothing changes until it is made live from the button below.
+    const q = revision ? `?revision=${encodeURIComponent(revision.revisionId)}` : '';
+    p = await api(`/api/stands/preview${q}`, { headers: { 'X-Show': row.slug } });
   } catch (e) {
     return adminToast(`Could not read the floorplan — ${e.message}`, 'error');
   }
@@ -4743,7 +4925,9 @@ async function previewStands(row) {
   const head = document.createElement('div');
   head.className = 'spec-report-head';
   const title = document.createElement('strong');
-  title.textContent = `${row.name || row.showId} — ${p.stands} stands readable`;
+  title.textContent = revision
+    ? `${row.name || row.showId} — ${revision.label} (not live yet): ${p.stands} stands readable`
+    : `${row.name || row.showId} — ${p.stands} stands readable`;
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'admin-btn';
@@ -4816,25 +5000,28 @@ async function previewStands(row) {
   const go = document.createElement('button');
   go.type = 'button';
   go.className = 'admin-btn primary';
+  // For a revision that is not live, the same three choices make it live: the
+  // drawing goes up and the stands are moved onto it in one step.
+  const live = revision ? `Make ${revision.label} live` : null;
   if (!p.existing) {
     // A fresh event: the plan becomes its inventory.
-    go.textContent = `Import ${p.stands} stands`;
+    go.textContent = live ? `${live} — ${p.stands} stands` : `Import ${p.stands} stands`;
     go.title = 'Reads each stand\u2019s number, shape, size, status and exhibitor from the plan.';
-    go.onclick = () => importStands(row, p, box, { mode: 'import' });
+    go.onclick = () => importStands(row, p, box, { mode: 'import', revision });
   } else if (p.committed > 0 || p.handwork > 0) {
     // The re-issued plan on an event that is selling. Every booking stays
     // where it is; only shapes, sizes and list prices are re-read, new stands
     // are added, and empty stands the drawing no longer has are removed.
-    go.textContent = `Update from this plan — keeps ${p.committed || 0} bookings`;
+    go.textContent = `${live || 'Update from this plan'} — keeps ${p.committed || 0} booking${p.committed === 1 ? '' : 's'}`;
     go.title = 'Sold and held stands keep their company, price and notes and only take their new shape from the plan. ' +
                'New stands are added; empty stands the plan no longer draws are removed; anything sold that is missing is kept and listed.';
-    go.onclick = () => importStands(row, p, box, { mode: 'update' });
+    go.onclick = () => importStands(row, p, box, { mode: 'update', revision });
   } else {
     // Nothing committed yet: the ordinary re-read, which keeps anything set by
     // hand and refreshes the rest from the plan.
-    go.textContent = `Update ${p.stands} stands from this plan`;
+    go.textContent = live ? `${live} — ${p.stands} stands` : `Update ${p.stands} stands from this plan`;
     go.title = 'Re-reads each stand\u2019s shape, size and list price from the plan. Anything set by hand is kept.';
-    go.onclick = () => importStands(row, p, box, { mode: 'upsert' });
+    go.onclick = () => importStands(row, p, box, { mode: 'upsert', revision });
   }
 
   // Kept well apart from the button above, and named for what it destroys.
@@ -4847,7 +5034,7 @@ async function previewStands(row) {
   wipe.title = 'Throws away this event\u2019s stands and rebuilds them from the plan. Bookings and anything set by hand are lost.';
   wipe.disabled = p.committed > 0;
   wipe.hidden = !p.existing;
-  wipe.onclick = () => importStands(row, p, box, { mode: 'replace' });
+  wipe.onclick = () => importStands(row, p, box, { mode: 'replace', revision });
 
   head.append(go, wipe, close);
 
@@ -4866,8 +5053,14 @@ async function previewStands(row) {
  *   update  — the re-issued plan on a selling event: bookings stay put
  *   replace — throw the inventory away and rebuild it (asked for by name)
  */
-async function importStands(row, preview, box, { mode = 'upsert' } = {}) {
+async function importStands(row, preview, box, { mode = 'upsert', revision = null } = {}) {
   const where = row.name || row.showId;
+  // Said in every dialog for a revision: the one thing an organiser wants to
+  // know before a new plan goes up is whether the link they sent out changes.
+  const goesLive = revision
+    ? `\n\nVisitors see ${revision.label} from now on, at the same link (/floorplan/${row.slug}). ` +
+      'If the stands cannot be moved onto it, nothing goes live.'
+    : '';
   const replace = mode === 'replace';
   const update = mode === 'update';
 
@@ -4881,7 +5074,7 @@ async function importStands(row, preview, box, { mode = 'upsert' } = {}) {
   // Was a window.prompt(), which shows the admin password in clear text and
   // leaves it in the browser's dialog history.
   const ds = (preview.diff && preview.diff.summary) || {};
-  const pw = await askSecret(
+  const pw = await askSecret((
     replace
       ? `Replacing every stand on ${where} from its artwork.`
       : update
@@ -4890,16 +5083,21 @@ async function importStands(row, preview, box, { mode = 'upsert' } = {}) {
           `${ds.added || 0} new stands are added` +
           (ds.missing ? `; ${ds.missing} the plan no longer draws are removed if empty, kept and listed if sold.` : '.')
         : `Reading ${preview.stands} stands into ${where}.\n\n` +
-          'Each stand\u2019s shape, size and list price are re-read from the plan. Shown numbers, sponsor logos, tags and countries are kept.',
-    { title: replace ? `Replace every stand on ${where}` : update ? `Update ${where} from the plan` : `Import stands into ${where}`,
-      confirmLabel: replace ? 'Replace them' : update ? 'Update them' : 'Import them' });
+          'Each stand\u2019s shape, size and list price are re-read from the plan. Shown numbers, sponsor logos, tags and countries are kept.'
+    ) + goesLive,
+    { title: revision ? `Make ${revision.label} live on ${where}`
+           : replace ? `Replace every stand on ${where}` : update ? `Update ${where} from the plan` : `Import stands into ${where}`,
+      confirmLabel: revision ? 'Make it live' : replace ? 'Replace them' : update ? 'Update them' : 'Import them' });
   if (!pw) return;
 
   adminToast(replace ? 'Replacing…' : update ? 'Updating…' : 'Importing…');
   let r;
   try {
     const q = replace ? '?replace=1' : update ? '?mode=update' : '';
-    r = await api(`/api/stands/import${q}`, {
+    const url = revision
+      ? `/api/floorplan/revisions/${encodeURIComponent(revision.revisionId)}/publish${q}`
+      : `/api/stands/import${q}`;
+    r = await api(url, {
       method: 'POST',
       headers: { 'X-Show': row.slug, 'X-Confirm-Password': pw },
     });
@@ -4911,7 +5109,8 @@ async function importStands(row, preview, box, { mode = 'upsert' } = {}) {
   }
 
   adminToast(
-    `${where}: ${r.imported} stands ${r.mode === 'replace' ? 'replaced' : 'updated from the plan'} — ` +
+    (revision ? `${revision.label} is live on ${where}. ${r.imported} stands placed on it — `
+              : `${where}: ${r.imported} stands ${r.mode === 'replace' ? 'replaced' : 'updated from the plan'} — `) +
     `${r.available} available, ${r.sold} sold, ${r.held || 0} on hold` +
     (r.created ? `, ${r.created} new` : '') +
     (r.removed && r.removed.length ? `, ${r.removed.length} empty stands no longer drawn removed` : '') +
@@ -4926,7 +5125,10 @@ async function importStands(row, preview, box, { mode = 'upsert' } = {}) {
       r.kept.map(k => `${k.boothNumber} (${k.status}${k.company ? `, ${k.company}` : ''})`).join(', ') +
       '. They will not appear on the map until the drawing includes them again — or renumber them here if the plan has renumbered them.');
   }
-  loadPlans();
+  await loadPlans();
+  // A plan just made live may be drawn in different colours; the picker opens
+  // on what it suggests, exactly as it used to after an upload.
+  if (revision) await openPalettePanel(row, { fresh: true });
 }
 
 /**
@@ -4971,16 +5173,12 @@ function pickPlan(row) {
     if (!/svg/i.test(file.type) && !/\.svg$/i.test(file.name)) {
       return adminToast('That is not an SVG. The floorplan must be vector artwork.', 'error');
     }
-    if (row.boothCount > 0 &&
-        !await confirmDialog(
-          `${row.boothCount} stands are positioned against ${row.name || row.showId}'s current plan.\n\n` +
-          'The new drawing is checked against them straight after upload, and Update from this plan moves them to where it puts them. Bookings are kept throughout.',
-          { title: `Replace the floorplan for ${row.name || row.showId}`, confirmLabel: 'Replace it', danger: true })) {
-      return;
-    }
+    // No longer a destructive step, so no warning before it: the file is
+    // stored as a draft and the live plan does not move until it is made live.
     const password = await askSecret(
-      `Changing the floorplan for ${row.name || row.showId}.`,
-      { title: 'Confirm the floorplan change', confirmLabel: 'Upload it' });
+      `Uploading a new version of ${row.name || row.showId}'s plan as a draft.\n\n` +
+      'Visitors keep seeing the live plan. You will see what the new one does to the stands before making it live.',
+      { title: 'Upload a new version', confirmLabel: 'Upload it' });
     if (password === null) return;
     if (!password) return adminToast('Password required to change a floorplan.', 'error');
 
@@ -5005,19 +5203,18 @@ function pickPlan(row) {
         return adminToast(msg, 'error');
       }
       const r = await res.json();
-      adminToast(r.removed && r.removed.length
-        ? `${row.name || row.showId}: floorplan uploaded. Removed for safety: ${r.removed.join(', ')}.`
-        : `${row.name || row.showId}: floorplan uploaded.`, 'ok');
+      const label = (r.revision && r.revision.label) || 'The new version';
+      adminToast(`${label} uploaded as a draft — visitors still see the live plan.` +
+        (r.removed && r.removed.length ? ` Removed for safety: ${r.removed.join(', ')}.` : ''), 'ok');
       // The plan is stored either way; this is what to send the designer.
       if (r.spec && r.spec.failedClauses && r.spec.failedClauses.length) {
         showSpecReport(row.name || row.showId, r.spec);
       }
-      // The two things that follow an upload, opened rather than left to be
-      // found: what this drawing does to the stands already here, and what
-      // each kind of space is painted in.
+      // What follows an upload, opened rather than left to be found: what
+      // this draft does to the stands already here, with the button that
+      // makes it live. The colours follow once it is.
       await loadPlans();
-      await previewStands({ ...row, uploaded: true });   // it is uploaded now, whatever the card said before
-      await openPalettePanel(row, { fresh: true });
+      await previewStands({ ...row, uploaded: true }, { revision: r.revision || null });
     } catch (err) {
       adminToast(err.message || 'Could not read that file.', 'error');
     }

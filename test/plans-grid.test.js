@@ -9,8 +9,10 @@ const PLANS = [
   { slug: 'lex', showId: 'LEX27', name: 'Lubricant Expo Europe', active: true,
     uploaded: false, filename: '/LEX27_Floorplan_Consolidated.svg', boothCount: 262 },
   { slug: 'lna', showId: 'LNA27', name: 'Lubricant Expo North America', active: true,
-    uploaded: true, filename: 'lna-hall.svg', bytes: 512000,
-    uploadedAt: '2026-09-09T04:00:00Z', boothCount: 0 },
+    uploaded: true, filename: 'lna-hall.svg', bytes: 512000, label: 'LNA27',
+    uploadedAt: '2026-09-09T04:00:00Z', boothCount: 0,
+    draft: { revisionId: 'abc123', label: 'LNA27.1', filename: 'LNA27 extension.svg', bytes: 600000,
+             uploadedAt: '2026-10-05T09:00:00Z', uploadedBy: 'chris', spec: null } },
   { slug: 'lme', showId: 'LME27', name: 'Lubricant Expo Middle East', active: true,
     uploaded: false, filename: '/LEX27_Floorplan_Consolidated.svg', boothCount: 0 },
 ];
@@ -41,7 +43,8 @@ const PLANS = [
               { fill: '#7c1315', stroke: '#013149', count: 3, status: 'sold', sponsored: true }],
     }) });
   });
-  await page.route('**/api/stands/preview', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+  const previews = [];
+  await page.route('**/api/stands/preview*', r => (previews.push(r.request().url()), r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
     ok: true, stands: 96, named: 70, byStatus: { available: 22, sold: 70, held: 4 }, sponsored: 3, areas: ['VIP Lounge'],
     fills: [], unit: 'sqft', totalArea: 12000, warnings: [], committed: 12, handwork: 0, existing: 93,
     sample: [{ number: '101', area: 100, exhibitor: 'Acme', status: 'sold' }],
@@ -50,7 +53,7 @@ const PLANS = [
             missing: [{ boothNumber: '140', status: 'sold', company: 'Gone GmbH', committed: true },
                       { boothNumber: '141', status: 'available', company: null, committed: false }],
             summary: { added: 3, moved: 1, resized: 0, unchanged: 89, missing: 2, committedMissing: 1 } },
-  }) }));
+  }) })));
 
   // The stand schedule handed to a designer before a re-issue. Fetched rather
   // than linked, because the event is named in a header an <a href> cannot
@@ -68,8 +71,19 @@ const PLANS = [
     const req = r.request();
     uploads.push({ method: req.method(), show: req.headers()['x-show'],
                    pw: req.headers()['x-confirm-password'] });
-    r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, removed: [] }) });
+    r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, draft: true, removed: [],
+      revision: { revisionId: 'new999', label: 'LME27.1', status: 'draft' } }) });
   });
+  const publishes = [];
+  await page.route('**/api/floorplan/revisions/*/publish*', r => {
+    publishes.push({ url: r.request().url(), show: r.request().headers()['x-show'],
+                     pw: r.request().headers()['x-confirm-password'] });
+    r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      ok: true, imported: 96, available: 22, sold: 70, held: 4, mode: 'update', kept: [],
+      revision: { revisionId: 'new999', label: 'LME27.1', status: 'live' } }) });
+  });
+  await page.route('**/api/floorplan/revisions/*/svg*', r => r.fulfill({ status: 200, contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>' }));
 
   await page.goto(`${base}/admin`, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(800);
@@ -86,6 +100,9 @@ const PLANS = [
     buttons: [...c.querySelectorAll('.plan-actions .admin-btn')].filter(b => !b.hidden)
              .map(b => b.textContent.trim()),
     downloadHref: c.querySelector('a.admin-btn')?.getAttribute('href'),
+    label: c.querySelector('.plan-label')?.textContent || null,
+    draft: c.querySelector('.plan-draft')?.textContent || null,
+    draftSrc: c.querySelector('.plan-draft img')?.getAttribute('src') || null,
   })));
 
   check('all three events are shown side by side', cards.length === 3, cards.map(c => c.name).join(' | '));
@@ -112,9 +129,21 @@ const PLANS = [
   check('Remove is offered only where something was uploaded',
         !lex.buttons.includes('Remove') && lna.buttons.includes('Remove'),
         `lex ${lex.buttons.join(',')} | lna ${lna.buttons.join(',')}`);
-  check('an uploaded plan says Replace, one without says Upload',
-        lna.buttons[0] === 'Replace' && lme.buttons[0] === 'Upload',
+  check('an uploaded plan offers a New version, one without says Upload',
+        lna.buttons[0] === 'New version' && lme.buttons[0] === 'Upload',
         `${lna.buttons[0]} / ${lme.buttons[0]}`);
+
+  console.log('\nVersions of a plan');
+  check('the card names the version visitors see', lna.label === 'LNA27' && lme.label === null,
+        `${lna.label} / ${lme.label}`);
+  check('a draft waiting to go live is shown on its card, apart from the live plan',
+        /Draft LNA27\.1/.test(lna.draft || '') && /Not live yet/.test(lna.draft || '') && lex.draft === null,
+        lna.draft);
+  check('with its own preview', lna.draftSrc === '/api/floorplan/revisions/abc123/svg', lna.draftSrc);
+  check('and the button that checks it and makes it live', /Check & make live/.test(lna.draft || ''));
+  check('Versions is offered where there is a plan to list',
+        lna.buttons.includes('Versions') && !lme.buttons.includes('Versions'),
+        `${lna.buttons.join(',')} | ${lme.buttons.join(',')}`);
   check('every event offers its colours, uploaded or not',
         cards.every(c => c.buttons.includes('Colours')), cards.map(c => c.buttons.join(',')).join(' | '));
   check('the event being viewed is marked', cards.filter(c => c.current).length <= 1);
@@ -156,7 +185,33 @@ const PLANS = [
         JSON.stringify(posted));
   check('and sends the password', posted && posted.pw === 'my-password');
 
-  // The upload is followed through: what the drawing changes, and the colours.
+  // The upload is followed through: the draft is read against the stands,
+  // and NOTHING goes live — the colours wait until it does.
+  await page.waitForSelector('#stand-report', { timeout: 5000 }).catch(() => {});
+  const drafted = await page.evaluate(() => ({
+    palette: !!document.getElementById('palette-panel'),
+    report: document.getElementById('stand-report')?.textContent || '',
+    go: document.querySelector('#stand-report .admin-btn.primary')?.textContent || '',
+  }));
+  check('the draft is read, not the live plan', previews.some(u => /revision=new999/.test(u)), previews.join(' '));
+  check('the report says it is not live yet', /LME27\.1 \(not live yet\)/.test(drafted.report), drafted.report.slice(0, 120));
+  check('offering to make it live, keeping the bookings',
+        /Make LME27\.1 live — keeps 12 bookings/.test(drafted.go), drafted.go);
+  check('and nothing is published by uploading', publishes.length === 0 && !drafted.palette);
+
+  await page.click('#stand-report .admin-btn.primary');
+  await page.waitForSelector('dialog.bp-dialog input[type=password]', { timeout: 5000 });
+  const dialogText = await page.evaluate(() => document.querySelector('dialog.bp-dialog')?.textContent || '');
+  check('the confirmation says the link stays the same', /same link \(\/floorplan\/lme\)/.test(dialogText), dialogText.slice(0, 200));
+  await page.fill('dialog.bp-dialog input[type=password]', 'my-password');
+  await page.click('dialog.bp-dialog .bp-dialog-btn.primary');
+  await page.waitForTimeout(800);
+  const pub = publishes[0];
+  check('making it live publishes THAT revision for THAT event, keeping bookings',
+        pub && /revisions\/new999\/publish\?mode=update$/.test(pub.url) && pub.show === 'lme' && pub.pw === 'my-password',
+        JSON.stringify(pub));
+
+  // Once live, the colours it is drawn in.
   await page.waitForSelector('#palette-panel', { timeout: 5000 }).catch(() => {});
   const after = await page.evaluate(() => ({
     palette: !!document.getElementById('palette-panel'),
@@ -168,7 +223,7 @@ const PLANS = [
     report: document.getElementById('stand-report')?.textContent || '',
     go: document.querySelector('#stand-report .admin-btn.primary')?.textContent || '',
   }));
-  check('the colour picker opens after an upload', after.palette);
+  check('the colour picker opens once the new plan is live', after.palette);
   check('with the five kinds of space', after.rows.length === 5 && after.rows[0].label === 'Stand — available' &&
         after.rows[2].label === 'Stand — on hold' && after.rows[4].label === 'Area — sponsored',
         after.rows.map(r => r.label).join(' | '));
@@ -176,10 +231,10 @@ const PLANS = [
         `${after.rows[1].value} / ${after.rows[3].value}`);
   check('a colour not yet chosen says so', after.rows[1].status === 'app default', after.rows[1].status);
   check('the plan\'s own colours are offered as swatches', after.swatches === 3, String(after.swatches));
-  check('the stands preview opens too, with what the drawing changes',
-        /3 new, 1 moved/.test(after.report) && /2 no longer drawn/.test(after.report), after.report.slice(0, 200));
-  check('and names the sold stand the drawing dropped', /140 \(Gone GmbH\)/.test(after.report));
-  check('offering an update that keeps the bookings', /Update from this plan — keeps 12 bookings/.test(after.go), after.go);
+  check('the draft\'s report said what the drawing changes',
+        /3 new, 1 moved/.test(drafted.report) && /2 no longer drawn/.test(drafted.report), drafted.report.slice(0, 200));
+  check('and named the sold stand the drawing dropped', /140 \(Gone GmbH\)/.test(drafted.report));
+  check('and is closed once the plan is live', after.report === '');
 
   // Choosing a colour and saving sends the choice for THAT event.
   await page.evaluate(() => {

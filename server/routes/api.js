@@ -88,11 +88,20 @@ router.get('/floorplans', async (_req, res, next) => {
     const rows = await Promise.all(showsModel.list().map(sh =>
       showContext.runAs(sh.showId, async () => {
         const id = sh.showId || config.defaultShow;
-        const f = await floorplans.get(id);
+        // A plan uploaded before revisions existed gets its name here, the
+        // first time anyone looks — LEX27, so a re-issue can be LEX27.1.
+        const f = await floorplans.adopt(id);
+        const draft = await floorplans.revisions().findOne({ showId: id, status: 'draft' });
         const boothCount = await boothsModel.col().countDocuments({ showId: id });
         return {
           slug: sh.slug, showId: id, name: sh.name || id, active: sh.active !== false,
           uploaded: !!f,
+          label: f ? f.label || null : null,
+          // The upload waiting to be read and made live, if there is one.
+          draft: draft ? { revisionId: draft.revisionId, label: draft.label, filename: draft.filename,
+                           bytes: draft.bytes, uploadedAt: draft.uploadedAt, uploadedBy: draft.uploadedBy,
+                           spec: draft.spec ? { passed: draft.spec.passed, total: draft.spec.total,
+                                                failedClauses: draft.spec.failedClauses } : null } : null,
           filename: f ? f.filename : config.floorplanSvg,
           bytes: f ? f.bytes : null,
           uploadedAt: f ? f.uploadedAt : null,
@@ -121,10 +130,16 @@ router.get('/floorplan/meta', async (_req, res, next) => {
   } catch (e) { next(e); }
 });
 
+/**
+ * An upload is stored as a DRAFT revision. The public page goes on showing the
+ * live plan until someone has read the draft against the stands and made it
+ * live — a bad file the day before a show no longer reaches visitors on its
+ * way to being noticed.
+ */
 router.post('/floorplan', rawSvg, async (req, res, next) => {
   try {
     if (!await confirmPassword(req, res, 'the floorplan was not changed')) return;
-    const r = await floorplans.save(req.body, {
+    const r = await floorplans.createDraft(req.body, {
       filename: String(req.get('X-Filename') || 'floorplan.svg'),
       actor: req.admin?.user || null,
     });
@@ -136,12 +151,95 @@ router.post('/floorplan', rawSvg, async (req, res, next) => {
       return res.status(400).json({ error: `Could not upload the floorplan — ${why}.` });
     }
     track({ type: 'floorplan.upload', boothNumber: null, actor: req.admin?.user || 'unknown',
-            meta: { bytes: r.bytes, removed: r.removed } });
-    // Every page looking at this event fetches the new drawing now, rather
-    // than sitting on the old one until somebody reloads.
-    try { sockets.notifyArtwork(r.version); }
-    catch (e) { console.error('Floorplan upload: viewers not told —', e.message); }
-    res.json({ ok: true, ...r });
+            meta: { bytes: r.revision.bytes, removed: r.removed, revision: r.revision.label } });
+    res.json({ ok: true, draft: true, ...r });
+  } catch (e) { next(e); }
+});
+
+// ─── Revisions of the plan ───────────────────────────────────────────────────
+// Every plan the event has been given, newest first: the draft waiting to go
+// live, the one that is live, and the ones before it.
+router.get('/floorplan/revisions', async (_req, res, next) => {
+  try { res.json(await floorplans.listRevisions()); } catch (e) { next(e); }
+});
+
+/**
+ * A revision's drawing, for the admin's preview of a draft. Looked up by its
+ * id alone: the preview is an <img>, which cannot send X-Show, and the id is
+ * unique across events. Admin-only by living under /api — a draft is not
+ * public until it is made live.
+ */
+router.get('/floorplan/revisions/:id/svg', async (req, res, next) => {
+  try {
+    const rev = await floorplans.getRevision(req.params.id, { anyShow: true });
+    if (!rev) return res.status(404).json({ error: 'No such revision.' });
+    const wantsOriginal = req.query.original === '1';
+    res.type('image/svg+xml');
+    res.set('Cache-Control', 'private, max-age=3600');   // a revision's drawing never changes
+    // Opened on its own by the View button, an SVG is a document that could
+    // run script. It has been sanitised on the way in; this is the second lock.
+    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:");
+    if (wantsOriginal) {
+      res.set('Content-Disposition', `attachment; filename="${String(rev.label).replace(/[^\w.-]/g, '_')}.svg"`);
+    }
+    res.send(wantsOriginal ? rev.svg : (rev.displaySvg || rev.svg));
+  } catch (e) { next(e); }
+});
+
+router.post('/floorplan/revisions/:id/discard', async (req, res, next) => {
+  try {
+    const r = await floorplans.discard(req.params.id);
+    if (!r.ok) {
+      return res.status(r.reason === 'not_draft' ? 409 : 404).json({ error: r.reason === 'not_draft'
+        ? 'Only a draft can be discarded — this revision has been live.'
+        : 'No such revision.' });
+    }
+    track({ type: 'floorplan.discard', boothNumber: null, actor: req.admin?.user || 'unknown',
+            meta: { revision: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+/**
+ * Make a revision live: the draft just uploaded, or an earlier plan being put
+ * back. The drawing goes into the live slot and the stands are read from it in
+ * the mode asked for (?mode=update keeps every booking), as one step.
+ *
+ * If the stands cannot be read — the event has bookings and no mode that
+ * keeps them was asked for, the fills are unreadable — the plan that was live
+ * goes straight back, so visitors are never shown a drawing the stands were
+ * not moved onto. The hall as it stood is stored as a history point naming
+ * the plan it sat on, so "go back to here" restores the drawing as well.
+ */
+router.post('/floorplan/revisions/:id/publish', async (req, res, next) => {
+  try {
+    if (!await confirmPassword(req, res, 'the plan was not made live')) return;
+    const actor = req.admin?.user || null;
+    const before = structuredClone(await booths.col().find({ showId: config.showId }).toArray());
+    const wasLive = await floorplans.liveRevisionId();
+
+    const made = await floorplans.makeLive(req.params.id, { actor });
+    if (!made.ok) return res.status(404).json({ error: 'No such revision.' });
+    if (made.unchanged) return res.status(409).json({ error: `${made.revision.label} is already the live plan.` });
+
+    let r;
+    try { r = await readStandsFromLive(req); }
+    catch (e) { r = { status: 500, body: { error: 'The stands could not be read from the new plan.' } }; console.error('Publish:', e); }
+    if (r.status !== 200) {
+      await floorplans.restoreLive(req.params.id, made.previous);
+      return res.status(r.status).json({ ...r.body,
+        error: `${made.revision.label} was not made live — ${r.body.error || 'the stands could not be read from it.'}` });
+    }
+
+    try {
+      await booths.writeHistoryPoint('publish', before, {
+        actor, revisionId: wasLive, detail: made.revision.label, boothNumbers: [],
+      });
+    } catch (e) { console.error('Publish: history point not written —', e.message); }
+
+    track({ type: 'floorplan.publish', boothNumber: null, actor: actor || 'unknown',
+            meta: { revision: made.revision.label, mode: r.body.mode, imported: r.body.imported } });
+    res.json({ ...r.body, revision: made.revision });
   } catch (e) { next(e); }
 });
 
@@ -210,9 +308,13 @@ router.put('/palette', async (req, res, next) => {
  * password-gated call, because reading a plan is cheap and reversible while
  * replacing an event's inventory is neither.
  */
-router.get('/stands/preview', async (_req, res, next) => {
+router.get('/stands/preview', async (req, res, next) => {
   try {
-    const f = await floorplans.get();
+    // ?revision= reads a draft against the stands as they are, before it is
+    // live — which is the whole point of a draft.
+    const f = req.query.revision
+      ? await floorplans.getRevision(String(req.query.revision))
+      : await floorplans.get();
     if (!f || !f.svg) {
       return res.json({ ok: false, reason: 'no_artwork',
         message: 'No floorplan has been uploaded for this event yet.' });
@@ -324,152 +426,156 @@ router.get('/stands/schedule.csv', async (_req, res, next) => {
  * re-running — whereas the reverse leaves stands with no names at all and no
  * indication why.
  */
+async function readStandsFromLive(req) {
+  const f = await floorplans.get();
+  if (!f || !f.svg) {
+    return { status: 400, body: { error: 'No floorplan has been uploaded for this event yet.' } };
+  }
+
+  const r = extractStands(f.svg);   // the original, names intact
+  if (!r.stands.length) {
+    return { status: 400, body: {
+      error: 'No stands could be read from this floorplan.',
+      detail: r.warnings[0] || null,
+    } };
+  }
+
+  // Lounges, conference tracks and the like are sponsorable space, not
+  // sellable stands, so they are left in the artwork rather than becoming
+  // inventory with a status and a price.
+  const sellable = r.stands.filter(s => !s.sponsored);
+  // Upsert by default: geometry, area and price are re-read from the plan and
+  // everything else the stand carries is kept. The old throw-it-all-away
+  // behaviour is still reachable, but it now has to be ASKED for — "import"
+  // meaning "destroy the inventory" is not a default anyone would choose.
+  const replace = req.query.replace === '1';
+  // ?mode=update is the re-issued plan: merge the drawing over an event that
+  // is already selling, keeping every booking where it is. See
+  // importFromArtwork's `keep` for exactly what that promises.
+  const update = req.query.mode === 'update';
+  const out = await booths.importFromArtwork(sellable, {
+    actor: req.admin?.user || null,
+    force: req.query.force === '1',
+    replace: replace && !update,
+    keep: update,
+  });
+  if (!out.ok) {
+    // Each refusal says what is in the way and what to do about it. All three
+    // used to collapse into "The stands could not be imported", which tells
+    // an organiser nothing they can act on — and two of them are situations
+    // where the right next step is quite different from the others.
+    if (out.reason === 'has_bookings') {
+      return { status: 409, body: {
+        reason: out.reason,
+        error: `This event has ${out.committed} stands sold or on hold. Re-reading the plan would move stands that are already spoken for, so it is refused — release those stands first, or take a copy of the plan onto a new event.`,
+      } };
+    }
+    if (out.reason === 'has_customisations') {
+      return { status: 409, body: {
+        reason: out.reason,
+        error: `${out.customised} stands here carry work the artwork cannot recreate — shown numbers, sponsor logos, activity tags, countries, or a merge or split. An import would read straight over it, so it is refused. Undo those changes (Tools → Reset) or use Replace everything if you genuinely want the plan to win.`,
+      } };
+    }
+    if (out.reason === 'fills_unreadable') {
+      return { status: 400, body: {
+        reason: out.reason,
+        error: `${out.unreadable} of ${out.of} stands are drawn in a fill this reader cannot interpret, so what the plan says is sold cannot be trusted — importing would guess at the state of the whole hall. Ask for the artwork with flat fills on the stand shapes (specification BEC-FP-01), then read it again.`,
+      } };
+    }
+    if (out.reason === 'snapshot_failed') {
+      return { status: 500, body: {
+        reason: out.reason,
+        error: 'A recovery snapshot of the current stands could not be stored, so nothing was imported — the import is not run without one.',
+      } };
+    }
+    return { status: 400, body: { reason: out.reason || 'unknown', error: 'The stands could not be imported.' } };
+  }
+
+  /**
+   * The plan's own sponsorable areas.
+   *
+   * The extractor has always found these — lounges, theatres, conference
+   * tracks — and every caller then dropped them on the floor, which is why
+   * every event was drawing EUROPE's lounge and theatre geometry over its own
+   * hall. This is the last place that discarded them. Best-effort: the stands
+   * are already in, and a failure here means the areas are stale, not wrong.
+   */
+  let areasImported = 0;
+  try {
+    const fromPlan = r.stands.filter(st => st.sponsored);
+    const ar = await planAreas.replaceFromArtwork(fromPlan, { actor: req.admin?.user || null });
+    areasImported = (ar && (ar.imported ?? ar.count)) ?? fromPlan.length;
+    try { await sockets.notifyAreas(); }
+    catch (e) { console.error('Stand import: areas not broadcast —', e.message); }
+  } catch (e) {
+    console.error('Stand import: sponsorable areas not stored —', e.message);
+  }
+
+  // The unit follows the plan: it printed ft² or m², and that is the truth
+  // for this event. It is a display label, so this changes no number.
+  if (r.unit) await settings.setUnit(r.unit === 'sqft' ? 'ft' : 'm');
+
+  // Paint the app in the colours this plan is drawn in, so a stand keeps the
+  // colour the designer chose for it instead of the hall being repainted in
+  // another event's palette — unless an admin has chosen this event's
+  // colours, in which case their choice stands.
+  let paletteKept = false;
+  try {
+    const pr = await settings.setPaletteFromArtwork(paletteOf(r.fills));
+    paletteKept = !!(pr && pr.kept);
+  } catch (e) { console.error('Stand import: palette not stored —', e.message); }
+
+  // Now the artwork's own names come out of the copy we SHOW, so ours are the
+  // only ones drawn. The uploaded original keeps its names: overwriting it
+  // destroyed the only place they existed, and the next import then produced
+  // 99 stands with no exhibitors and no way back.
+  let namesRemoved = 0;
+  try {
+    // Every name the plan prints inside a shape, including any on shapes
+    // dropped as duplicates — those have no stand of ours to draw over them,
+    // so if they are left they stay printed for good.
+    const stripped = stripExhibitorNames(f.svg, r.printedNames);
+    if (stripped.removed) {
+      const saved = await floorplans.setDisplaySvg(stripped.svg);
+      if (saved.ok) namesRemoved = stripped.removed;
+    }
+  } catch (e) {
+    // Not fatal: the stands are in, and the only symptom is the artwork's
+    // old names showing under ours until this is run again.
+    console.error('Stand import: could not strip printed names —', e.message);
+  }
+
+  // The stands are in the database; now make the running server aware of
+  // them. Without this the import is invisible to every open page — and to
+  // every page opened afterwards, since the cache is only warmed at boot.
+  try { await sockets.notifyStands(); }
+  catch (e) { console.error('Stand import: viewers not refreshed —', e.message); }
+  // The display copy changed too (names out), and on a re-issued plan the
+  // stands have new shapes: every open page re-fetches the drawing and
+  // re-binds, so nothing is left pointing at where a stand used to be.
+  try {
+    const now = await floorplans.get();
+    sockets.notifyArtwork(now && now.version);
+  } catch (e) { console.error('Stand import: artwork change not broadcast —', e.message); }
+  try { await sockets.notifySettings(); }
+  catch (e) { console.error('Stand import: settings not broadcast —', e.message); }
+
+  // Which mode ran is part of the record: "imported 96 stands" means two very
+  // different things depending on whether the previous inventory survived.
+  track({ type: 'stands.import', boothNumber: null, actor: req.admin?.user || 'unknown',
+          meta: { imported: out.imported, sold: out.sold, replaced: out.replaced,
+                  mode: out.mode || (replace ? 'replace' : 'upsert'),
+                  forced: req.query.force === '1', areasImported,
+                  removed: out.removed || [], kept: (out.kept || []).map(k => k.boothNumber) } });
+  return { status: 200, body: { ok: true, ...out, namesRemoved, unit: r.unit, areasImported, paletteKept,
+             areasSkipped: r.stands.length - sellable.length, warnings: r.warnings } };
+}
+
 router.post('/stands/import', async (req, res, next) => {
   try {
     if (!await confirmPassword(req, res, 'no stands were imported')) return;
-
-    const f = await floorplans.get();
-    if (!f || !f.svg) {
-      return res.status(400).json({ error: 'No floorplan has been uploaded for this event yet.' });
-    }
-
-    const r = extractStands(f.svg);   // the original, names intact
-    if (!r.stands.length) {
-      return res.status(400).json({
-        error: 'No stands could be read from this floorplan.',
-        detail: r.warnings[0] || null,
-      });
-    }
-
-    // Lounges, conference tracks and the like are sponsorable space, not
-    // sellable stands, so they are left in the artwork rather than becoming
-    // inventory with a status and a price.
-    const sellable = r.stands.filter(s => !s.sponsored);
-    // Upsert by default: geometry, area and price are re-read from the plan and
-    // everything else the stand carries is kept. The old throw-it-all-away
-    // behaviour is still reachable, but it now has to be ASKED for — "import"
-    // meaning "destroy the inventory" is not a default anyone would choose.
-    const replace = req.query.replace === '1';
-    // ?mode=update is the re-issued plan: merge the drawing over an event that
-    // is already selling, keeping every booking where it is. See
-    // importFromArtwork's `keep` for exactly what that promises.
-    const update = req.query.mode === 'update';
-    const out = await booths.importFromArtwork(sellable, {
-      actor: req.admin?.user || null,
-      force: req.query.force === '1',
-      replace: replace && !update,
-      keep: update,
-    });
-    if (!out.ok) {
-      // Each refusal says what is in the way and what to do about it. All three
-      // used to collapse into "The stands could not be imported", which tells
-      // an organiser nothing they can act on — and two of them are situations
-      // where the right next step is quite different from the others.
-      if (out.reason === 'has_bookings') {
-        return res.status(409).json({
-          reason: out.reason,
-          error: `This event has ${out.committed} stands sold or on hold. Re-reading the plan would move stands that are already spoken for, so it is refused — release those stands first, or take a copy of the plan onto a new event.`,
-        });
-      }
-      if (out.reason === 'has_customisations') {
-        return res.status(409).json({
-          reason: out.reason,
-          error: `${out.customised} stands here carry work the artwork cannot recreate — shown numbers, sponsor logos, activity tags, countries, or a merge or split. An import would read straight over it, so it is refused. Undo those changes (Tools → Reset) or use Replace everything if you genuinely want the plan to win.`,
-        });
-      }
-      if (out.reason === 'fills_unreadable') {
-        return res.status(400).json({
-          reason: out.reason,
-          error: `${out.unreadable} of ${out.of} stands are drawn in a fill this reader cannot interpret, so what the plan says is sold cannot be trusted — importing would guess at the state of the whole hall. Ask for the artwork with flat fills on the stand shapes (specification BEC-FP-01), then read it again.`,
-        });
-      }
-      if (out.reason === 'snapshot_failed') {
-        return res.status(500).json({
-          reason: out.reason,
-          error: 'A recovery snapshot of the current stands could not be stored, so nothing was imported — the import is not run without one.',
-        });
-      }
-      return res.status(400).json({ reason: out.reason || 'unknown', error: 'The stands could not be imported.' });
-    }
-
-    /**
-     * The plan's own sponsorable areas.
-     *
-     * The extractor has always found these — lounges, theatres, conference
-     * tracks — and every caller then dropped them on the floor, which is why
-     * every event was drawing EUROPE's lounge and theatre geometry over its own
-     * hall. This is the last place that discarded them. Best-effort: the stands
-     * are already in, and a failure here means the areas are stale, not wrong.
-     */
-    let areasImported = 0;
-    try {
-      const fromPlan = r.stands.filter(st => st.sponsored);
-      const ar = await planAreas.replaceFromArtwork(fromPlan, { actor: req.admin?.user || null });
-      areasImported = (ar && (ar.imported ?? ar.count)) ?? fromPlan.length;
-      try { await sockets.notifyAreas(); }
-      catch (e) { console.error('Stand import: areas not broadcast —', e.message); }
-    } catch (e) {
-      console.error('Stand import: sponsorable areas not stored —', e.message);
-    }
-
-    // The unit follows the plan: it printed ft² or m², and that is the truth
-    // for this event. It is a display label, so this changes no number.
-    if (r.unit) await settings.setUnit(r.unit === 'sqft' ? 'ft' : 'm');
-
-    // Paint the app in the colours this plan is drawn in, so a stand keeps the
-    // colour the designer chose for it instead of the hall being repainted in
-    // another event's palette — unless an admin has chosen this event's
-    // colours, in which case their choice stands.
-    let paletteKept = false;
-    try {
-      const pr = await settings.setPaletteFromArtwork(paletteOf(r.fills));
-      paletteKept = !!(pr && pr.kept);
-    } catch (e) { console.error('Stand import: palette not stored —', e.message); }
-
-    // Now the artwork's own names come out of the copy we SHOW, so ours are the
-    // only ones drawn. The uploaded original keeps its names: overwriting it
-    // destroyed the only place they existed, and the next import then produced
-    // 99 stands with no exhibitors and no way back.
-    let namesRemoved = 0;
-    try {
-      // Every name the plan prints inside a shape, including any on shapes
-      // dropped as duplicates — those have no stand of ours to draw over them,
-      // so if they are left they stay printed for good.
-      const stripped = stripExhibitorNames(f.svg, r.printedNames);
-      if (stripped.removed) {
-        const saved = await floorplans.setDisplaySvg(stripped.svg);
-        if (saved.ok) namesRemoved = stripped.removed;
-      }
-    } catch (e) {
-      // Not fatal: the stands are in, and the only symptom is the artwork's
-      // old names showing under ours until this is run again.
-      console.error('Stand import: could not strip printed names —', e.message);
-    }
-
-    // The stands are in the database; now make the running server aware of
-    // them. Without this the import is invisible to every open page — and to
-    // every page opened afterwards, since the cache is only warmed at boot.
-    try { await sockets.notifyStands(); }
-    catch (e) { console.error('Stand import: viewers not refreshed —', e.message); }
-    // The display copy changed too (names out), and on a re-issued plan the
-    // stands have new shapes: every open page re-fetches the drawing and
-    // re-binds, so nothing is left pointing at where a stand used to be.
-    try {
-      const now = await floorplans.get();
-      sockets.notifyArtwork(now && now.version);
-    } catch (e) { console.error('Stand import: artwork change not broadcast —', e.message); }
-    try { await sockets.notifySettings(); }
-    catch (e) { console.error('Stand import: settings not broadcast —', e.message); }
-
-    // Which mode ran is part of the record: "imported 96 stands" means two very
-    // different things depending on whether the previous inventory survived.
-    track({ type: 'stands.import', boothNumber: null, actor: req.admin?.user || 'unknown',
-            meta: { imported: out.imported, sold: out.sold, replaced: out.replaced,
-                    mode: out.mode || (replace ? 'replace' : 'upsert'),
-                    forced: req.query.force === '1', areasImported,
-                    removed: out.removed || [], kept: (out.kept || []).map(k => k.boothNumber) } });
-    res.json({ ok: true, ...out, namesRemoved, unit: r.unit, areasImported, paletteKept,
-               areasSkipped: r.stands.length - sellable.length, warnings: r.warnings });
+    const r = await readStandsFromLive(req);
+    res.status(r.status).json(r.body);
   } catch (e) { next(e); }
 });
 
@@ -1139,7 +1245,7 @@ const AUDIT_TYPES = [
   'booth.remove', 'booth.restore_stand',
   'booth.history_restore',
   'booth.move', 'booth.set_number', 'booth.set_tags', 'booth.set_country', 'booth.set_logo',
-  'unmerge', 'unsplit', 'floorplan.upload', 'floorplan.revert', 'stands.import', 'settings.palette',
+  'unmerge', 'unsplit', 'floorplan.upload', 'floorplan.publish', 'floorplan.discard', 'floorplan.revert', 'stands.import', 'settings.palette',
   'sponsor.create', 'sponsor.delete', 'sponsor.import', 'enquiry.forward',
   'lead.admin', 'admin.team', 'security.denied', 'security.secret_failed',
 ];
@@ -1340,7 +1446,17 @@ router.post('/history/:id/restore', async (req, res, next) => {
         : 'That point no longer exists.' });
     }
     track({ type: 'booth.history_restore', boothNumber: null, actor: req.admin?.user || 'unknown',
-            meta: { id, stands: r.stands, replaced: r.replacing, previous: r.previousSnapshot } });
+            meta: { id, stands: r.stands, replaced: r.replacing, previous: r.previousSnapshot,
+                    artwork: r.artwork ? r.artwork.label : null } });
+    // Open pages were left showing the hall from before the restore until
+    // someone reloaded; the cache the sockets serve from is only refreshed
+    // when told.
+    try { await sockets.notifyStands(); }
+    catch (e) { console.error('History restore: viewers not refreshed —', e.message); }
+    if (r.artwork) {
+      try { sockets.notifyArtwork(r.artworkVersion); }
+      catch (e) { console.error('History restore: artwork change not broadcast —', e.message); }
+    }
     res.json(r);
   } catch (e) { next(e); }
 });

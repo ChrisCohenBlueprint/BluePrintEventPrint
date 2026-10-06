@@ -1427,7 +1427,7 @@ function withoutLogos(booth) {
  * ABORT on a failed snapshot — proceeding to delete an event's inventory with
  * no way back is the failure this exists to prevent.
  */
-async function snapshot(reason, rows, { actor = null, showId = config.showId } = {}) {
+async function snapshot(reason, rows, { actor = null, showId = config.showId, revisionId: knownRevision } = {}) {
   const snapshotId = `${reason}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   const at = new Date();
   try {
@@ -1436,9 +1436,16 @@ async function snapshot(reason, rows, { actor = null, showId = config.showId } =
         showId, snapshotId, reason, at, boothNumber: b.boothNumber, booth: withoutLogos(b),
       })), { ordered: false });
     }
+    // Which drawing these stands were positioned against. Stands and artwork
+    // go back together, or a restored hall sits on shapes that are not there.
+    // Named by the caller when the live plan has already moved on by the time
+    // the point is written — making a plan live is the case.
+    let revisionId = knownRevision === undefined ? null : knownRevision;
+    if (knownRevision === undefined) try { revisionId = await floorplans.liveRevisionId(showId); }
+    catch (e) { console.error(`Snapshot "${reason}": live revision not recorded —`, e.message); }
     // A header row, so a listing does not have to read every stand back.
     await snapshots().insertOne({ showId, snapshotId, reason, at, header: true,
-                                  count: rows.length, takenBy: actor });
+                                  count: rows.length, takenBy: actor, revisionId });
     return { ok: true, snapshotId, count: rows.length };
   } catch (e) {
     console.error(`Snapshot "${reason}" failed —`, e.message);
@@ -1472,7 +1479,14 @@ async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId
   const stored = rows.map(r => r.booth).filter(Boolean);
   const current = await col().find({ showId }).toArray();
   const logos = stored.filter(b => b.sponsorLogoOmitted).map(b => b.boothNumber);
-  const plan = { snapshotId, stands: stored.length, replacing: current.length, logosNotRestored: logos };
+  // The drawing those stands were placed on, when it is not the one live now.
+  // Points written before revisions existed carry none, and leave the artwork.
+  const header = await snapshots().findOne({ showId, snapshotId, header: true });
+  const liveRev = await floorplans.liveRevisionId(showId);
+  const wantRev = header && header.revisionId;
+  const rev = wantRev && wantRev !== liveRev ? await floorplans.getRevision(wantRev, { showId }) : null;
+  const artwork = rev ? { revisionId: rev.revisionId, label: rev.label } : null;
+  const plan = { snapshotId, stands: stored.length, replacing: current.length, logosNotRestored: logos, artwork };
   if (!apply) return { ok: true, dryRun: true, ...plan };
 
   const back = await snapshot('pre-restore', current, { actor, showId });
@@ -1492,6 +1506,11 @@ async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId
   // `_id` is dropped: these are new documents in the live collection, and
   // re-using the stored ids would collide with anything not yet deleted.
   await col().insertMany(stored.map(({ _id, sponsorLogoOmitted, ...b }) => ({ ...b, showId })));
+  if (artwork) {
+    const made = await floorplans.makeLive(artwork.revisionId, { actor, showId });
+    if (!made.ok) plan.artwork = null;
+    else plan.artworkVersion = made.version;
+  }
   return { ok: true, ...plan, previousSnapshot: back.snapshotId };
 }
 
@@ -1535,6 +1554,7 @@ const HISTORY_LABELS = {
   restoreRemoved:  'Stand put back on the plan',
   move:            'Booking moved',
   setDisplayNumber: 'Stand renumbered',
+  publish:         'New plan made live',
 };
 
 /**
@@ -1558,8 +1578,8 @@ async function pruneHistory(showId = config.showId) {
  * actually happened — a refused operation has nothing to undo, and a point for
  * it would be a step backwards that moves nothing.
  */
-async function writeHistoryPoint(op, rows, { actor = null, detail = '', boothNumbers = [] } = {}) {
-  const snap = await snapshot(op, rows, { actor });
+async function writeHistoryPoint(op, rows, { actor = null, detail = '', boothNumbers = [], revisionId } = {}) {
+  const snap = await snapshot(op, rows, { actor, revisionId });
   if (!snap.ok) return snap;
   await snapshots().updateOne(
     { showId: config.showId, snapshotId: snap.snapshotId, header: true },
@@ -1573,10 +1593,18 @@ async function writeHistoryPoint(op, rows, { actor = null, detail = '', boothNum
 async function history({ showId = config.showId, limit = 50 } = {}) {
   const rows = await snapshots()
     .find({ showId, header: true, history: true }).sort({ at: -1 }).limit(limit).toArray();
+  // Each point names the drawing it sat on, so the list can say when going
+  // back also changes the plan people see.
+  const labels = new Map();
+  for (const id of new Set(rows.map(r => r.revisionId).filter(Boolean))) {
+    const rev = await floorplans.getRevision(id, { showId });
+    if (rev) labels.set(id, rev.label);
+  }
   return rows.map(r => ({
     id: r.snapshotId, at: r.at, op: r.op,
     label: r.label || r.op, detail: r.detail || '',
     boothNumbers: r.boothNumbers || [], actor: r.takenBy || null, stands: r.count || 0,
+    revisionId: r.revisionId || null, revisionLabel: labels.get(r.revisionId) || null,
   }));
 }
 
@@ -2318,7 +2346,7 @@ module.exports = { col, all, get, toPublic, toAdmin, ensureIndexes, setStatus, u
                    reset: tracked('reset', reset),
                    remove: tracked('remove', remove),
                    restoreRemoved: tracked('restoreRemoved', restoreRemoved),
-                   removedStands, history, pruneHistory,
+                   removedStands, history, pruneHistory, writeHistoryPoint,
                    repairHalvedStands, restoreOriginalLayout, resetToBlankLayout, importFromArtwork,
                    commercialFilter, handworkFilter, countCommitted, countHandwork,
                    snapshot, listSnapshots, restoreSnapshot,

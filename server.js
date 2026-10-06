@@ -54,6 +54,7 @@ async function start() {
   await tags.ensureIndexes();
   await showsModel.ensureIndexes();
   await floorplansModel.ensureIndexes();
+  await floorplansModel.ensureRevisionIndexes();
   // The event this deployment already runs becomes a real row, so it is
   // editable alongside any new ones rather than living only in config.
   await showsModel.ensureSeeded();
