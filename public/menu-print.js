@@ -299,7 +299,15 @@
     renderBooths(d.booths || [], d.showPrices);
     renderCustom(d.custom || [], d.showPrices);
 
+    // No total when nothing is priced — each line already says "On
+    // application", and "Total €0" under them reads as a free offer. When
+    // some lines are priced and some are not, the label says what the figure
+    // leaves out rather than presenting part of the deal as all of it.
     if (d.showPrices && d.total != null) {
+      const n = Number(d.totalExcludes) || 0;
+      $('total-label').textContent = n
+        ? `Total, excluding ${n} item${n === 1 ? '' : 's'} on application`
+        : 'Total';
       $('total-value').textContent = money(d.total);
       $('totals').hidden = false;
     }

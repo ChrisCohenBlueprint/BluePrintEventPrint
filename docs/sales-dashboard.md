@@ -66,8 +66,12 @@ to a public URL.
 
 **Prices are off by default.** The client-facing document is price-free, matching
 the public floorplan, so sales can walk the buyer through cost in conversation.
-A rep can tick *Show prices* per proposal when they want the numbers in writing;
-the total then covers only items still available.
+A rep can tick *Show prices* per proposal when they want the numbers in writing.
+The total then covers only items still available and actually priced: anything
+on application (a package with no price, or a bespoke line whose price box was
+left empty) prints as "On application", and the total says how many items it
+leaves out. With nothing priced there is no total at all. Lines and total are
+both in whole units, so the total is always the sum of the lines as printed.
 
 ## Files
 

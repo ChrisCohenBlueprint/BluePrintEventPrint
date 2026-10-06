@@ -11,7 +11,11 @@
  *
  *   it opens          — a North America proposal at the URL the dashboard uses,
  *                       and a default-event one at the bare URL, both render;
- *   it goes back      — "Back to dashboard" returns to the proposal's own event.
+ *   it goes back      — "Back to dashboard" returns to the proposal's own event;
+ *   it prices honestly — an empty price box is "On application", not free; the
+ *                       total never counts an unpriced item as nothing, says
+ *                       when it leaves one out, is absent when nothing is
+ *                       priced, and adds up the figures the lines print.
  */
 const path = require('path');
 const express = require('express');
@@ -158,6 +162,43 @@ async function openPrint(br, url) {
     check('"Back to dashboard" returns to that event',
           lex.back === `/sales/${DEFAULT.toLowerCase()}`, lex.back);
 
+    console.log('\nThe total states what it covers');
+    // Lines print in whole dollars: $6,000 for the stand, $100 for the carpet.
+    check('the stand and the bespoke line print their rounded prices',
+          na.prices.includes('$6,000') && na.prices.includes('$100'), na.prices.join(', '));
+    check('the package with no price prints "On application"', na.prices.includes('On application'),
+          na.prices.join(', '));
+    check('the total is the sum of the printed lines ($6,100, not $6,101)', na.total === '$6,100', na.total);
+    check('and says it leaves out the item on application', /excluding 1 item on application/i.test(na.totalLabel),
+          na.totalLabel);
+
+    const poa = await openPrint(br, `${base}/sales/lna/menu/${POA_ID}/print`);
+    check('an all-on-application proposal renders', poa.rendered, poa.loadState);
+    check('and prints no total — not "Total $0"', !poa.totalShown, `${poa.totalLabel} ${poa.total}`);
+
+    console.log('\nAn empty price box is "On application", not free');
+    const post = async (custom) => {
+      const res = await fetch(`${base}/api/sales/menus`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Show': 'lna' },
+        body: JSON.stringify({ title: 'Bespoke', custom, showPrices: true, showPlan: false }),
+      });
+      return res.json();
+    };
+    const blank = await post([{ title: 'Null price', price: null }, { title: 'Empty price', price: '' },
+                              { title: 'Spaces', price: '  ' }, { title: 'Free', price: 0 },
+                              { title: 'Priced', price: '250' }]);
+    const by = Object.fromEntries((blank.custom || []).map(c => [c.title, c.price]));
+    check('a null price is stored as on application', by['Null price'] === null, String(by['Null price']));
+    check('an empty price is stored as on application', by['Empty price'] === null, String(by['Empty price']));
+    check('a blank price is stored as on application', by['Spaces'] === null, String(by['Spaces']));
+    check('a real zero is still zero', by['Free'] === 0, String(by['Free']));
+    check('a typed price is a number', by['Priced'] === 250, String(by['Priced']));
+
+    const printed = await openPrint(br, `${base}/sales/lna/menu/${blank._id}/print`);
+    const lines = printed.prices;
+    check('the printed document says "On application" for the empty ones',
+          lines.filter(p => p === 'On application').length === 3, lines.join(', '));
+    check('and does not print them as $0', lines.filter(p => p === '$0').length === 1, lines.join(', '));
   } finally {
     await br.close();
     server.close();
