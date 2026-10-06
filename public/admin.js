@@ -9,7 +9,7 @@ const socket = io({ query: { show: SHOW } });
 // knew a 401 meant "your session ended", this file did not and rendered an
 // empty dashboard instead; sales.js had a working money(), this file called one
 // that was never defined anywhere.
-const { esc, cap, money, api, emitAck, withPending, askSecret, confirmDialog } = window.UI;
+const { esc, cap, money, api, emitAck, withPending, askSecret, confirmDialog, askFields, askText, dialogOpen } = window.UI;
 
 // Show who is signed in. currentRole gates team management — only the owner may
 // add/remove members or reset a colleague's password/2FA (the server enforces
@@ -268,10 +268,13 @@ async function consolidateMultiSelect() {
 // A merged block keeps the top-left stand's number, which is rarely what the
 // admin wants it called — so the name is asked for as the last step of the
 // merge rather than left to a separate trip through the Shown Number tool.
-// Leaving it as offered (or cancelling) keeps the number it already has.
-function nameMergedStand(primary) {
+// Leaving it as offered (or cancelling) keeps the number it already has. Asked
+// in the console's own dialog, like the other questions on this panel.
+async function nameMergedStand(primary) {
   const current = shownN(primary);
-  const name = prompt(`Merged into stand ${current}. Number to show for the merged stand:`, current);
+  const name = await askText(`The stands are merged into stand ${current}. Keep that number, or give the merged stand the one to show.`,
+    { title: 'Number the merged stand', name: 'number', label: 'Number to show', value: current, maxLength: 20,
+      confirmLabel: 'Use this number' });
   if (name === null) return;
   const displayNumber = name.trim();
   if (!displayNumber || displayNumber === current) return;
@@ -1061,7 +1064,7 @@ function applySplit() {
   document.getElementById('split-bar-apply')?.addEventListener('click', applySplit);
   document.getElementById('split-bar-cancel')?.addEventListener('click', exitSplitMode);
   document.addEventListener('keydown', (e) => {
-    if (!splitUI.id) return;
+    if (!splitUI.id || keyForDialog(e)) return;   // a dialog's keys are the dialog's
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
     const vertical = splitUI.axis === 'vertical';
@@ -1099,7 +1102,16 @@ function closeAreaPanel() {
 document.getElementById('aba-close')?.addEventListener('click', closeStandPanel);
 document.getElementById('ara-close')?.addEventListener('click', closeAreaPanel);
 
+/**
+ * Keys pressed in a dialog are the dialog's. Escape pressed to cancel a
+ * confirm also closed the stand panel behind it: the keystroke bubbles up to
+ * the page, and the dialog's focused BUTTON did not look like typing to the
+ * check below.
+ */
+const keyForDialog = (e) => dialogOpen() || !!(e.target && e.target.closest && e.target.closest('dialog'));
+
 document.addEventListener('keydown', (e) => {
+  if (keyForDialog(e)) return;
   // Split mode owns Escape while a divider is placed — see wireSplitBar above.
   if (splitUI.id) return;
   const tag = (e.target && e.target.tagName) || '';
@@ -1710,29 +1722,67 @@ async function removeStandFromPlan(boothNumber) {
 /** What the release/un-book gate is asking for, in the operator's words. */
 const secretNoun = () => (recoveryRequired ? 'recovery key' : 'admin password');
 
+// What a hold taken without a name is stored as. It must never become the
+// exhibitor on a confirmed sale, so it is neither offered nor accepted as one.
+const HOLD_PLACEHOLDER = 'Pending';
+const isPlaceholder = (name) => String(name || '').trim().toLowerCase() === HOLD_PLACEHOLDER.toLowerCase();
+
+// A hold is measured in hours, within the bounds the server keeps a hold to
+// (the extend route's): at least one hour, at most thirty days.
+const HOLD_HOURS_MAX = 24 * 30;
+function holdHoursProblem(text) {
+  // Number(), not parseFloat(): parseFloat reads "24 hours" as 24 and lets
+  // "Infinity" and "1e10" through as numbers, and a hold of ten billion hours
+  // is a sale nobody agreed to.
+  const h = Number(text);
+  if (text === '' || !Number.isFinite(h) || h < 1 || h > HOLD_HOURS_MAX) {
+    return `A hold lasts between 1 and ${HOLD_HOURS_MAX} hours (30 days) — enter the number of hours.`;
+  }
+  return null;
+}
+
 async function adminAction(action, boothNumber) {
   const done = (verb) => (res) => {
     if (res && res.ok) adminToast(`Stand ${boothNumber} ${verb}.`, 'ok');
     else adminToast((res && res.error) || `Could not ${action} stand ${boothNumber}.`, 'error');
   };
+  // Both of these were window.prompt(). OK on an empty "Company name:" booked
+  // the stand as "Admin"; a nameless hold's "Move to Sold" was pre-filled with
+  // "Pending", so Enter sold the stand to the placeholder; and Cancel on "Hold
+  // for how many hours?" still held it, because `parseFloat(null) || 24` is 24.
+  // They ask in the console's own dialog now, which can refuse an answer and
+  // say why without losing what was typed.
   if (action === 'book') {
+    const b = booths[boothNumber];
+    const held = !!b && b.status === 'held';
     // A held stand is already holding for someone, so the name is offered
-    // rather than asked for — Enter confirms it. Still editable, because a hold
-    // taken without a name is stored as the placeholder "Pending", and that
-    // must not become the exhibitor on a confirmed sale.
-    const existing = dealOf(booths[boothNumber]).company || '';
-    const company = existing
-      ? prompt(`Move stand ${boothNumber} to sold. Confirm the company:`, existing)
-      : prompt('Company name:');
+    // rather than asked for — Enter confirms it. Still editable, and never the
+    // placeholder a nameless hold is stored as.
+    const existing = isPlaceholder(dealOf(b).company) ? '' : (dealOf(b).company || '');
+    const company = await askText(
+      held ? `Stand ${shownN(boothNumber)} is on hold${existing ? ` for ${existing}` : ' without a name'}. Who is it sold to?`
+           : `Book stand ${shownN(boothNumber)} as sold.`,
+      { title: held ? `Move stand ${shownN(boothNumber)} to sold` : `Mark stand ${shownN(boothNumber)} sold`,
+        name: 'company', label: 'Exhibitor (company name)', value: existing,
+        confirmLabel: held ? 'Move to sold' : 'Mark sold',
+        required: true, requiredMessage: 'A sale needs the exhibitor\'s name.',
+        validate: (v) => (isPlaceholder(v)
+          ? `"${HOLD_PLACEHOLDER}" is what a hold without a name is called — enter the exhibitor's real name.` : null) });
     if (company === null) return;
-    socket.emit('booth:book', { boothNumber, company: company.trim() || 'Admin' },
-                done(existing ? 'moved to sold' : 'booked'));
+    done(held ? 'moved to sold' : 'booked')(await emitAck(socket, 'booth:book', { boothNumber, company }));
   }
   if (action === 'hold') {
-    const company = prompt('Company name:');
-    if (company === null) return;
-    const hours = parseFloat(prompt('Hold for how many hours?', '24')) || 24;
-    socket.emit('booth:hold', { boothNumber, company: company.trim() || 'Pending', hours }, done('held'));
+    const v = await askFields(
+      `Hold stand ${shownN(boothNumber)}. Nobody else can book it until the hold runs out or is released.`,
+      { title: `Put stand ${shownN(boothNumber)} on hold`, confirmLabel: 'Hold it',
+        fields: [
+          // A hold may be nameless; it is stored under the placeholder.
+          { name: 'company', label: 'For (company name — optional)', placeholder: 'Leave blank if not known yet' },
+          { name: 'hours', label: 'For how many hours', value: '24', inputMode: 'decimal', validate: holdHoursProblem },
+        ] });
+    if (!v) return;                                    // cancelled: nothing is held
+    done('held')(await emitAck(socket, 'booth:hold',
+      { boothNumber, company: v.company || HOLD_PLACEHOLDER, hours: Number(v.hours) }));
   }
   if (action === 'release') {
     // Releasing frees a stand and clears its booking, so it's gated: the recovery
@@ -2379,13 +2429,24 @@ document.getElementById('status-form')?.addEventListener('submit', (e) => {
     const status = document.getElementById('status-new').value;
     const company = document.getElementById('status-company').value.trim();
     if (!boothNumber) return;
+    const cur = booths[boothNumber];
+
+    // A sale needs a real exhibitor here as much as on the stand panel. A blank
+    // box keeps the name a held stand already has; on a stand with none, it
+    // sold the stand to nobody — and "Pending" is what a nameless hold is
+    // called, not a name.
+    if (status === 'sold') {
+      const kept = cur && !isPlaceholder(dealOf(cur).company) ? dealOf(cur).company : '';
+      if (isPlaceholder(company) || (!company && !kept)) {
+        return adminToast('A sale needs the exhibitor\'s name — enter it under Company.', 'error');
+      }
+    }
 
     // Forcing a booked/held stand back to Available un-books it, and the server
     // now gates that exactly as Release is gated: the recovery key when the
     // failsafe is on, the admin's own password when it is NOT. This only ever
     // asked in the recovery case, so with the failsafe off (the default) it sent
     // an empty secret and every un-booking from here was simply refused.
-    const cur = booths[boothNumber];
     const unbooking = status === 'available' && cur && cur.status !== 'available';
     let key;
     if (unbooking) {
