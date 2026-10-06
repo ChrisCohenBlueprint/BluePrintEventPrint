@@ -831,7 +831,13 @@ function renderShortlist() {
   const foot = document.getElementById('eq-footer');   // fixed Send button bar
 
   if (!shortlist.length && !sponsorShortlist.length && !areaShortlist.length) {
-    card.classList.add('hidden'); if (foot) foot.hidden = true; box.innerHTML = ''; return;
+    // After a send the card is showing "Enquiry sent", which stays until the
+    // visitor starts another — emptying a shortlist that has already gone
+    // must not take the confirmation away with it.
+    if (!submitted) { card.classList.add('hidden'); if (foot) foot.hidden = true; }
+    box.innerHTML = '';
+    shownShortlistSig = shortlistSig();
+    return;
   }
   if (!submitted) { card.classList.remove('hidden'); if (foot) foot.hidden = false; }
 
@@ -945,6 +951,10 @@ function renderEnquiryNotes() {
  * no longer in `booths` to be asked.
  */
 function reconcileShortlist(shownBefore) {
+  // Once sent, the shortlist is a record of what was asked about, not an
+  // enquiry being built; "Start another enquiry" clears it. The map is kept
+  // truthful regardless (applyVisual).
+  if (submitted) return false;
   const lines = [];
   const keep = shortlist.filter(n => {
     const b = booths[n];
@@ -963,6 +973,7 @@ function reconcileShortlist(shownBefore) {
 
 /** The same for areas, on every catalogue broadcast. */
 function reconcileAreaShortlist(labelBefore) {
+  if (submitted) return false;          // see reconcileShortlist
   const lines = [];
   const keep = areaShortlist.filter(k => {
     const a = areaByKey(k);

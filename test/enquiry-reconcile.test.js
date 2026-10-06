@@ -148,6 +148,19 @@ const { check, finish } = reporter();
         sent && sent.boothNumbers.join(',') === '103,104' && sent.areaKeys.length === 0 && sent.sponsorKeys.length === 0,
         JSON.stringify(sent && { b: sent.boothNumbers, a: sent.areaKeys, s: sent.sponsorKeys }));
 
+  console.log('\nAfter the enquiry has gone');
+  const confirmed = () => page.evaluate(() => !document.getElementById('eq-success').classList.contains('hidden')
+    && !document.getElementById('enquiry-card').classList.contains('hidden'));
+  check('the confirmation is showing', await confirmed());
+  const soldAfter = without102.map(s => (s.boothNumber === '103' || s.boothNumber === '104')
+    ? { ...s, status: 'sold', company: 'Later Buyer' } : s);
+  await page.evaluate(s => window.__fire('state:full', s), soldAfter);
+  await wait(400);
+  check('a stand it named selling afterwards does not take the confirmation away', await confirmed());
+  check('nor is the visitor told to look again at an enquiry already sent', !/Stand 104/.test(await notice()), await notice());
+  const paint = await page.evaluate(() => getComputedStyle(document.querySelector('#svg-mount svg [data-booth="104"]')).fill);
+  check('and the map still shows it Taken', paint === 'rgb(252, 223, 109)', paint);
+
   console.log('\nDismissing the notice');
   await page.click('#eq-again');
   await wait(150);
