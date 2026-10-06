@@ -156,7 +156,13 @@ const EVENTS = {
   'booth:restore-stand':    (p) => booths.restoreRemoved(p.boothNumber, { actor: 'preview' }),
   'booth:set-number':       (p) => booths.setDisplayNumber(p.boothNumber, p.displayNumber, { actor: 'preview' }),
   'booth:move':             (p) => booths.move(p.from, p.to, { actor: 'preview' }),
-  'booth:book':             async (p) => ({ ok: !!await booths.setStatus(p.boothNumber, 'sold', { company: p.company || 'Preview Ltd', actor: 'preview' }) }),
+  // A sale is to somebody, here as on the live console: a blank name is
+  // refused in the same words rather than booked under a made-up one.
+  'booth:book':             async (p) => {
+    const name = String(p.company ?? '').trim();
+    if (!name) return { ok: false, error: `Give the exhibitor's name to book Stand ${p.boothNumber}.` };
+    return { ok: !!await booths.setStatus(p.boothNumber, 'sold', { company: name, actor: 'preview' }) };
+  },
   'booth:hold':             async (p) => ({ ok: !!await booths.setStatus(p.boothNumber, 'held', { company: p.company || 'Pending', actor: 'preview' }) }),
   'booth:release':          async (p) => ({ ok: !!await booths.setStatus(p.boothNumber, 'available', { company: null, actor: 'preview' }) }),
 };
@@ -295,7 +301,21 @@ function buildApp() {
   app.post('/api/history/:id/restore', async (req, res) => {
     const apply = req.body && req.body.apply === true;
     const r = await run(() => booths.restoreSnapshot(String(req.params.id), { apply, actor: 'preview' }));
-    if (!r.ok) return res.status(404).json({ error: 'That point no longer exists.' });
+    // The same answers the live route gives: a point that is gone is a 404, but
+    // a point that would move a booking, or a hall that changed while it was
+    // being put back, is a 409 the console explains — not "no longer exists".
+    if (!r.ok) {
+      if (r.reason === 'bookings_in_the_way') {
+        const list = (r.conflicts || []).map(c => `stand ${c.displayNumber || c.boothNumber} (${c.status})`).join('; ');
+        return res.status(409).json({ reason: r.reason, conflicts: r.conflicts,
+          error: `Bookings are kept when the plan goes back, and these are in the way: ${list}. Move or release them first.` });
+      }
+      if (r.reason === 'changed_meanwhile') {
+        return res.status(409).json({ reason: r.reason,
+          error: `Stand ${r.boothNumber} changed while the plan was being put back, so nothing was changed. Try again.` });
+      }
+      return res.status(404).json({ error: 'That point no longer exists.' });
+    }
     if (apply) save();
     res.json(r);
   });
