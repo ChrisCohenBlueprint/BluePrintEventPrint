@@ -137,10 +137,17 @@ What to give the designer: `/artwork-brief` (how to draw a plan the app can
 read, including revisions) and `/artwork-spec` (the specification each upload
 is checked against). Both are linked from Settings.
 
-`npm run migrate` still exists and seeds stands from `server/data/booth_data.json`;
-it predates artwork import and is only for the original Europe data. That file
-lives under `server/` deliberately — it carries a list price for every stand,
-and while it sat in `public/` express served it to anyone who asked.
+`npm run migrate` is not part of this. It predates artwork import, and all it
+is for now is putting the original Europe stands (`server/data/booth_data.json`)
+into an event **nobody has worked on yet** — a fresh database, or a new event
+that is to start from the original Europe plan. It is a dry run until
+`--apply`, takes `--show <event>`, prices stands at that event's own rate, and
+refuses outright an event that has any sold, held or hand-made stand: run over
+a live event it used to un-merge sold blocks and put absorbed stands back on
+sale. It reads a legacy `booth_state.json` only when given `--state <file>`.
+`booth_data.json` lives under `server/` deliberately — it carries a list price
+for every stand, and while it sat in `public/` express served it to anyone who
+asked.
 
 ### Useful scripts
 
