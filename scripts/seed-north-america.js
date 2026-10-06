@@ -25,9 +25,10 @@
  * else's.
  *
  * The plan goes back as a revision of its own, and what was live before is
- * kept as one too. If the stand import is then refused, the plan that was
- * live is put back as well: the stands stayed where they were, so the drawing
- * they sit on must too.
+ * kept as one too. The stands are imported first and the plan is stored only
+ * once they are accepted, so a refused import changes neither; the put-back
+ * below remains for a run that somehow did store the plan, since the stands
+ * stayed where they were and the drawing they sit on must too.
  */
 const { seedNorthAmerica, SLUG } = require('../server/services/seed-artwork');
 

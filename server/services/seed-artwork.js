@@ -110,21 +110,29 @@ async function seedNorthAmerica({ apply = false, force = false, actor = 'deploy'
 
     if (!apply) return { ok: true, dryRun: true, ...report };
 
+    // The stands first, the plan only once they are accepted. The import reads
+    // the SHIPPED file, not the stored one, so it does not need the plan in
+    // place to run. The other order put the shipped plan live and then had the
+    // import refused — leaving the event's stands on the old drawing, and the
+    // new one served with all 78 printed names still on it, because the names
+    // only come off the served copy further down, on success.
+    const out = await booths.importFromArtwork(sellable, { actor, force });
+    if (!out.ok) {
+      // Refused because the event has real bookings or hand-made work — exactly
+      // the intent. Nothing was written: neither the stands nor the plan.
+      await meta.updateOne({ _id: RAN },
+        { $set: { at: new Date(), artworkRestored: false, importRefused: out.reason } },
+        { upsert: true });
+      return { ok: false, ...report, artworkRestored: false, importRefused: out.reason, import: out };
+    }
+
     if (planNeedsRestoring) {
       const saved = await floorplans.save(shipped, {
         filename: 'LNA27_Floorplan_Web Format_24.svg', actor,
       });
-      if (!saved.ok) return { ok: false, ...report, reason: 'could-not-store', detail: saved.reason };
-    }
-
-    const out = await booths.importFromArtwork(sellable, { actor, force });
-    if (!out.ok) {
-      // Refused because the event has real bookings or hand-made work — exactly
-      // the intent. The plan is restored either way; the stands are left alone.
-      await meta.updateOne({ _id: RAN },
-        { $set: { at: new Date(), artworkRestored: planNeedsRestoring, importRefused: out.reason } },
-        { upsert: true });
-      return { ok: false, ...report, artworkRestored: planNeedsRestoring, importRefused: out.reason, import: out };
+      // The stands are already read from the shipped plan; say so plainly
+      // rather than pretend nothing happened.
+      if (!saved.ok) return { ok: false, ...report, ...out, reason: 'could-not-store', detail: saved.reason };
     }
 
     // The plan's own sponsorable areas — its lounges and conference tracks —
