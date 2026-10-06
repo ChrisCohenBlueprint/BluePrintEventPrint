@@ -184,14 +184,19 @@ async function reconcile() {
       filter.holdExpiresAt = { $exists: false };
     }
 
+    // The WHOLE deal goes with the hold, exactly as a release clears it. Only
+    // the company used to, so the price, notes, contact, tags and country the
+    // expired exhibitor had negotiated stayed on the now-available stand — the
+    // next company to book it inherited them, and the leftover tags and
+    // country made the stand read as hand-made work that refused every import.
     const res = await booths.col().updateOne(filter, {
       $set: {
         status: 'available',
-        'assignment.company': null,
+        assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
         updatedAt: new Date(),
         updatedBy: 'system:expiry',
       },
-      $unset: { holdExpiresAt: '' },
+      $unset: { holdExpiresAt: '', source: '' },
     });
     if (!res.matchedCount) continue;   // re-held or booked under us; leave it alone
 

@@ -91,6 +91,15 @@ function toPublic(b) {
 const toAdmin = (b) => b;
 
 /**
+ * The name a hold carries when nobody gave one. It is a placeholder, not an
+ * exhibitor: a hold taken as "Pending" and then booked under a real name is the
+ * same deal acquiring its name, not the stand changing hands.
+ */
+const PLACEHOLDER_NAMES = ['pending'];
+const nameKey = (v) => String(v == null ? '' : v).trim().toLowerCase();
+const isRealName = (v) => !!nameKey(v) && !PLACEHOLDER_NAMES.includes(nameKey(v));
+
+/**
  * Set a booth's status.
  *
  * `expect` optionally names the prior statuses this change is allowed from, and
@@ -98,13 +107,21 @@ const toAdmin = (b) => b;
  * overwrite one another admin made a moment earlier. `changed` reports whether
  * the conditional write actually matched, letting the caller warn on a
  * conflict. With no `expect`, the write is unconditional as before.
+ *
+ * A SALE needs a name. `error: 'no_company'` (with `changed: false`) is the
+ * refusal: the console used to book an empty prompt as "Admin", and a stand
+ * sold to nobody is a booking nobody can invoice. A hold may stay nameless.
  */
 async function setStatus(boothNumber, status, { company = null, actor = null, expect = null,
                                                 holdExpiresAt = undefined } = {}) {
+  // Stored trimmed: "Acme " and "Acme" are one exhibitor, and a name of only
+  // spaces is no name.
+  if (typeof company === 'string') company = company.trim() || null;
   const before = await get(boothNumber);
   // A stand that has been taken off the plan cannot be booked, held or
   // released. It reads as missing, which is what every caller already handles.
   if (!before || before.removed === true) return null;
+  if (status === 'sold' && !company) return { before, after: before, changed: false, error: 'no_company' };
 
   const filter = { showId: config.showId, boothNumber };
   if (Array.isArray(expect) && expect.length) filter.status = { $in: expect };
@@ -139,11 +156,19 @@ async function setStatus(boothNumber, status, { company = null, actor = null, ex
   } else {
     $unset.holdExpiresAt = '';
   }
-  // Tags describe the exhibitor, so they cannot outlive them: re-booking a stand
-  // to a DIFFERENT company drops the previous one's categories rather than
-  // letting the new occupant inherit them. Re-stating the same company (a hold
-  // converting to a sale, say) keeps them.
-  if (status !== 'available' && (before.assignment?.company || null) !== (company || null)) {
+  // The whole deal describes the exhibitor it was agreed with, so none of it
+  // can outlive them: re-booking a stand to a DIFFERENT company drops the
+  // previous one's price, notes, contact, categories and country rather than
+  // letting the new occupant inherit them. Only the tags and country used to
+  // go, so Acme's €9,000 and Acme's notes turned up on Beta's booking the
+  // moment Beta took the stand Acme had been holding. Re-stating the same
+  // company (a hold converting to a sale, say) keeps all of it, and so does a
+  // placeholder hold acquiring its real name — that is the same deal.
+  const prior = before.assignment?.company || null;
+  if (status !== 'available' && isRealName(prior) && nameKey(prior) !== nameKey(company)) {
+    $set['assignment.actualPrice'] = null;
+    $set['assignment.notes'] = '';
+    $set['assignment.contactId'] = null;
     $set['assignment.tags'] = [];
     $set['assignment.country'] = null;
   }
@@ -161,9 +186,24 @@ async function setStatus(boothNumber, status, { company = null, actor = null, ex
   return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };
 }
 
-async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
+/**
+ * Write the price and notes of the deal on a booked stand.
+ *
+ * A field left OUT is left alone; `actualPrice: null` clears the price. That
+ * distinction is what lets a console send only what the admin actually edited.
+ *
+ * `expectCompany` is the exhibitor the editor was looking at when it opened.
+ * Given, the write refuses (`error: 'changed_hands'`) unless the stand is still
+ * theirs — and the write itself is conditional on it — so a price typed for
+ * Acme cannot land on the booking Beta made while the panel sat open.
+ */
+async function updateDeal(boothNumber, { actualPrice, notes, actor = null, expectCompany = undefined }) {
   const before = await get(boothNumber);
   if (!before) return null;
+  const holder = before.assignment?.company || null;
+  if (expectCompany !== undefined && nameKey(expectCompany) !== nameKey(holder)) {
+    return { before, after: before, changed: false, error: 'changed_hands' };
+  }
 
   const $set = { updatedAt: new Date(), updatedBy: actor };
   if (actualPrice !== undefined) {
@@ -188,10 +228,18 @@ async function updateDeal(boothNumber, { actualPrice, notes, actor = null }) {
   // Same reason as setStatus: agreeing a price or writing a note is a person
   // doing something to this booking, so the import's mark on it comes off and
   // the guard can no longer mistake it for artwork output.
-  const res = await col().updateOne(
-    { showId: config.showId, boothNumber, status: { $in: ['sold', 'held'] } },
-    { $set, $unset: { source: '' } }
-  );
+  const filter = { showId: config.showId, boothNumber, status: { $in: ['sold', 'held'] } };
+  if (expectCompany !== undefined) filter['assignment.company'] = holder;
+  const res = await col().updateOne(filter, { $set, $unset: { source: '' } });
+  if (!res.matchedCount && expectCompany !== undefined) {
+    // Lost to a change of hands between the read and the write, rather than
+    // to the stand going available: say which, so the console can tell the
+    // admin to reopen the stand instead of to book it.
+    const now = await get(boothNumber);
+    if (now && ['sold', 'held'].includes(now.status) && nameKey(now.assignment?.company) !== nameKey(holder)) {
+      return { before, after: now, changed: false, error: 'changed_hands' };
+    }
+  }
   return { before, after: await get(boothNumber), changed: res.matchedCount === 1 };
 }
 

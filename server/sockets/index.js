@@ -462,18 +462,23 @@ function register(io) {
     // from the browser console.
     socket.on('booth:book', requireAdmin(socket, 'booth:book', async ({ boothNumber, company }) => {
       const n = stand(boothNumber);
+      // A sale is to somebody. An empty prompt used to be booked as "Admin",
+      // which is a stand sold to nobody that nobody can invoice; the model
+      // refuses it too, this only says so in words.
+      const name = String(company ?? '').trim();
+      if (!name) return { ok: false, error: `Give the exhibitor's name to book Stand ${n}.` };
       // Clear any hold document first, but without flipping status to available.
       await holdsSvc.drop(n);
       // Only book from available/held — if another admin booked it in the
       // meantime the conditional write won't match, and we say so rather than
       // overwriting their exhibitor.
-      const r = await booths.setStatus(n, 'sold', { company, actor: socket.data.user, expect: ['available', 'held'] });
+      const r = await booths.setStatus(n, 'sold', { company: name, actor: socket.data.user, expect: ['available', 'held'] });
       if (!r) return { ok: false, error: `Stand ${n} not found.` };
       if (!r.changed) return { ok: false, error: `Stand ${n} is already taken — reload to see the latest.` };
       track({ type: 'booth.status_change', boothNumber: n, socket,
-              meta: { from: r.before.status, to: 'sold', company } });
+              meta: { from: r.before.status, to: 'sold', company: name } });
       await refresh(); broadcastState(io);
-      log(io, `✅ <strong>${escapeHtml(company)}</strong> booked Stand ${escapeHtml(n)}`, 'booking');
+      log(io, `✅ <strong>${escapeHtml(name)}</strong> booked Stand ${escapeHtml(n)}`, 'booking');
     }));
 
     socket.on('booth:hold', requireAdmin(socket, 'booth:hold', async ({ boothNumber, company, hours }) => {
@@ -567,17 +572,26 @@ function register(io) {
       log(io, `🔓 Stand ${escapeHtml(n)} released`, 'release');
     }));
 
-    socket.on('booth:update-deal', requireAdmin(socket, 'booth:update-deal', async ({ boothNumber, actualPrice, notes }) => {
+    // A field the console leaves OUT is left unchanged; `actualPrice: null`
+    // clears the price. `expectCompany` is who the stand belonged to when the
+    // panel was opened — given, the save is refused if it has changed hands.
+    socket.on('booth:update-deal', requireAdmin(socket, 'booth:update-deal', async ({ boothNumber, actualPrice, notes, expectCompany }) => {
       const n = stand(boothNumber);
-      const r = await booths.updateDeal(n, { actualPrice, notes, actor: socket.data.user });
+      const r = await booths.updateDeal(n, { actualPrice, notes, expectCompany, actor: socket.data.user });
       if (!r) return { ok: false, error: `Stand ${n} not found.` };
       if (r.error === 'bad_price') return { ok: false, error: 'Price must be a non-negative number.' };
+      if (r.error === 'changed_hands') {
+        return { ok: false, error: 'This stand has changed hands since you opened it — reopen it before saving.' };
+      }
       // The write is guarded to sold/held stands; `changed:false` means it didn't
       // match, so report it instead of falsely acking success (which left the UI
       // showing "saved" while the value reverted on the next broadcast).
       if (!r.changed) return { ok: false, error: `Stand ${n} must be sold or on hold to hold a price or notes.` };
+      const fromPrice = r.before.assignment?.actualPrice ?? null;
       track({ type: 'deal.update', boothNumber: n, socket, meta: {
-        fromPrice: r.before.assignment?.actualPrice ?? null, toPrice: actualPrice ?? null,
+        // An omitted price was not changed, so the trail must not record it as
+        // cleared.
+        fromPrice, toPrice: actualPrice === undefined ? fromPrice : (r.after?.assignment?.actualPrice ?? null),
         notesChanged: notes !== undefined && notes !== r.before.assignment?.notes,
       } });
       await refresh(); broadcastState(io);
@@ -592,6 +606,14 @@ function register(io) {
       const n = stand(boothNumber);
       const before = await booths.get(n);
       if (!before) return { ok: false, error: `Stand ${n} not found.` };
+      // Blank company on a status change used to wipe an existing exhibitor, so
+      // an empty field keeps the one already there. A SALE still has to end up
+      // naming somebody — see booth:book.
+      const name = String(company ?? '').trim();
+      const holder = name || (status === 'available' ? null : before.assignment?.company || null);
+      if (status === 'sold' && !holder) {
+        return { ok: false, error: `Give the exhibitor's name to mark Stand ${n} as sold.` };
+      }
 
       // Forcing a booked/held stand back to Available un-books it (destroys the
       // booking), so it takes EXACTLY the gate Release takes: the recovery key
@@ -614,14 +636,10 @@ function register(io) {
       // forceHold always writes a hold document, even when the stand is not
       // currently available. holdsSvc.create refuses in that case, which used to
       // leave the stand 'held' with no hold doc — reclaimed by the sweep in 60s.
-      if (status === 'held') await holdsSvc.forceHold(n, { company: company || 'Pending', actor: socket.data.user });
+      if (status === 'held') await holdsSvc.forceHold(n, { company: holder || 'Pending', actor: socket.data.user });
       else await holdsSvc.drop(n);
 
-      const r = await booths.setStatus(n, status, {
-        // Blank company on a status change used to wipe an existing exhibitor.
-        company: company || (status === 'available' ? null : before.assignment?.company || null),
-        actor: socket.data.user,
-      });
+      const r = await booths.setStatus(n, status, { company: holder, actor: socket.data.user });
       // Bare `return` here acked {ok:true} for a stand that no longer exists —
       // the very failure the comment above warns about.
       if (!r) return { ok: false, error: `Stand ${n} not found.` };
