@@ -888,16 +888,18 @@ function fetchRecos(sqm) {
     recosInflight[sqm] = fetch(`/sponsors/recommend?sqm=${encodeURIComponent(sqm)}`)
       .then(r => { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
       .then(d => (recosCache[sqm] = d.sponsors || []))
-      // On a transient failure return an empty list for THIS attempt but do NOT
-      // cache it — otherwise one network blip would leave that spend permanently
-      // showing "no options". The next open retries.
-      .catch(() => [])
+      // A failure is null, never an empty list, and is not cached. An empty
+      // list here used to be rendered as "No sponsorship options available" —
+      // a claim about the inventory made because of the network — and the
+      // panel then believed it was showing that spend's list, so nothing
+      // asked again. showSponsorRecos() says it failed and lets it be retried.
+      .catch(() => null)
       .finally(() => { delete recosInflight[sqm]; });
   }
   return recosInflight[sqm];
 }
 
-// Warm the cache silently — no UI change.
+// Warm the cache silently — no UI change, and a failure is simply not cached.
 function preloadSponsorRecos(sqm) { fetchRecos(sqm); }
 
 function updatePanelWidth() {
@@ -925,7 +927,26 @@ async function showSponsorRecos(sqm) {
   if (recosCache[sqm]) { renderSponsors(recosCache[sqm]); return; }
   box.innerHTML = '<div class="sponsor-recos-empty">Finding the best fit…</div>';
   const list = await fetchRecos(sqm);
-  if (token === sponsorShowToken) renderSponsors(list);
+  if (token !== sponsorShowToken) return;
+  if (list) { renderSponsors(list); return; }
+  // Not showing this spend's list after all, so the next stand opened or
+  // added asks again — and so does the button, without waiting for that.
+  if (shownRecoSqm === sqm) shownRecoSqm = null;
+  renderRecosFailed();
+}
+
+function renderRecosFailed() {
+  const box = document.getElementById('sponsor-recos');
+  box.replaceChildren();
+  const msg = document.createElement('div');
+  msg.className = 'sponsor-recos-empty';
+  msg.textContent = 'The sponsorship options could not be loaded just now.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'sponsor-recos-retry';
+  retry.textContent = 'Try again';
+  retry.onclick = () => { shownRecoSqm = null; syncSponsorPanel(); };
+  box.append(msg, retry);
 }
 
 function hideSponsors() {

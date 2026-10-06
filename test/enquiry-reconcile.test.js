@@ -19,6 +19,11 @@
  *
  * And one panel quirk: removing an area's chip while a STAND was open swapped
  * the panel over to that area, with the stand still ringed on the map.
+ *
+ * Last, the recommendations themselves. One failed fetch rendered "No
+ * sponsorship options available" — a claim about the inventory, not about the
+ * network — and since the page then believed it was already showing the list
+ * for that spend, nothing asked again until the shortlist's size changed.
  */
 const { start, openPage, artworkRects, stand, reporter, wait } = require('./floorplan-stub');
 
@@ -26,8 +31,9 @@ const { check, finish } = reporter();
 
 (async () => {
   let goldSoldOut = false;
+  let recosDown = false;
   const srv = await start({
-    recommend: (_req, res) => res.json({ sponsors: [
+    recommend: (_req, res) => recosDown ? res.status(503).json({}) : res.json({ sponsors: [
       { key: 'gold-lanyards', name: 'Gold Lanyards', tier: 'gold', soldOut: goldSoldOut },
       { key: 'wifi', name: 'Wi-Fi Sponsor', tier: 'silver', soldOut: false },
     ] }),
@@ -146,6 +152,39 @@ const { check, finish } = reporter();
   await page.click('#eq-again');
   await wait(150);
   check('starting another enquiry clears it', (await notice()) === '', await notice());
+
+  console.log('\nRecommendations that fail to load');
+  recosDown = true;
+  const fresh = await openPage(srv.browser, `${srv.base}/floorplan`);
+  const p2 = fresh.page;
+  await wait(1200);
+  await p2.evaluate(s => window.__fire('state:full', s), stands);
+  await wait(800);
+  const recos = () => p2.evaluate(() => document.getElementById('sponsor-recos').textContent.replace(/\s+/g, ' ').trim());
+  await p2.evaluate(() => { selectBooth('110'); toggleShortlist('110'); });
+  await wait(500);
+  let shown = await recos();
+  check('a failure says it failed', /could not be loaded/i.test(shown), shown);
+  check('rather than that there are none', !/No sponsorship options available/.test(shown), shown);
+  recosDown = false;
+  await p2.click('#sponsor-recos button');
+  await wait(500);
+  shown = await recos();
+  check('"Try again" brings them in', /Gold Lanyards/.test(shown), shown.slice(0, 80));
+
+  recosDown = true;
+  await p2.evaluate(() => { selectBooth('111'); toggleShortlist('111'); });
+  await wait(500);
+  shown = await recos();
+  check('a second failure says so too', /could not be loaded/i.test(shown), shown);
+  recosDown = false;
+  // No button this time: opening another stand is enough for the page to ask
+  // again, because it no longer believes it is showing that spend's list.
+  await p2.evaluate(() => selectBooth('112'));
+  await wait(500);
+  shown = await recos();
+  check('and the next open retries on its own', /Gold Lanyards/.test(shown), shown.slice(0, 80));
+  check('that page raised no errors either', fresh.errors.length === 0, fresh.errors.slice(0, 2).join(' | '));
 
   check('the page raised no errors', errors.length === 0, errors.slice(0, 2).join(' | '));
   await srv.close();
