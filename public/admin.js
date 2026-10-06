@@ -5003,12 +5003,22 @@ function planCard(row, isCurrent) {
   sch.hidden = !row.boothCount;
   sch.onclick = () => downloadSchedule(row, sch);
 
-  // Every plan this event has been given, and the way back to any of them.
+  // Every plan this event has been given, and the way back to any of them —
+  // offered whenever there IS one. It hid itself as soon as nothing was
+  // uploaded, which is exactly what Remove leaves behind; and Remove keeps the
+  // old plan as an earlier version precisely so it can be put back. The only
+  // way back went with it. The listing may say how many versions there are;
+  // where it does not, the event is asked.
   const ver = document.createElement('button');
   ver.type = 'button';
   ver.className = 'admin-btn';
   ver.textContent = 'Versions';
-  ver.hidden = !row.uploaded && !row.draft;
+  ver.hidden = typeof row.revisions === 'number' ? row.revisions === 0 : (!row.uploaded && !row.draft);
+  if (ver.hidden && typeof row.revisions !== 'number') {
+    api('/api/floorplan/revisions', { headers: { 'X-Show': row.slug } })
+      .then(list => { if (Array.isArray(list) && list.length) ver.hidden = false; })
+      .catch(() => { /* nothing to offer, as before */ });
+  }
   ver.onclick = () => openRevisions(row);
 
   actions.append(up, dl, imp, ver, col, sch, rm);

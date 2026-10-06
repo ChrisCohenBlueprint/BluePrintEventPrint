@@ -8,6 +8,8 @@
  *   - "Start from" an event suggested the next edition by adding one, even
  *     where that edition already existed: the suggestion was the event already
  *     on the page, and the add was refused.
+ *   - Remove on a Settings card kept the old plan as an earlier version "so it
+ *     can be put back", and took away Versions, the only way to put it back.
  */
 const { startConsole, seedStands, toasts, checker, launch } = require('./admin-console-harness');
 
@@ -127,6 +129,29 @@ const revisions = { lme: [{ revisionId: 'r-lme-1', label: 'LME27', status: 'supe
     const hint = await page.$eval('.plan-add-form .settings-hint', p => p.textContent);
     check('the card still says where the URL name is changed — which is now true', /Tools → Events/.test(hint), hint);
     await page.click('.plan-add-form [data-cancel]');
+
+    console.log('\nVersions after a plan has been removed');
+    await page.waitForTimeout(300);
+    const cards = await page.evaluate(() => [...document.querySelectorAll('.plan-card:not(.plan-add)')].map(c => ({
+      name: c.querySelector('.plan-name').textContent,
+      buttons: [...c.querySelectorAll('.plan-actions .admin-btn')].filter(b => !b.hidden).map(b => b.textContent),
+      retired: c.classList.contains('is-retired'),
+      note: c.querySelector('.plan-retired-note')?.textContent || '',
+      opacity: getComputedStyle(c).opacity,
+    })));
+    const lme = cards.find(c => /Middle East/.test(c.name));
+    const lea = cards.find(c => /Asia/.test(c.name));
+    check('an event whose plan was removed still offers Versions — the way to put it back', lme && lme.buttons.includes('Versions'),
+          lme && lme.buttons.join());
+    check('an event that has never had a plan still does not', lea && !lea.buttons.includes('Versions'), lea && lea.buttons.join());
+    await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.plan-card')].find(c => /Middle East/.test(c.querySelector('.plan-name')?.textContent || ''));
+      [...card.querySelectorAll('.plan-actions .admin-btn')].find(b => b.textContent === 'Versions').click();
+    });
+    await page.waitForSelector('#revisions-panel');
+    const rev = await page.$eval('#revisions-panel', p => p.textContent);
+    check('and Versions lists the removed plan with the way to make it live again', /LME27/.test(rev) && /Make live again/.test(rev), rev.slice(0, 160));
+    await page.click('#revisions-panel .admin-btn');
 
     console.log('\nMoving the event this console is showing');
     const p2 = await br.newPage({ viewport: { width: 1400, height: 900 } });
