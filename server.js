@@ -28,6 +28,7 @@ const booths       = require('./server/models/booths');
 const sponsors     = require('./server/models/sponsors');
 const holdsSvc     = require('./server/services/holds');
 const tracking   = require('./server/services/tracking');
+const inFlight   = require('./server/lib/in-flight');
 
 // Last-resort safety net: an unhandled promise rejection anywhere (a stray
 // un-awaited DB call in a timer, say) would otherwise terminate the process on
@@ -106,6 +107,14 @@ async function start() {
   // must be constrained — a wildcard origin with credentials is unsafe.
   const io = new Server(server, {
     cors: { origin: config.isProd ? (process.env.PUBLIC_ORIGIN || false) : true, credentials: true },
+    // Sponsor logos travel over the socket as data URIs, and the models accept
+    // up to 2,000,000 characters. Socket.IO's default ceiling is 1 MB, so a
+    // logo between the two never reached them: the admin's socket was dropped
+    // with "transport error" — no acknowledgement, no message, a console that
+    // just hung. 3 MB leaves room for the envelope and matches the JSON body
+    // limit below, so it is the models' own "too large" that answers. A
+    // visitor's socket is held to far less in sockets/index.js.
+    maxHttpBufferSize: 3e6,
   });
 
   app.set('trust proxy', 1);          // Render terminates TLS upstream
@@ -313,13 +322,15 @@ async function start() {
   // that had just been told to reload reconnected to a process that was gone.
   // Now: stop reporting healthy, close the socket layer so clients are told to
   // reconnect (and do so against the new instance), let the in-flight HTTP
-  // requests finish, then flush the analytics buffer and close the database.
-  // A hard deadline underneath it all, because a shutdown that hangs is worse
-  // than one that is slightly rude — Render will SIGKILL us anyway.
+  // requests and socket handlers finish, then flush the analytics buffer and
+  // close the database. A hard deadline underneath it all, because a shutdown
+  // that hangs is worse than one that is slightly rude — Render will SIGKILL us
+  // anyway.
   const shutdown = async (sig) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n${sig} — draining…`);
+    const began = Date.now();
 
     const deadline = setTimeout(() => {
       console.error('Shutdown took longer than 10s — exiting anyway.');
@@ -334,6 +345,13 @@ async function start() {
       // Already closed by io.close() in the normal case — this covers the case
       // where it was not, and never rejects.
       await new Promise((resolve) => server.close(() => resolve()));
+      // Closing a socket does not stop a handler it had already started. The
+      // database used to be closed right here regardless, cutting a multi-step
+      // write — hold-then-book, an enquiry and its history — in half on every
+      // deploy that landed mid-way through one. Wait for them, but only until
+      // two seconds before the deadline, which the flush and close still need.
+      const settled = await inFlight.drain(Math.max(0, 8_000 - (Date.now() - began)));
+      if (!settled) console.error(`${inFlight.count()} socket handler(s) still running — closing anyway.`);
       await tracking.flush();
       await db.close();
       console.log('Closed cleanly.');
