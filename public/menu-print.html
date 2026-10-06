@@ -21,7 +21,7 @@
   <!-- Screen-only control bar. Hidden by the print stylesheet so it never
        appears in the PDF the client receives. -->
   <div class="toolbar no-print">
-    <a href="/sales" class="tb-btn">← Back to dashboard</a>
+    <a href="/sales" class="tb-btn" id="tb-back">← Back to dashboard</a>
     <div class="tb-note" id="tb-note">Use “Save as PDF” as the destination in the print dialog.</div>
     <button class="tb-btn primary" id="tb-print">Save as PDF</button>
   </div>
@@ -82,7 +82,7 @@
     </section>
 
     <section class="totals" id="totals" hidden>
-      <span>Total</span>
+      <span id="total-label">Total</span>
       <strong id="total-value">—</strong>
     </section>
 

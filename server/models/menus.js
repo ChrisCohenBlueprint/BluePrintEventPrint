@@ -54,15 +54,31 @@ const cleanKeys = (v) => Array.isArray(v)
   ? uniq(v.map(k => String(k || '').trim()).filter(k => KEY_RE.test(k))).slice(0, 60)
   : [];
 
+/**
+ * A bespoke line's price, or null for "on application".
+ *
+ * An empty price box means the rep has not put a number on it, and it must
+ * print as "On application". It used to be tested as Number(price), and
+ * Number(null) and Number('') are both 0 — which passes every check a real
+ * price does — so an empty box was stored as 0 and the client's copy offered
+ * the item free. Only a number, or a string that actually holds one, is a
+ * price. An unparseable or negative one is dropped rather than stored as NaN,
+ * which would corrupt the proposal total.
+ */
+function linePrice(v) {
+  if (typeof v === 'string') { if (!v.trim()) return null; }
+  else if (typeof v !== 'number') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 function cleanCustom(v) {
   if (!Array.isArray(v)) return [];
   return v
     .map(it => ({
       title:  str(it?.title, 120),
       detail: str(it?.detail, 400),
-      // An unparseable or negative price is dropped rather than stored as NaN,
-      // which would corrupt the proposal total.
-      price:  Number.isFinite(Number(it?.price)) && Number(it?.price) >= 0 ? Number(it.price) : null,
+      price:  linePrice(it?.price),
     }))
     .filter(it => it.title)
     .slice(0, 25);

@@ -224,6 +224,12 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
       users.findByUsername(menu.owner),
     ]);
 
+    // Every price this document prints, in the whole units it prints them in.
+    // The page shows money to the nearest unit, and the total used to add up
+    // the UNROUNDED figures — so two lines reading €100 could sit above a total
+    // of €201. Rounded once, here, the lines and the total are the same numbers.
+    const priced = (v) => (withPrices ? (v == null ? null : Math.round(Number(v))) : undefined);
+
     const sponsorById = new Map(allSponsors.map(s => [s.key, s]));
     const boothById   = new Map(allBooths.map(b => [b.boothNumber, b]));
 
@@ -236,7 +242,7 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
         // Withdrawn (inactive) counts as unavailable too, not just sold out.
         unavailable: s.soldOut === true || s.active === false,
         soldOut: s.soldOut === true,
-        price: withPrices ? (s.price ?? null) : undefined,
+        price: priced(s.price),
       };
     });
 
@@ -249,7 +255,7 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
         sqm: b.sqm,
         status: b.status,
         unavailable: b.status !== 'available',
-        price: withPrices ? (b.listPrice ?? null) : undefined,
+        price: priced(b.listPrice),
       };
     });
 
@@ -294,16 +300,29 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
 
     const custom = (menu.custom || []).map(c => ({
       title: c.title, detail: c.detail,
-      price: withPrices ? (c.price ?? null) : undefined,
+      price: priced(c.price),
     }));
 
-    // Only meaningful when prices are shown, and only over what the client can
-    // actually still buy — totalling a withdrawn package would overstate the quote.
-    const total = withPrices
-      ? [...sponsorItems, ...boothItems, ...custom]
-          .filter(i => !i.unavailable)
-          .reduce((sum, i) => sum + (Number(i.price) || 0), 0)
+    /**
+     * The total, and what it leaves out.
+     *
+     * Only meaningful when prices are shown, and only over what the client can
+     * actually still buy — totalling a withdrawn package would overstate the
+     * quote.
+     *
+     * An item on application has NO price, and it used to be added as 0: a
+     * priced stand with a package on application printed the stand alone as
+     * "Total", and a proposal where nothing was priced printed "Total €0". So
+     * the total covers the priced items only, `totalExcludes` counts the ones
+     * it leaves out so the page can say so, and with nothing priced there is no
+     * total at all.
+     */
+    const live = [...sponsorItems, ...boothItems, ...custom].filter(i => !i.unavailable);
+    const withPrice = live.filter(i => i.price != null && Number.isFinite(i.price));
+    const total = withPrices && withPrice.length
+      ? withPrice.reduce((sum, i) => sum + i.price, 0)
       : null;
+    const totalExcludes = withPrices ? live.length - withPrice.length : 0;
 
     // The show's own unit and currency — this proposal is printed for a client,
     // so it must not say "€" and "m²" on a North America deal.
@@ -324,6 +343,7 @@ router.get('/api/sales/menus/:id/print', async (req, res, next) => {
       plan,
       custom,
       total,
+      totalExcludes,
       createdAt: menu.createdAt,
       updatedAt: menu.updatedAt,
     });

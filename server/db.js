@@ -4,7 +4,20 @@ const config = require('./config');
 let client;
 let db;
 
-async function connect() {
+/**
+ * Open the connection — and, for the server, make the indexes what this
+ * codebase expects.
+ *
+ * `indexes: false` connects and does nothing else, and is what every script
+ * in scripts/ passes. Index work is not read-only: it drops a superseded index
+ * and sets the activity TTL from THIS process's ACTIVITY_RETENTION_DAYS. Run
+ * from a laptop as a side effect of a script's "dry run", against the live
+ * cluster, with a different value in the laptop's .env, it changed the live
+ * retention — and a shorter one has Mongo delete audit and lead history. Only
+ * the server's own boot, which runs with the deployment's configuration, gets
+ * to decide what the indexes are.
+ */
+async function connect({ indexes = true } = {}) {
   if (db) return db;
 
   client = new MongoClient(config.mongoUri, {
@@ -16,7 +29,7 @@ async function connect() {
   db = client.db(config.dbName);
   console.log(`✅ MongoDB connected — ${config.dbName}`);
 
-  await ensureIndexes();
+  if (indexes) await ensureIndexes();
   return db;
 }
 

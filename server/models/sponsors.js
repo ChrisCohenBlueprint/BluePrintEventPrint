@@ -148,11 +148,30 @@ async function mintKey(name, taken = null) {
 const KEY_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 /**
+ * What the CSV export writes in place of a logo stored inline.
+ *
+ * An uploaded logo is a data URI of up to ~2,000,000 characters. Written into
+ * the export, one of them pushed the file past the import's own size limit,
+ * so the documented round trip failed the moment anyone uploaded a logo — and
+ * Excel cuts any cell at 32,767 characters, so a file that had been opened in
+ * it came back with a corrupt image. The file says the logo is there instead,
+ * and the import leaves the stored one alone when it reads this (or an empty
+ * cell). Plain ASCII, so a spreadsheet saving in a legacy encoding cannot
+ * mangle it into something that no longer matches.
+ */
+const IMAGE_KEPT = '(uploaded image - leave as is)';
+const isImageKept = (v) => /^\(uploaded image\b/i.test(String(v == null ? '' : v).trim());
+
+/**
  * Coerce a loose record (a form body, or a CSV row) into a storable sponsor.
  * Returns { ok, fields } or { ok:false, error } — never a half-valid object.
  *
  * `partial` mode writes only the keys actually supplied, which is what an edit
- * needs; a create fills in the defaults.
+ * needs; a create fills in the defaults. In partial mode an EMPTY tier, active,
+ * sold-out or image cell is not supplied either: the defaults those fall back
+ * to (silver, on sale, no logo) are right for a new package and wrong for an
+ * existing one, where they quietly demoted a platinum package, put a sold-out
+ * one back on sale and deleted its logo.
  */
 function cleanSponsor(raw = {}, { partial = false } = {}) {
   // Read fields through the SAME normalisation the CSV header parser applies —
@@ -167,13 +186,15 @@ function cleanSponsor(raw = {}, { partial = false } = {}) {
   const f = {};
   const has = (k) => input[norm(k)] !== undefined && input[norm(k)] !== null;
   const get = (k) => input[norm(k)];
+  // Supplied AND not blank — for the fields where a blank means "leave it".
+  const given = (k) => has(k) && String(get(k)).trim() !== '';
 
   if (has('name') || !partial) {
     const name = str(get('name'), 120);
     if (!name) return { ok: false, error: 'Every package needs a name.' };
     f.name = name;
   }
-  if (has('tier') || !partial) {
+  if (given('tier') || !partial) {
     const t = str(get('tier'), 20).toLowerCase();
     if (t && !TIERS.includes(t)) return { ok: false, error: `Tier must be one of ${TIERS.join(', ')} (got "${t}").` };
     f.tier = t || 'silver';
@@ -198,7 +219,8 @@ function cleanSponsor(raw = {}, { partial = false } = {}) {
       ? raw.map(x => str(x, 200)).filter(Boolean).slice(0, 30)
       : str(raw, 4000).split(/\s*[|;\n]\s*/).map(x => x.trim()).filter(Boolean).slice(0, 30);
   }
-  if (has('image') || !partial) {
+  // An empty cell or the export's own marker means "the logo stays as it is".
+  if (given('image') && !isImageKept(get('image'))) {
     // Measure the RAW value: str() slices to the limit first, so comparing the
     // sliced length could never exceed it and the check was dead — an oversized
     // data URI was silently truncated and stored as a corrupt image that renders
@@ -207,22 +229,39 @@ function cleanSponsor(raw = {}, { partial = false } = {}) {
     if (typeof rawImage === 'string' && rawImage.length > MAX_IMAGE) {
       return { ok: false, error: 'That image is too large to store. Please use one under ~1.5 MB.' };
     }
-    f.image = safeImage(rawImage);
+    // Refused rather than stored as no logo: something unusable in the cell
+    // must not be how a package loses the logo it has.
+    const image = safeImage(rawImage);
+    if (!image) return { ok: false, error: `Image must be a web address (https://…) or a path starting with / (got "${str(rawImage, 40)}").` };
+    f.image = image;
+  } else if (!partial) {
+    f.image = '';
   }
   if (has('video') || !partial) f.video = safeLink(get('video'));
 
-  // Accepts what a spreadsheet produces: TRUE/FALSE, yes/no, 1/0, y/n.
+  // Accepts what a spreadsheet produces: TRUE/FALSE, yes/no, 1/0, y/n. Anything
+  // else is refused rather than read as the default — "sold" in a sold-out
+  // column falling back to false would put the package back on sale.
   const bool = (v, dflt) => {
     const t = str(v, 10).toLowerCase();
     if (t === '') return dflt;
     if (['true', 'yes', 'y', '1'].includes(t)) return true;
     if (['false', 'no', 'n', '0'].includes(t)) return false;
-    return dflt;
+    return null;
   };
-  if (has('active')  || !partial) f.active  = bool(get('active'), true);
-  if (has('soldOut') || !partial) f.soldOut = bool(get('soldOut'), false);
+  if (given('active') || !partial) {
+    f.active = bool(get('active'), true);
+    if (f.active === null) return { ok: false, error: `Active must be yes or no (got "${str(get('active'), 20)}").` };
+  }
+  if (given('soldOut') || !partial) {
+    f.soldOut = bool(get('soldOut'), false);
+    if (f.soldOut === null) return { ok: false, error: `Sold out must be yes or no (got "${str(get('soldOut'), 20)}").` };
+  }
   // Same rule the editor enforces: sold out and on offer are mutually exclusive.
   if (f.soldOut === true) f.active = false;
+  // And the other way: putting a package on offer clears sold-out, or a file
+  // that only says `active` would leave one both on sale and sold out.
+  if (partial && f.active === true && !('soldOut' in f)) f.soldOut = false;
 
   return { ok: true, fields: f };
 }
@@ -275,16 +314,71 @@ async function remove(key) {
 }
 
 /**
+ * What an update to an existing package would actually change.
+ *
+ * The dry run used to report every matched row as "Update", whatever it did —
+ * a one-row file that demoted a platinum package, blanked its blurb and put a
+ * sold-out package back on sale read exactly like one that fixed a typo, so
+ * the confirmation the admin is shown could not tell them anything. Each
+ * update now carries its changes, field by field, and a row that changes
+ * nothing is reported as unchanged and not written at all.
+ */
+const FIELD_LABEL = { name: 'name', tier: 'tier', price: 'price', availability: 'availability',
+                      blurb: 'description', perks: 'perks', image: 'image', video: 'video',
+                      active: 'on offer', soldOut: 'sold out' };
+// A logo stored inline is up to 2 MB; the report names it rather than echoing it.
+const shownImage = (v) => (/^data:/i.test(String(v || '')) ? '(uploaded image)' : (v || ''));
+
+function changesFrom(current, fields) {
+  const now = { ...current, active: current.active !== false, soldOut: current.soldOut === true };
+  const out = [];
+  for (const [field, to] of Object.entries(fields)) {
+    if (field === 'perks') {
+      const from = Array.isArray(now.perks) ? now.perks : [];
+      if (JSON.stringify(from) !== JSON.stringify(to || [])) out.push({ field, from, to });
+      continue;
+    }
+    const from = now[field] ?? (field === 'price' ? null : '');
+    if (from === to) continue;
+    out.push(field === 'image' ? { field, from: shownImage(from), to: shownImage(to) } : { field, from, to });
+  }
+  return out;
+}
+
+/** One line a person can read: "tier platinum → silver; price 45,000 → 42,500". */
+function describeChanges(changes) {
+  const fmt = (field, v) => {
+    if (field === 'price') return v == null ? 'on application' : Number(v).toLocaleString('en-GB');
+    if (typeof v === 'boolean') return v ? 'yes' : 'no';
+    if (Array.isArray(v)) return v.length ? v.join(' | ') : '(none)';
+    const t = String(v == null ? '' : v);
+    if (!t) return '(blank)';
+    return t.length > 60 ? `${t.slice(0, 57)}…` : t;
+  };
+  return changes.map(c => `${FIELD_LABEL[c.field] || c.field} ${fmt(c.field, c.from)} → ${fmt(c.field, c.to)}`).join('; ');
+}
+
+/**
  * Bulk create/update from parsed CSV rows, matched on `key` — or, when a row has
  * no key, on an exact (case-insensitive) name match against the existing
  * catalogue, so a spreadsheet edited without the key column updates rather than
  * duplicating.
+ *
+ * An existing package takes ONLY the columns the file has. Every row used to
+ * be cleaned as a whole new package, so the columns a file left out arrived
+ * as defaults: `Name,Price` with one row made a platinum package silver,
+ * blanked its availability, blurb, perks and logo, and put a sold-out package
+ * back on sale. A new package is still built whole, with the defaults.
  *
  * `removeMissing` additionally deletes anything the file does not mention, which
  * makes the spreadsheet the whole truth. It is off unless asked for.
  *
  * `dryRun` reports exactly what would happen and writes nothing — the admin
  * shows that summary for confirmation before anything is committed.
+ *
+ * `soldOutChanges` lists every package whose sold-out state this import moves
+ * (or creates sold out), so the caller can carry it onto the plan areas that
+ * package sells — the same cascade the editor's sold-out toggle runs.
  */
 async function importRows(rows, { removeMissing = false, dryRun = false } = {}) {
   const existing = await all();
@@ -300,18 +394,24 @@ async function importRows(rows, { removeMissing = false, dryRun = false } = {}) 
   const plans = [];
   for (const row of rows || []) {
     const line = row.__line;
-    const clean = cleanSponsor(row, { partial: false });
-    if (!clean.ok) { errors.push({ line, error: clean.error }); continue; }
 
     let key = str(row.key, 64).toLowerCase();
     if (key && !KEY_RE.test(key)) { errors.push({ line, error: `"${key}" is not a valid key.` }); continue; }
     if (!key) {
-      const match = byName.get(clean.fields.name.toLowerCase());
-      key = match ? match.key : await mintKey(clean.fields.name, mintedSoFar);
+      const match = byName.get(str(row.name, 120).toLowerCase());
+      if (match) key = match.key;
+    }
+    const current = key ? byKey.get(key) || null : null;
+
+    const clean = cleanSponsor(row, { partial: !!current });
+    if (!clean.ok) { errors.push({ line, error: clean.error }); continue; }
+
+    if (!key) {
+      key = await mintKey(clean.fields.name, mintedSoFar);
       if (!key) { errors.push({ line, error: 'Could not generate a key.' }); continue; }
     }
     mintedSoFar.add(key);
-    plans.push({ line, key, fields: clean.fields, isNew: !byKey.has(key) });
+    plans.push({ line, key, current, fields: clean.fields, name: clean.fields.name ?? current.name });
   }
 
   // ── Pass 2: validate the state the file DESCRIBES, not the order it is in ──
@@ -326,7 +426,7 @@ async function importRows(rows, { removeMissing = false, dryRun = false } = {}) 
   const fileKeys = new Set(plans.map(p => p.key));
   const nameCount = new Map();
   plans.forEach(p => {
-    const n = p.fields.name.toLowerCase();
+    const n = p.name.toLowerCase();
     nameCount.set(n, (nameCount.get(n) || 0) + 1);
   });
 
@@ -336,23 +436,34 @@ async function importRows(rows, { removeMissing = false, dryRun = false } = {}) 
       errors.push({ line: p.line, error: `"${p.key}" appears more than once in this file.` });
       continue;
     }
-    const lower = p.fields.name.toLowerCase();
+    const lower = p.name.toLowerCase();
     if (nameCount.get(lower) > 1) {
-      errors.push({ line: p.line, error: `The name "${p.fields.name}" is used by more than one row.` });
+      errors.push({ line: p.line, error: `The name "${p.name}" is used by more than one row.` });
       continue;
     }
     // A collision only matters against a package this file is NOT rewriting —
     // one it leaves untouched keeps its name, so the two would end up equal.
     const owner = byName.get(lower);
     if (owner && owner.key !== p.key && !fileKeys.has(owner.key)) {
-      errors.push({ line: p.line, error: `"${p.fields.name}" is already used by "${owner.key}".` });
+      errors.push({ line: p.line, error: `"${p.name}" is already used by "${owner.key}".` });
       continue;
     }
+    if (p.current) p.changes = changesFrom(p.current, p.fields);
     accepted.push(p);
   }
 
-  const created = accepted.filter(p => p.isNew).map(p => ({ key: p.key, name: p.fields.name }));
-  const updated = accepted.filter(p => !p.isNew).map(p => ({ key: p.key, name: p.fields.name }));
+  const creating = accepted.filter(p => !p.current);
+  const updating = accepted.filter(p => p.current && p.changes.length);
+  const created = creating.map(p => ({ key: p.key, name: p.name }));
+  const updated = updating.map(p => ({ key: p.key, name: p.name, changes: p.changes,
+                                       detail: describeChanges(p.changes) }));
+  const unchanged = accepted.filter(p => p.current && !p.changes.length).map(p => ({ key: p.key, name: p.name }));
+
+  const soldOutChanges = [
+    ...creating.filter(p => p.fields.soldOut === true).map(p => ({ key: p.key, soldOut: true })),
+    ...updating.filter(p => p.changes.some(c => c.field === 'soldOut'))
+               .map(p => ({ key: p.key, soldOut: p.fields.soldOut === true })),
+  ];
 
   // Removal treats the file as the complete truth, which it demonstrably is not
   // if any row failed to parse: a single mistyped cell would otherwise delete the
@@ -365,7 +476,8 @@ async function importRows(rows, { removeMissing = false, dryRun = false } = {}) 
     ? existing.filter(s => !touched.has(s.key)).map(s => ({ key: s.key, name: s.name }))
     : [];
 
-  if (dryRun) return { ok: true, dryRun, created, updated, removed, errors, removalsBlocked };
+  const report = { ok: true, dryRun, created, updated, unchanged, removed, errors, removalsBlocked, soldOutChanges };
+  if (dryRun) return report;
 
   // ── Apply ────────────────────────────────────────────────────────────────
   // Removals go FIRST: a file that renames A to B's old name while dropping B is
@@ -373,15 +485,16 @@ async function importRows(rows, { removeMissing = false, dryRun = false } = {}) 
   if (removed.length) {
     await col().deleteMany({ showId: config.showId, key: { $in: removed.map(r => r.key) } });
   }
-  for (const p of accepted) {
-    if (p.isNew) {
-      await col().insertOne({ showId: config.showId, key: p.key, ...p.fields, createdAt: new Date(), updatedAt: new Date() });
-    } else {
-      await col().updateOne({ showId: config.showId, key: p.key }, { $set: { ...p.fields, updatedAt: new Date() } });
-    }
+  for (const p of creating) {
+    await col().insertOne({ showId: config.showId, key: p.key, ...p.fields, createdAt: new Date(), updatedAt: new Date() });
+  }
+  // Only what changed is written; an unchanged row is not touched at all.
+  for (const p of updating) {
+    const $set = Object.fromEntries(p.changes.map(c => [c.field, p.fields[c.field]]));
+    await col().updateOne({ showId: config.showId, key: p.key }, { $set: { ...$set, updatedAt: new Date() } });
   }
 
-  return { ok: true, dryRun, created, updated, removed, errors, removalsBlocked };
+  return report;
 }
 
 // ─── CSV shape ────────────────────────────────────────────────────────────────
@@ -396,7 +509,10 @@ async function toCsvRows() {
   rows.sort((a, b) => (TIER_RANK[a.tier] ?? 9) - (TIER_RANK[b.tier] ?? 9) || (b.price || 0) - (a.price || 0));
   return rows.map(s => [
     s.key, s.name, s.tier, s.price ?? '', s.availability ?? '', s.blurb ?? '',
-    (s.perks || []).join(' | '), s.image ?? '', s.video ?? '',
+    (s.perks || []).join(' | '),
+    // A logo stored inline is named, not written out — see IMAGE_KEPT.
+    /^data:/i.test(String(s.image || '')) ? IMAGE_KEPT : (s.image ?? ''),
+    s.video ?? '',
     s.active === false ? 'false' : 'true', s.soldOut === true ? 'true' : 'false',
   ]);
 }
@@ -464,5 +580,5 @@ async function setFloorplanSponsor({ name, color } = {}) {
 }
 
 module.exports = { col, ensureIndexes, all, allActive, toPublic, recommend, setFields,
-                   cleanSponsor, create, remove, importRows, toCsvRows, CSV_HEADERS, TIERS,
+                   cleanSponsor, create, remove, importRows, toCsvRows, CSV_HEADERS, TIERS, IMAGE_KEPT,
                    getFloorplanSponsor, setFloorplanSponsor };

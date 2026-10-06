@@ -1,19 +1,37 @@
 #!/usr/bin/env node
 /**
- * Seed the sponsorship catalogue from the LEX26 sponsorship menu.
+ * Seed an event's sponsorship catalogue from the LEX26 sponsorship menu.
  *
  * Prices live here (server side) and are served only to the admin. The public
  * floorplan receives a price-free projection — sales walk the buyer through
  * cost, so the buyer never sees it in the enquiry flow.
  *
- * `image` and `video` are left blank for Blueprint to fill: drop a file into
- * public/sponsors/ and set the path, or paste an external URL. Re-running this
- * script preserves any media and availability you have edited in admin.
+ * `image` and `video` are left blank for Blueprint to fill in the admin.
  *
- *   node scripts/seed-sponsors.js
+ * It used to write on every run, to the default event only, and every run
+ * $set the name, tier, blurb and perks of every package in this file —
+ * quietly reverting whatever the admin or a CSV import had changed since —
+ * and re-created every package someone had deleted. It also created its own
+ * unnamed unique index, which clashes with the server's `show_sponsor_unique`
+ * on any database the server has booted against. Now:
+ *
+ *   - it is a dry run until --apply, and --show picks the event;
+ *   - on an event with NO catalogue it adds this one;
+ *   - on an event that has one, it changes nothing by default. A package in
+ *     this file that the event lacks may have been deleted on purpose, so it
+ *     is only added with --add-missing; an existing package is only reset to
+ *     this file's name, tier, description and perks with --overwrite. Price,
+ *     availability, media and sold-out state are never overwritten;
+ *   - it creates no index. The server creates the one it relies on at boot.
+ *
+ *   node scripts/seed-sponsors.js                        what it would do
+ *   node scripts/seed-sponsors.js --show lna --apply     seed a named event
+ *   --add-missing                                        also add packages this event lacks
+ *   --overwrite                                          also reset existing packages' wording to this file
  */
-const { connect, getDb, close } = require('../server/db');
-const config = require('../server/config');
+const { begin, end, close, has } = require('./lib/run');
+const showContext = require('../server/show-context');
+const sponsors = require('../server/models/sponsors');
 
 // tier drives the card colour on the public plan; price drives the ranking and
 // is admin-only. perks are the buyer-facing bullet points.
@@ -73,38 +91,66 @@ const CATALOGUE = [
     perks: ['Branding in the Speakers’ Lounge', 'Offer goodie bags to every speaker', '5 VIP passes'] },
 ];
 
+const WORDING = ['name', 'tier', 'blurb', 'perks'];
+const sameWording = (a, b) => WORDING.every(k => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null));
+
 async function main() {
-  await connect();
-  const db = getDb();
-  const col = db.collection('sponsors');
-  await col.createIndex({ showId: 1, key: 1 }, { unique: true });
+  const { apply, showId, db } = await begin('Seed the sponsorship catalogue');
+  const addMissing = has('--add-missing');
+  const overwrite  = has('--overwrite');
 
-  let inserted = 0, updated = 0;
-  for (const s of CATALOGUE) {
-    const res = await col.updateOne(
-      { showId: config.showId, key: s.key },
-      { // Descriptive catalogue fields are refreshed from this file on every
-        // run. PRICE is admin-negotiated commercial data (edited via the admin
-        // and used to rank recommendations), so it is seeded only on insert and
-        // NEVER overwritten — otherwise re-running this script would silently
-        // revert every negotiated price to the catalogue default.
-        $set: { name: s.name, tier: s.tier, blurb: s.blurb, perks: s.perks },
-        $setOnInsert: {
-          showId: config.showId, key: s.key,
-          price: s.price,
-          availability: s.availability, active: true,
-          image: '', video: '',
-          createdAt: new Date(),
-        } },
-      { upsert: true }
-    );
-    if (res.upsertedCount) inserted++; else if (res.modifiedCount) updated++;
-  }
+  await showContext.runAs(showId, async () => {
+    const existing = await sponsors.all();
+    const byKey = new Map(existing.map(s => [s.key, s]));
+    const names = new Map(existing.map(s => [String(s.name || '').trim().toLowerCase(), s.key]));
+    const empty = existing.length === 0;
 
-  const total = await col.countDocuments({ showId: config.showId });
-  console.log(`✅ Sponsors — ${inserted} inserted, ${updated} updated (${total} total)`);
-  console.log('   Prices are admin-only. Add photos/videos per sponsor in admin or by');
-  console.log('   dropping files into public/sponsors/ and setting image/video paths.');
+    const missing = CATALOGUE.filter(s => !byKey.has(s.key));
+    // Names are unique within an event (a CSV without keys matches on them),
+    // so a missing package whose name another package already has is skipped.
+    const clash = missing.filter(s => names.has(s.name.toLowerCase()));
+    const adding = (empty || addMissing) ? missing.filter(s => !clash.includes(s)) : [];
+    const resetting = overwrite
+      ? CATALOGUE.filter(s => byKey.has(s.key) && !sameWording(byKey.get(s.key), s))
+      : [];
+
+    console.log(`  ${existing.length} package(s) in this event's catalogue, ${CATALOGUE.length} in this file`);
+    console.log(`  ${adding.length} to add${adding.length ? `: ${adding.map(s => s.key).join(', ')}` : ''}`);
+    if (!empty && !addMissing && missing.length) {
+      console.log(`  ${missing.length} in this file but not in the event, NOT added — they may have been deleted on purpose:`);
+      console.log(`    ${missing.map(s => s.key).join(', ')}`);
+      console.log('    (--add-missing adds them)');
+    }
+    for (const s of clash) console.log(`  skipped ${s.key}: the name "${s.name}" is already used by "${names.get(s.name.toLowerCase())}"`);
+    if (overwrite) {
+      console.log(`  ${resetting.length} existing package(s) to reset to this file's name, tier, description and perks`);
+      for (const s of resetting) {
+        const cur = byKey.get(s.key);
+        console.log(`    ${s.key.padEnd(22)} "${cur.name}" (${cur.tier}) → "${s.name}" (${s.tier})`);
+      }
+    } else {
+      const differ = CATALOGUE.filter(s => byKey.has(s.key) && !sameWording(byKey.get(s.key), s)).length;
+      if (differ) console.log(`  ${differ} existing package(s) differ from this file and are left as edited (--overwrite resets them)`);
+    }
+
+    if (!apply) { end(false); return; }
+
+    let added = 0;
+    for (const s of adding) {
+      // Through the model, so a seeded package is validated exactly as one
+      // added in the admin, and a key that appeared meanwhile is refused.
+      const r = await sponsors.create({ ...s, active: true, soldOut: false });
+      if (r.ok) added++;
+      else console.log(`  not added ${s.key}: ${r.error}`);
+    }
+    for (const s of resetting) {
+      await db.collection('sponsors').updateOne({ showId, key: s.key },
+        { $set: { name: s.name, tier: s.tier, blurb: s.blurb, perks: s.perks, updatedAt: new Date() } });
+    }
+    console.log(`\n  ${added} added, ${resetting.length} reset`);
+    end(true);
+  });
+
   await close();
 }
 

@@ -26,14 +26,7 @@ name from the roster dropdown (sourced from `server/data/sales-team.js`)
 prefills the username, display name and email. The display name and email sign
 that rep's proposals.
 
-**From the CLI** — one login per roster name, in one go:
-
-```bash
-node scripts/admin-account.js seed-sales
-```
-
-It prints a username, temporary password and one-time invite code per rep. It is
-idempotent: existing accounts are skipped, not reset. Other commands:
+**From the CLI** — one rep at a time:
 
 ```bash
 node scripts/admin-account.js create <user> <pass> sales   # single rep
@@ -41,8 +34,8 @@ node scripts/admin-account.js role <user> admin|sales      # move between tiers
 node scripts/admin-account.js list
 ```
 
-The temporary password and the invite code must be shared **out of band and
-separately** — the invite code is what stops an intercepted password alone from
+The temporary password and the invite code the console issues must be shared
+**out of band and separately** — the invite code is what stops an intercepted password alone from
 claiming the account. Both are entered on the rep's first sign-in only, before
 they set up their authenticator app. Changing an account's role or password
 revokes any live session for it immediately (`tokenVersion` is bumped).
@@ -58,16 +51,20 @@ flagged to the rep before they send. Proposals carry a per-show reference
 
 ### Producing the PDF
 
-The rep opens **Save as PDF** on a proposal, which loads the print view and calls
-the browser's print dialog; they choose *Save as PDF* as the destination and
+The rep opens **Save as PDF** on a proposal, which loads the print view
+(`/sales/<event>/menu/<id>/print`) and calls the browser's print dialog; they choose *Save as PDF* as the destination and
 email the file. The print page sits behind the same login as the rest of
 `/sales` — the client receives the file, never a link, and nothing is published
 to a public URL.
 
 **Prices are off by default.** The client-facing document is price-free, matching
 the public floorplan, so sales can walk the buyer through cost in conversation.
-A rep can tick *Show prices* per proposal when they want the numbers in writing;
-the total then covers only items still available.
+A rep can tick *Show prices* per proposal when they want the numbers in writing.
+The total then covers only items still available and actually priced: anything
+on application (a package with no price, or a bespoke line whose price box was
+left empty) prints as "On application", and the total says how many items it
+leaves out. With nothing priced there is no total at all. Lines and total are
+both in whole units, so the total is always the sum of the lines as printed.
 
 ## Files
 

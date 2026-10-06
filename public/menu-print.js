@@ -34,8 +34,26 @@
   const longDate = (d) => new Date(d).toLocaleDateString('en-GB',
     { day: 'numeric', month: 'long', year: 'numeric' });
 
-  // The proposal id is the last path segment of /sales/menu/:id/print.
-  const id = location.pathname.split('/').filter(Boolean)[2] || '';
+  // The proposal id is the segment between "menu" and "print". The page is
+  // served at two shapes — /sales/menu/:id/print and, from the dashboard,
+  // /sales/:show/menu/:id/print — and this used to read the third segment,
+  // which on the second shape is the word "menu". Every proposal the dashboard
+  // opened therefore asked for proposal "menu" and printed "Proposal not
+  // found." Anchoring on the words around the id reads both shapes alike.
+  const id = (() => {
+    const m = /\/menu\/([^/]+)\/print\/?$/.exec(location.pathname);
+    if (!m) return '';
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+  })();
+
+  // Back to the dashboard for THIS proposal's event. The link was a bare
+  // "/sales", which is the default event — a rep printing a North America
+  // proposal was dropped into Europe's dashboard. The page is served with its
+  // event injected (the same one every request here is scoped to, so the same
+  // one the proposal was found in), and the link is set before anything loads
+  // so it is right even when the proposal is not.
+  const slug = (window.__SHOW && window.__SHOW.slug) || '';
+  if (slug) $('tb-back').href = `/sales/${encodeURIComponent(slug)}`;
 
   function fail(msg) {
     $('load-state').textContent = msg;
@@ -281,7 +299,15 @@
     renderBooths(d.booths || [], d.showPrices);
     renderCustom(d.custom || [], d.showPrices);
 
+    // No total when nothing is priced — each line already says "On
+    // application", and "Total €0" under them reads as a free offer. When
+    // some lines are priced and some are not, the label says what the figure
+    // leaves out rather than presenting part of the deal as all of it.
     if (d.showPrices && d.total != null) {
+      const n = Number(d.totalExcludes) || 0;
+      $('total-label').textContent = n
+        ? `Total, excluding ${n} item${n === 1 ? '' : 's'} on application`
+        : 'Total';
       $('total-value').textContent = money(d.total);
       $('totals').hidden = false;
     }
@@ -310,8 +336,9 @@
     // numbers would size themselves against a zero-width box. Awaited so the
     // figure is complete before a rep can reach the print dialog.
     if (d.plan) {
-      // The event is passed in: this page is served with no show injected, so
-      // the request has to name it or the default event's plan comes back.
+      // The event is named in the artwork's URL as well as in the X-Show
+      // header the page adds: a cache keyed on the URL alone must not hand one
+      // event's hall to another.
       try { await renderPlan(d.plan, d.plan.show || d.showSlug || d.showId || ''); }
       catch (e) { console.warn('Floorplan figure failed:', e); }
     }

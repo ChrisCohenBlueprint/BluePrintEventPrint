@@ -21,7 +21,7 @@ server/services/          totp, holds, tracking, notify, seed-artwork
 server/lib/               send-page, csv, extract-stands, artwork-spec
 public/                   the three front ends: floorplan, admin, sales
 scripts/                  operator tools and one-shot migrations
-test/                     ten suites, no database needed
+test/                     the suites, no database needed
 ```
 
 Requests carry their **event** (show) in async context: `showMiddleware` resolves
@@ -111,11 +111,20 @@ led to it. Behavioural events are **not sent at all** until the visitor consents
   missing `await` on `verifyPassword` is an **authentication bypass**, not a
   visible failure — a pending promise is truthy.
 * **Migrations are scripts, never boot steps.** `scripts/reset-blank-layout.js`,
-  `scripts/seed-north-america.js` and `scripts/repair-halved-stands.js` are dry
-  runs until `--apply`. They used to run on boot behind a flag in the `meta`
-  collection — which is in the same database as the data, so restoring a backup,
-  pointing at a fresh cluster or cloning to staging re-armed them and the next
-  deploy deleted every booth and hold on the default event.
+  `scripts/seed-north-america.js`, `scripts/repair-halved-stands.js`,
+  `scripts/migrate.js`, `scripts/reseed.js` and `scripts/seed-sponsors.js` are
+  dry runs until `--apply`, and take `--show <slug>`. They used to run on boot
+  behind a flag in the `meta` collection — which is in the same database as the
+  data, so restoring a backup, pointing at a fresh cluster or cloning to staging
+  re-armed them and the next deploy deleted every booth and hold on the default
+  event. They connect with `db.connect({ indexes: false })`: index work drops an
+  index and sets the activity TTL from the caller's own `ACTIVITY_RETENTION_DAYS`,
+  so only the server's boot does it. After any `--apply`, **restart the
+  service** — the server caches each event's stands, areas and tags and will not
+  see what a script wrote until it does.
+* **`migrate.js` is for an empty event only.** It refuses, with no override, an
+  event with any committed or hand-made stand; on live Europe it used to un-merge
+  sold blocks and put absorbed stands back on sale.
 * **Importing stands has four modes** and the query string names them.
   Default is an upsert; `?replace=1` deletes the inventory and rebuilds it;
   `?mode=update` is the re-issued plan on a selling event (`keep` in
@@ -142,7 +151,7 @@ led to it. Behavioural events are **not sent at all** until the visitor consents
 ## 6. Verification
 
 ```bash
-npm test          # 10 suites, no database; several drive your installed Chrome
+npm test          # every suite in test/, no database; several drive your installed Chrome
 npm run check     # security + browser assertions against a RUNNING local server
 npm run validate:artwork <file.svg>
 ```
@@ -150,8 +159,12 @@ npm run validate:artwork <file.svg>
 `check:security` proves anonymous sockets cannot mutate state and that the public
 payload carries no commercial fields. `check:browser` drives real Chrome through
 the consent gate, stand selection, the shortlist and enquiry submission,
-including the XSS assertions. Both **refuse to run against an Atlas URI** — they
-seed and mutate data.
+including the XSS assertions. They seed and mutate data, so both **refuse
+unless both ends are local**: the server they drive must be on this machine,
+and `MONGO_URI` — from the shell, or `.env` as a server started from this
+checkout would read it — must be a local database (`scripts/lib/local-only.js`,
+the same test `server/config.js` uses). They used to check only their own
+`MONGO_URI`, and only for `mongodb+srv`.
 
 `scripts/persistence-check.js` has been deleted. It authenticated with HTTP
 Basic, which this app stopped using when real accounts and 2FA arrived, so it
