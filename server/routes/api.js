@@ -1570,6 +1570,95 @@ router.post('/holds/:boothNumber/extend', async (req, res, next) => {
 });
 
 /**
+ * The plan's history, and the way back into it.
+ *
+ * Every change to the SHAPE of the hall leaves a point holding the whole hall
+ * as it stood immediately before it (see booths.history). This is the only way
+ * anyone who is not at a terminal can reach them — until now the snapshots were
+ * written faithfully and read by nothing but a CLI script, which is a recovery
+ * route in the same sense that a fire exit nobody can find is one.
+ */
+router.get('/history', async (req, res, next) => {
+  try {
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    res.json(await booths.history({ limit }));
+  } catch (e) { next(e); }
+});
+
+/**
+ * The bookings that stop a point being put back, in a sentence an admin can
+ * act on: which stands, whose, and what going back would do to each.
+ */
+function bookingsInTheWay(conflicts) {
+  const what = { gone: 'would disappear', removed: 'would be taken off the plan', resized: 'would change size or place' };
+  const list = (conflicts || []).map(c => `stand ${c.displayNumber || c.boothNumber} (${c.status}` +
+    `${c.company ? ` — ${c.company}` : ''}) ${what[c.why] || 'would change'}`);
+  return `Bookings are kept when the plan goes back, and these are in the way: ${list.join('; ')}. ` +
+         'Move or release them first, then go back to this point.';
+}
+
+/**
+ * Put the hall back to one of those points.
+ *
+ * Dry by default: a GET-shaped answer describing what it WOULD do — which
+ * stands change shape, come back or go, and which BOOKINGS are in the way —
+ * because that is the thing worth reading before agreeing. Only the shape of
+ * the hall goes back: every sale and hold stays as it is now, and a point that
+ * would move, resize or remove a booked stand is refused, naming each one.
+ * `apply` does it, behind the same secret every destructive route asks for —
+ * and the hall as it stands right now is stored first, so going back is
+ * itself something to come back from.
+ */
+router.post('/history/:id/restore', async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const apply = req.body?.apply === true;
+    if (!apply) {
+      const plan = await booths.restoreSnapshot(id, { apply: false });
+      if (!plan.ok) {
+        return res.status(404).json({ error: plan.reason === 'empty_snapshot'
+          ? 'That point holds no stands — restoring it would empty the event.'
+          : 'That point no longer exists.' });
+      }
+      return res.json(plan.conflicts.length ? { ...plan, blocked: bookingsInTheWay(plan.conflicts) } : plan);
+    }
+    if (!await confirmDestructive(req, res, 'the plan was not put back')) return;
+    const r = await booths.restoreSnapshot(id, { apply: true, actor: req.admin?.user || null });
+    if (!r.ok) {
+      if (r.reason === 'bookings_in_the_way') {
+        return res.status(409).json({ reason: r.reason, conflicts: r.conflicts, error: bookingsInTheWay(r.conflicts) });
+      }
+      if (r.reason === 'changed_meanwhile') {
+        return res.status(409).json({ reason: r.reason,
+          error: `Stand ${r.boothNumber} changed while the plan was being put back, so nothing was changed. Try again.` });
+      }
+      return res.status(r.reason === 'snapshot_failed' ? 500 : 404).json({ error: r.reason === 'snapshot_failed'
+        ? 'The hall as it stands could not be stored first, so nothing was changed.'
+        : 'That point no longer exists.' });
+    }
+    track({ type: 'booth.history_restore', boothNumber: null, actor: req.admin?.user || 'unknown',
+            meta: { id, stands: r.stands, replaced: r.replacing, previous: r.previousSnapshot,
+                    bookingsKept: r.bookingsKept, artwork: r.artwork ? r.artwork.label : null } });
+    // Open pages were left showing the hall from before the restore until
+    // someone reloaded; the cache the sockets serve from is only refreshed
+    // when told.
+    try { await sockets.notifyStands(); }
+    catch (e) { console.error('History restore: viewers not refreshed —', e.message); }
+    if (r.artwork) {
+      // The drawing went back, and with it its lounges, its unit and (unless
+      // an admin chose them) its colours — every open page hears all of it.
+      try { sockets.notifyArtwork(r.artworkVersion); }
+      catch (e) { console.error('History restore: artwork change not broadcast —', e.message); }
+      try { await sockets.notifyAreas(); }
+      catch (e) { console.error('History restore: areas not broadcast —', e.message); }
+      try { await sockets.notifySettings(); }
+      catch (e) { console.error('History restore: settings not broadcast —', e.message); }
+    }
+    res.json(r);
+  } catch (e) { next(e); }
+});
+
+/**
  * Put a released booking back.
  *
  * Release destroys a booking outright — the company, the negotiated price, the
@@ -1587,68 +1676,6 @@ router.post('/holds/:boothNumber/extend', async (req, res, next) => {
  * but it is stamped into the audit trail either way, so a restore is never an
  * unattributed change of company.
  */
-/**
- * The plan's history, and the way back into it.
- *
- * Every change to the SHAPE of the hall leaves a point holding the whole hall
- * as it stood immediately before it (see booths.history). This is the only way
- * anyone who is not at a terminal can reach them — until now the snapshots were
- * written faithfully and read by nothing but a CLI script, which is a recovery
- * route in the same sense that a fire exit nobody can find is one.
- */
-router.get('/history', async (req, res, next) => {
-  try {
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
-    res.json(await booths.history({ limit }));
-  } catch (e) { next(e); }
-});
-
-/**
- * Put the hall back to one of those points.
- *
- * Dry by default: a GET-shaped answer describing what it WOULD do, because this
- * replaces the event's entire inventory and the number of stands it is about to
- * replace is the thing worth reading before agreeing. `apply` does it, behind
- * the same secret every destructive route asks for — and the hall as it stands
- * right now is stored first, so going back is itself something to come back
- * from.
- */
-router.post('/history/:id/restore', async (req, res, next) => {
-  try {
-    const id = String(req.params.id);
-    const apply = req.body?.apply === true;
-    if (!apply) {
-      const plan = await booths.restoreSnapshot(id, { apply: false });
-      if (!plan.ok) {
-        return res.status(404).json({ error: plan.reason === 'empty_snapshot'
-          ? 'That point holds no stands — restoring it would empty the event.'
-          : 'That point no longer exists.' });
-      }
-      return res.json(plan);
-    }
-    if (!await confirmDestructive(req, res, 'the plan was not put back')) return;
-    const r = await booths.restoreSnapshot(id, { apply: true, actor: req.admin?.user || null });
-    if (!r.ok) {
-      return res.status(r.reason === 'snapshot_failed' ? 500 : 404).json({ error: r.reason === 'snapshot_failed'
-        ? 'The hall as it stands could not be stored first, so nothing was changed.'
-        : 'That point no longer exists.' });
-    }
-    track({ type: 'booth.history_restore', boothNumber: null, actor: req.admin?.user || 'unknown',
-            meta: { id, stands: r.stands, replaced: r.replacing, previous: r.previousSnapshot,
-                    artwork: r.artwork ? r.artwork.label : null } });
-    // Open pages were left showing the hall from before the restore until
-    // someone reloaded; the cache the sockets serve from is only refreshed
-    // when told.
-    try { await sockets.notifyStands(); }
-    catch (e) { console.error('History restore: viewers not refreshed —', e.message); }
-    if (r.artwork) {
-      try { sockets.notifyArtwork(r.artworkVersion); }
-      catch (e) { console.error('History restore: artwork change not broadcast —', e.message); }
-    }
-    res.json(r);
-  } catch (e) { next(e); }
-});
-
 router.post('/booths/:boothNumber/restore', async (req, res, next) => {
   try {
     const n = String(req.params.boothNumber);
@@ -1687,8 +1714,20 @@ router.post('/booths/:boothNumber/restore', async (req, res, next) => {
         actor: req.admin?.user || null,
       });
     }
+    // Through the catalogue, exactly as the tag picker is: a tag deleted since
+    // the release must not come back onto the stand. Only the ones that still
+    // exist are restored, up to the per-stand limit, and the rest are named.
+    let tagsDropped = [];
     if (Array.isArray(snap.tags) && snap.tags.length) {
-      await booths.setTags(n, snap.tags, { actor: req.admin?.user || null });
+      const tagsModel = require('../models/tags');
+      const valid = await tagsModel.validKeys();
+      const keep = [...new Set(snap.tags.map(String))].filter(k => valid.has(k));
+      tagsDropped = snap.tags.map(String).filter(k => !keep.includes(k));
+      if (keep.length) {
+        await booths.setTags(n, keep.slice(0, tagsModel.MAX_PER_BOOTH),
+                             { valid, max: tagsModel.MAX_PER_BOOTH, actor: req.admin?.user || null });
+        tagsDropped.push(...keep.slice(tagsModel.MAX_PER_BOOTH));
+      }
     }
     if (snap.country) {
       await booths.setCountry(n, snap.country, { actor: req.admin?.user || null });
@@ -1699,7 +1738,7 @@ router.post('/booths/:boothNumber/restore', async (req, res, next) => {
 
     try { await sockets.notifyStands(); } catch (e) { console.error('Restore broadcast failed:', e.message); }
 
-    res.json({ ok: true, boothNumber: n, status, company });
+    res.json({ ok: true, boothNumber: n, status, company, ...(tagsDropped.length ? { tagsDropped } : {}) });
   } catch (e) { next(e); }
 });
 

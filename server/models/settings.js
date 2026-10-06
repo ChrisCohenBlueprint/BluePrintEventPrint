@@ -134,13 +134,19 @@ async function rate() {
 }
 
 /**
- * Set the €/unit rate. Positive finite number only. Returns the stored value;
- * recomputing existing list prices is the caller's job (booths.recomputeListPrices).
+ * Set the €/unit rate. Positive finite number only, kept to the cent. Returns
+ * the stored value; recomputing existing list prices is the caller's job
+ * (booths.recomputeListPrices).
+ *
+ * It used to be rounded to a whole number, so 45.5 was stored as 46 and 0.4 as
+ * 0 — reported as a success, after which every import priced every stand at
+ * nothing. A rate that is nothing once it is kept to the cent is refused.
  */
 async function setRate(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0 || n > 1_000_000) return { ok: false, reason: 'bad_rate' };
-  const rounded = Math.round(n);
+  const rounded = Math.round(n * 100) / 100;
+  if (rounded <= 0) return { ok: false, reason: 'bad_rate' };
   await col().updateOne({ _id: config.showId },
     { $set: { ratePerSqm: rounded, updatedAt: new Date() } }, { upsert: true });
   return { ok: true, ratePerSqm: rounded };

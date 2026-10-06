@@ -11,14 +11,22 @@
 const path = require('path');
 const docs = [];
 const clone = (d) => JSON.parse(JSON.stringify(d));
+// As Mongo matches: a dotted path reaches into the document, and null matches
+// a field that is missing — which is how a write conditional on a stand's
+// shape revision finds a stand that has never been reshaped.
+const at = (d, k) => k.split('.').reduce((o, p) => (o == null ? undefined : o[p]), d);
+const same = (a, b) => a === b || (a == null && b == null);
 const match = (d, f) => Object.entries(f).every(([k, v]) => k === 'showId' || k === '$or'
-  || (v && typeof v === 'object' && v.$in ? v.$in.includes(d[k]) : v && typeof v === 'object' && v.$nin ? !v.$nin.includes(d[k]) : d[k] === v));
+  || (v && typeof v === 'object' && v.$in ? v.$in.some(x => same(at(d, k), x))
+    : v && typeof v === 'object' && v.$nin ? !v.$nin.some(x => same(at(d, k), x))
+    : v && typeof v === 'object' && '$ne' in v ? !same(at(d, k), v.$ne)
+    : same(at(d, k), v)));
 const fake = { collection: (name) => name !== 'booths'
   ? { findOne: async () => null, updateOne: async () => ({}), insertOne: async () => ({}) }   // no stored artwork → the shipped Europe plan
   : {
     findOne: async (f) => docs.find(d => match(d, f) && (!f.$or || f.$or.some(o => match(d, o)))) || null,
     find: (f) => ({ toArray: async () => docs.filter(d => match(d, f || {})) }),
-    updateOne: async (f, u) => { const d = docs.find(d => match(d, f)); if (!d) return { matchedCount: 0 }; Object.assign(d, u.$set || {}); Object.keys(u.$unset || {}).forEach(k => delete d[k]); return { matchedCount: 1 }; },
+    updateOne: async (f, u) => { const d = docs.find(d => match(d, f)); if (!d) return { matchedCount: 0 }; Object.assign(d, u.$set || {}); Object.keys(u.$unset || {}).forEach(k => delete d[k]); Object.entries(u.$inc || {}).forEach(([k, n]) => { d[k] = (d[k] || 0) + n; }); return { matchedCount: 1 }; },
     insertOne: async (d) => { docs.push(clone(d)); },
     deleteOne: async (f) => { const i = docs.findIndex(d => match(d, f)); if (i > -1) docs.splice(i, 1); return { deletedCount: i > -1 ? 1 : 0 }; },
   } };

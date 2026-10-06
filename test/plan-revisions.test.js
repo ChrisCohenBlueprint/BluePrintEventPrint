@@ -50,7 +50,9 @@ let db = fakeDb({
   floorplans: [{ showId: SHOW, svg: issue(0), filename: 'LEX27_Floorplan_Consolidated.svg',
                  bytes: 1, version: 'v0', uploadedAt: new Date('2026-09-01'), uploadedBy: 'chris' }],
   booths: [
-    stand('101', { status: 'sold', updatedBy: 'chris',
+    // Drawn where the plan draws it, so making a plan live does not move a
+    // sold stand — going back to a point is refused when it would.
+    stand('101', { status: 'sold', updatedBy: 'chris', geometry: { x: 10, y: 10, w: 25, h: 25 }, sqm: 100,
       assignment: { company: 'Real Exhibitor Ltd', contactId: 'c1', actualPrice: 5000, notes: 'signed', tags: [], country: 'DE' } }),
     stand('102'),
   ],

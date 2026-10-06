@@ -2318,20 +2318,48 @@ async function loadHistory() {
 async function restoreHistoryPoint(point, btn) {
   return withPending(btn, async () => {
     // What it WOULD do, read from the server rather than guessed at, because
-    // the number of stands about to be replaced is the thing worth seeing
-    // before agreeing to replace them.
+    // which stands change — and which bookings are in the way — is the thing
+    // worth seeing before agreeing.
     let plan;
     try { plan = await api(`/api/history/${encodeURIComponent(point.id)}/restore`, { method: 'POST', body: JSON.stringify({}) }); }
     catch (e) { return adminToast(e.message || 'Could not read that point.', 'error'); }
 
-    const lost = plan.logosNotRestored || [];
-    const pw = await askSecret(
-      `The plan goes back to how it stood just before "${point.label}" on ` +
-      `${new Date(point.at).toLocaleString()}.
+    const when = new Date(point.at).toLocaleString();
+    // Going back puts back the SHAPE of the hall and never a booking: every
+    // sale and hold stays as it is now. A point that would take a booked stand
+    // away, or change its size or place, cannot be applied until that booking
+    // is moved or released — so name them and stop, rather than ask for a
+    // password to do something the server will refuse.
+    const conflicts = plan.conflicts || [];
+    if (conflicts.length) {
+      const what = { gone: 'would disappear', removed: 'would be taken off the plan', resized: 'would change size or place' };
+      await confirmDialog(
+        `Going back to just before "${point.label}" (${when}) keeps every booking as it is now, ` +
+        `and these booked stands would not fit the plan as it was then:
 
 ` +
-      `${plan.stands} stands are put back, replacing the ${plan.replacing} on the plan now. ` +
-      `Everything done since is undone — including any merges, splits and removals.
+        conflicts.slice(0, 12).map(c => `    ${shownN(c.boothNumber)} — ${c.status}${c.company ? `, ${c.company}` : ''} — ${what[c.why] || 'would change'}`).join('\n') +
+        (conflicts.length > 12 ? `\n    …and ${conflicts.length - 12} more` : '') +
+        `
+
+Move or release them first, then go back to this point.`,
+        { title: 'Bookings are in the way', confirmLabel: 'OK' });
+      return;
+    }
+
+    const lost = plan.logosNotRestored || [];
+    const ch = plan.changes || {};
+    const n = (list) => (list || []).length;
+    const pw = await askSecret(
+      `The plan goes back to how it stood just before "${point.label}" on ${when}.
+
+` +
+      `Only its shape goes back — merges, splits, removed stands and shown numbers: ` +
+      `${n(ch.reshaped)} stand(s) change shape, ${n(ch.added)} come back and ${n(ch.dropped)} go.
+
+` +
+      `Every booking stays exactly as it is now. ${plan.bookingsKept || 0} sold or held stand(s) keep ` +
+      `their exhibitor, price, notes and hold.
 
 ` +
       (plan.artwork ? `The floorplan goes back to ${plan.artwork.label} as well — visitors see it at the same link.
@@ -2350,7 +2378,7 @@ async function restoreHistoryPoint(point, btn) {
         headers: { 'X-Confirm-Password': pw },
         body: JSON.stringify({ apply: true }),
       });
-      adminToast(`The plan is back to ${new Date(point.at).toLocaleString()} — ${r.stands} stands` +
+      adminToast(`The plan is back to ${new Date(point.at).toLocaleString()} — ${r.stands} stands, every booking kept` +
         (r.artwork ? `, on ${r.artwork.label}.` : '.'), 'ok');
       loadHistory();
     } catch (e) {

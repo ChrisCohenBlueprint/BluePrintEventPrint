@@ -645,29 +645,49 @@ function register(io) {
     // from the browser console.
     socket.on('booth:book', requireAdmin(socket, 'booth:book', async ({ boothNumber, company }) => {
       const n = stand(boothNumber);
-      // Clear any hold document first, but without flipping status to available.
-      await holdsSvc.drop(n);
+      // A sale is to somebody. An empty prompt used to be booked as "Admin",
+      // which is a stand sold to nobody that nobody can invoice; the model
+      // refuses it too, this only says so in words.
+      const name = String(company ?? '').trim();
+      if (!name) return { ok: false, error: `Give the exhibitor's name to book Stand ${n}.` };
       // Only book from available/held — if another admin booked it in the
       // meantime the conditional write won't match, and we say so rather than
       // overwriting their exhibitor.
-      const r = await booths.setStatus(n, 'sold', { company, actor: socket.data.user, expect: ['available', 'held'] });
+      const r = await booths.setStatus(n, 'sold', { company: name, actor: socket.data.user, expect: ['available', 'held'] });
       if (!r) return { ok: false, error: `Stand ${n} not found.` };
       if (!r.changed) return { ok: false, error: `Stand ${n} is already taken — reload to see the latest.` };
+      // The hold document goes AFTER the sale is written. Dropped first, a stop
+      // between the two left a hold the plan declared — no expiry, and now no
+      // document — that the next sweep released: the sale never landed and the
+      // stand went back on sale. A sold stand with a leftover document is
+      // ignored by the sweep, and a later release clears it.
+      await holdsSvc.drop(n);
       track({ type: 'booth.status_change', boothNumber: n, socket,
-              meta: { from: r.before.status, to: 'sold', company } });
+              meta: { from: r.before.status, to: 'sold', company: name } });
       await refresh(); broadcastState(io);
-      log(io, `✅ <strong>${escapeHtml(company)}</strong> booked Stand ${escapeHtml(n)}`, 'booking');
+      log(io, `✅ <strong>${escapeHtml(name)}</strong> booked Stand ${escapeHtml(n)}`, 'booking');
     }));
 
     socket.on('booth:hold', requireAdmin(socket, 'booth:hold', async ({ boothNumber, company, hours }) => {
       const n  = stand(boothNumber);
-      const ms = Number(hours) > 0 ? Number(hours) * 3600_000 : config.defaultHoldMs;
+      // Any number of hours used to be accepted: 1e10 or Infinity made an
+      // Invalid Date, stored as 1970, so the hold was released within the
+      // minute after logging "until Invalid Date". No length means the default;
+      // a length is clamped to what extending a hold allows — an hour to 30
+      // days — and anything that is not a positive number is refused.
+      let ms = config.defaultHoldMs;
+      if (hours !== undefined && hours !== null && hours !== '') {
+        const h = Number(hours);
+        if (!Number.isFinite(h) || h <= 0) return { ok: false, error: 'Give the hold a length in hours — from 1 to 720.' };
+        ms = Math.max(1, Math.min(h, 24 * 30)) * 3600_000;
+      }
       const r  = await holdsSvc.create({ boothNumber: n, company: company || 'Pending',
                                          durationMs: ms, actor: socket.data.user });
       if (!r.ok) {
         // The ack IS the failure report. Emitting error:action as well raised a
         // second toast for the same refusal.
-        const reason = r.reason === 'not_available' ? 'it is not available' : r.reason;
+        const reason = r.reason === 'not_available' ? 'it is not available'
+                     : r.reason === 'no_such_booth' ? 'there is no such stand' : r.reason;
         return { ok: false, error: `Stand ${n} could not be held — ${reason}.` };
       }
       await refresh(); broadcastState(io);
@@ -742,25 +762,41 @@ function register(io) {
       const gate = await confirmSecret([password], 'stand not released');
       if (!gate.ok) return gate;
       const n = stand(boothNumber);
-      const before = await booths.get(n);
-      await holdsSvc.release(n, { actor: socket.data.user });
+      // Only a release that released something is acked, logged and audited.
+      // It used to report success for a stand that does not exist, is already
+      // available, or is off the plan — and wrote "released" rows for each.
+      const r = await holdsSvc.release(n, { actor: socket.data.user });
+      if (!r.ok) {
+        return { ok: false, error: r.reason === 'no_such_booth'
+          ? `Stand ${n} not found.`
+          : `Stand ${n} is not booked or on hold — there was nothing to release.` };
+      }
       track({ type: 'booth.status_change', boothNumber: n, socket,
-              meta: { from: before?.status, to: 'available' } });
+              meta: { from: r.before.status, to: 'available' } });
       await refresh(); broadcastState(io);
       log(io, `🔓 Stand ${escapeHtml(n)} released`, 'release');
     }));
 
-    socket.on('booth:update-deal', requireAdmin(socket, 'booth:update-deal', async ({ boothNumber, actualPrice, notes }) => {
+    // A field the console leaves OUT is left unchanged; `actualPrice: null`
+    // clears the price. `expectCompany` is who the stand belonged to when the
+    // panel was opened — given, the save is refused if it has changed hands.
+    socket.on('booth:update-deal', requireAdmin(socket, 'booth:update-deal', async ({ boothNumber, actualPrice, notes, expectCompany }) => {
       const n = stand(boothNumber);
-      const r = await booths.updateDeal(n, { actualPrice, notes, actor: socket.data.user });
+      const r = await booths.updateDeal(n, { actualPrice, notes, expectCompany, actor: socket.data.user });
       if (!r) return { ok: false, error: `Stand ${n} not found.` };
       if (r.error === 'bad_price') return { ok: false, error: 'Price must be a non-negative number.' };
+      if (r.error === 'changed_hands') {
+        return { ok: false, error: 'This stand has changed hands since you opened it — reopen it before saving.' };
+      }
       // The write is guarded to sold/held stands; `changed:false` means it didn't
       // match, so report it instead of falsely acking success (which left the UI
       // showing "saved" while the value reverted on the next broadcast).
       if (!r.changed) return { ok: false, error: `Stand ${n} must be sold or on hold to hold a price or notes.` };
+      const fromPrice = r.before.assignment?.actualPrice ?? null;
       track({ type: 'deal.update', boothNumber: n, socket, meta: {
-        fromPrice: r.before.assignment?.actualPrice ?? null, toPrice: actualPrice ?? null,
+        // An omitted price was not changed, so the trail must not record it as
+        // cleared.
+        fromPrice, toPrice: actualPrice === undefined ? fromPrice : (r.after?.assignment?.actualPrice ?? null),
         notesChanged: notes !== undefined && notes !== r.before.assignment?.notes,
       } });
       await refresh(); broadcastState(io);
@@ -774,7 +810,18 @@ function register(io) {
       if (!allowed.includes(status)) return { ok: false, error: 'Status must be available, held or sold.' };
       const n = stand(boothNumber);
       const before = await booths.get(n);
-      if (!before) return { ok: false, error: `Stand ${n} not found.` };
+      // A stand taken off the plan cannot be booked, held or released — and
+      // must be refused HERE, before forceHold below writes a hold document and
+      // an expiry for it, which it used to do before setStatus said "not found".
+      if (!before || before.removed === true) return { ok: false, error: `Stand ${n} not found.` };
+      // Blank company on a status change used to wipe an existing exhibitor, so
+      // an empty field keeps the one already there. A SALE still has to end up
+      // naming somebody — see booth:book.
+      const name = String(company ?? '').trim();
+      const holder = name || (status === 'available' ? null : before.assignment?.company || null);
+      if (status === 'sold' && !holder) {
+        return { ok: false, error: `Give the exhibitor's name to mark Stand ${n} as sold.` };
+      }
 
       // Forcing a booked/held stand back to Available un-books it (destroys the
       // booking), so it takes EXACTLY the gate Release takes: the recovery key
@@ -797,17 +844,20 @@ function register(io) {
       // forceHold always writes a hold document, even when the stand is not
       // currently available. holdsSvc.create refuses in that case, which used to
       // leave the stand 'held' with no hold doc — reclaimed by the sweep in 60s.
-      if (status === 'held') await holdsSvc.forceHold(n, { company: company || 'Pending', actor: socket.data.user });
-      else await holdsSvc.drop(n);
+      if (status === 'held') {
+        const held = await holdsSvc.forceHold(n, { company: holder || 'Pending', actor: socket.data.user });
+        if (!held.ok) return { ok: false, error: `Stand ${n} not found.` };
+      } else await holdsSvc.drop(n);
 
-      const r = await booths.setStatus(n, status, {
-        // Blank company on a status change used to wipe an existing exhibitor.
-        company: company || (status === 'available' ? null : before.assignment?.company || null),
-        actor: socket.data.user,
-      });
+      const r = await booths.setStatus(n, status, { company: holder, actor: socket.data.user });
       // Bare `return` here acked {ok:true} for a stand that no longer exists —
-      // the very failure the comment above warns about.
-      if (!r) return { ok: false, error: `Stand ${n} not found.` };
+      // the very failure the comment above warns about. Taken off the plan in
+      // the instant since the check above, it must not keep the hold document
+      // just written for it either.
+      if (!r) {
+        if (status === 'held') await holdsSvc.drop(n);
+        return { ok: false, error: `Stand ${n} not found.` };
+      }
       track({ type: 'booth.status_change', boothNumber: n, socket,
               meta: { from: r.before.status, to: status, forced: true } });
       await refresh(); broadcastState(io);
@@ -827,13 +877,9 @@ function register(io) {
                   : r.reason;
         return { ok: false, error: `Could not move — ${why}.` };
       }
-      // A held booking carries a hold document; move it to the new stand so the
-      // expiry sweep doesn't reclaim the destination (held with no doc) in 60s,
-      // and doesn't leave a stale doc on the freed source.
-      if (r.status === 'held') {
-        await holdsSvc.drop(f);
-        await holdsSvc.forceHold(t, { company: r.company || 'Pending', actor: socket.data.user });
-      }
+      // A held booking's hold document travels with it, inside the model, with
+      // its own expiry, contact and session — see booths.move. It used to be
+      // dropped here and replaced by a fresh 24-hour one.
       track({ type: 'booth.move', boothNumber: t, socket, meta: {
         from: f, to: t, company: r.company, status: r.status,
         fromSqm: r.fromSqm, toSqm: r.toSqm, fromListPrice: r.fromListPrice, toListPrice: r.toListPrice,
@@ -853,6 +899,8 @@ function register(io) {
         const why = r.reason === 'not_adjacent' ? 'the stands are not next to each other'
                   : r.reason === 'not_available' ? 'both stands must be available'
                   : r.reason === 'reset_first'   ? 'one of them is a merged block, and a block cannot be absorbed into another — reset it first'
+                  : r.reason === 'missing_booth' ? 'one of the stands no longer exists — refresh and try again'
+                  : r.reason === 'changed'       ? 'one of the stands changed while merging — nothing was merged, please try again'
                   : r.reason;
         return { ok: false, error: `Could not merge — ${why}.` };
       }
@@ -881,6 +929,7 @@ function register(io) {
                   : r.reason === 'need_two'      ? 'select at least two stands'
                   : r.reason === 'missing_booth' ? 'one of the stands no longer exists — refresh and try again'
                   : r.reason === 'no_geometry'   ? 'one of the stands has no shape to merge'
+                  : r.reason === 'changed'       ? 'one of the stands changed while merging — nothing was merged, please try again'
                   : r.reason;
         return { ok: false, error: `Could not merge — ${why}.` };
       }
@@ -917,6 +966,10 @@ function register(io) {
                   : r.reason === 'too_small' ? 'the stand is too small to divide that many ways'
                   : r.reason === 'bad_ratio' ? 'each side must keep at least 1 m²'
                   : r.reason === 'uneven_needs_two' ? 'an uneven split makes exactly two stands'
+                  : r.reason === 'suffix_exists' ? 'a generated cell id already exists — reset the stand first'
+                  : r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'no_geometry' ? 'the stand has no geometry to divide'
+                  : r.reason === 'changed' ? 'the stand changed while splitting — nothing was split, please try again'
                   : r.reason;
         return { ok: false, error: `Could not split — ${why}.` };
       }
@@ -942,6 +995,8 @@ function register(io) {
                   : r.reason === 'bad_value' ? `"${r.number}" isn't a valid number — use only letters, numbers, spaces, . / or -`
                   : r.reason === 'suffix_exists' ? 'a generated cell id already exists — reset the stand first'
                   : r.reason === 'no_geometry' ? 'the stand has no geometry to divide'
+                  : r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'changed' ? 'the stand changed while splitting — nothing was split, please try again'
                   : r.reason;
         return { ok: false, error: `Could not split — ${why}.` };
       }
@@ -951,7 +1006,9 @@ function register(io) {
       return { ok: true, created: r.created };
     }));
 
-    // Undo a merge or split (or clear a stray leftover cell).
+    // Undo a merge or split. Asked of a split cell, it undoes the split that cell
+    // belongs to; only a true leftover cell, whose floor its parent already
+    // covers, is cleared away.
     socket.on('booth:reset', requireAdmin(socket, 'booth:reset', async ({ boothNumber }) => {
       const n = stand(boothNumber);
       // The actor travels so the plan's history can say who undid what; reset
@@ -969,15 +1026,28 @@ function register(io) {
                   : r.reason === 'child_merged'  ? `its cell ${r.child} has been merged with another stand — reset ${r.child} first`
                   : r.reason === 'child_absorbed' ? `its cell ${r.child} was absorbed into stand ${r.into} — reset ${r.into} first`
                   : r.reason === 'child_removed' ? `its cell ${r.child} was taken off the plan — put it back first`
+                  // A split cell is half of its parent's split; resetting it
+                  // undoes that split, unless a merge has been laid over it.
+                  : r.reason === 'cell_of'       ? `it is a cell of stand ${r.parent}, which has been merged since it was split — reset ${r.parent} first`
+                  : r.reason === 'orphan_cell'   ? `it is the only record of its floor (stand ${r.parent} no longer lists it), so there is nothing to undo`
+                  // Never put a stand back over one that is already there.
+                  : r.reason === 'part_exists'   ? `stand ${r.part || 'it absorbed'} is already on the plan, so it cannot be put back`
+                  : r.reason === 'overlap'       ? `putting ${r.part} back would stand it on top of ${r.with} — go back to an earlier point in Plan History instead`
+                  : r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'changed'       ? 'a stand changed while resetting — nothing was changed, please try again'
                   : r.reason;
         return { ok: false, error: `Could not reset ${n} — ${why}.` };
       }
-      track({ type: 'booth.reset', boothNumber: n, socket, meta: { type: r.type, changed: r.restored || r.removed } });
+      track({ type: 'booth.reset', boothNumber: n, socket, meta: { type: r.type, changed: r.restored || r.removed,
+                                                                   parent: r.parent || null } });
       await refresh(); broadcastState(io);
       const detail = r.type === 'unmerge' ? `restored ${(r.restored || []).join(', ') || 'originals'}`
                    : r.type === 'unsplit' ? `removed ${(r.removed || []).join(', ')}`
                    : 'removed leftover cell';
-      log(io, `↩️ Stand ${escapeHtml(n)} reset — ${escapeHtml(detail)}`, 'admin');
+      // A cell's reset undoes its parent's split, and the log names the stand
+      // that actually changed.
+      const which = r.parent && r.type === 'unsplit' ? `${escapeHtml(r.parent)} (asked of ${escapeHtml(n)})` : escapeHtml(n);
+      log(io, `↩️ Stand ${which} reset — ${escapeHtml(detail)}`, 'admin');
       return { ok: true, ...r };
     }));
 
