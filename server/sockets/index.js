@@ -99,8 +99,10 @@ function broadcastAreas(io) {
   io.to(pubRoom(config.showId)).emit('areas:catalogue', showState().areaCache);
 }
 
-// The REST side (a sponsorship package marked sold out) has to be able to push
-// the areas it just changed. register() records io for exactly this.
+// The REST side has to be able to push the areas it just changed: a sponsorship
+// package marked sold out, created, renamed, re-tiered, deleted or imported
+// changes the `package` every linked area carries. register() records io for
+// exactly this. Call it inside the request's show.
 let ioRef = null;
 async function notifyAreas() {
   await refreshAreas();
@@ -122,6 +124,28 @@ function limiter(perMin) {
     return true;
   };
 }
+
+// ─── Consent, once per visitor ────────────────────────────────────────────────
+// The page re-asserts a granted consent on every connection — once buffered
+// while offline and again on connect, after every reconnect, whenever the host
+// page re-posts its banner — and each one stored another consent.granted row.
+// The socket remembers that it has recorded one; this remembers it across that
+// visitor's sockets for a day. In memory and bounded: a restart forgets it,
+// which costs at most one more row per visitor.
+const CONSENT_MEMORY_MS  = 24 * 60 * 60 * 1000;
+const CONSENT_MEMORY_MAX = 50_000;
+const consentSeen = new Map();   // `${showId}|${sessionId}` → when it was recorded
+
+function consentIsNew(showId, sessionId) {
+  const key = `${showId}|${sessionId}`;
+  const at = consentSeen.get(key);
+  if (at && Date.now() - at < CONSENT_MEMORY_MS) return false;
+  consentSeen.delete(key);
+  consentSeen.set(key, Date.now());
+  if (consentSeen.size > CONSENT_MEMORY_MAX) consentSeen.delete(consentSeen.keys().next().value);
+  return true;
+}
+const forgetConsent = (showId, sessionId) => consentSeen.delete(`${showId}|${sessionId}`);
 
 // ─── Denied admin attempts ────────────────────────────────────────────────────
 // The auth guard records every rejected admin event as a `security.denied`
@@ -314,6 +338,16 @@ function register(io) {
     const allowView   = limiter(240);
     const allowClick  = limiter(120);
     const allowSubmit = limiter(5);
+    const allowConsent = limiter(10);
+
+    // Behavioural tracking — what a visitor looks at, clicks and zooms — stops
+    // on this socket once they withdraw consent (consent:withdrawn), until they
+    // consent again. Only these: an admin's own actions are an audit trail, not
+    // behaviour, and nothing a client sends may switch that off.
+    const behaviour = (event) => {
+      if (socket.data.trackingOff) return;
+      track({ ...event, socket });
+    };
 
     // ── Public ────────────────────────────────────────────────────────────────
     // Wrapped in safe() like every other public handler. It used to destructure
@@ -336,21 +370,22 @@ function register(io) {
       // Close out the previous booth's dwell before switching. This used to be
       // overwritten, so all attention except the final booth was discarded.
       if (socket.data.viewing && socket.data.viewing !== n && socket.data.viewStart) {
-        track({ type: 'booth.dwell', boothNumber: socket.data.viewing, socket,
-                meta: { ms: Date.now() - socket.data.viewStart } });
+        behaviour({ type: 'booth.dwell', boothNumber: socket.data.viewing,
+                    meta: { ms: Date.now() - socket.data.viewStart } });
       }
       if (socket.data.viewing === n) return;   // repeat view of the same booth
 
       activeViewers[socket.id] = { showId: socket.data.showId, boothNumber: n };
       socket.data.viewStart = Date.now();
       socket.data.viewing   = n;
-      track({ type: 'booth.view', boothNumber: n, socket });
+      behaviour({ type: 'booth.view', boothNumber: n });
       // Presence only — the stands themselves did not change.
       broadcastViewers(io);
     }, socket));
 
-    socket.on('booth:click', safe('booth:click', async ({ boothNumber }) => {
+    socket.on('booth:click', safe('booth:click', async (payload) => {
       if (!allowClick()) return;
+      const { boothNumber } = payload || {};
       const n = stand(boothNumber);
       const b = showState().cache.find(x => x.boothNumber === n);
       if (!b) return;
@@ -358,11 +393,13 @@ function register(io) {
       // Dwell time on the previously-open booth, so attention is measured in
       // seconds rather than clicks.
       if (socket.data.viewing && socket.data.viewing !== n && socket.data.viewStart) {
-        track({ type: 'booth.dwell', boothNumber: socket.data.viewing, socket,
-                meta: { ms: Date.now() - socket.data.viewStart } });
+        behaviour({ type: 'booth.dwell', boothNumber: socket.data.viewing,
+                    meta: { ms: Date.now() - socket.data.viewStart } });
       }
+      // The stand's click counter is a number on the stand, not a record of
+      // anyone, so it still counts after a withdrawal; the event does not.
       await booths.incrementClicks(n);
-      track({ type: 'booth.click', boothNumber: n, socket });
+      behaviour({ type: 'booth.click', boothNumber: n });
 
       // Re-anchor dwell tracking to the booth now open. Without this the timer
       // stayed pinned to the first booth viewed, so its dwell was re-emitted on
@@ -389,19 +426,46 @@ function register(io) {
     // missing payload here crashed the process — and so the consent event is
     // stored against the show the visitor actually has open.
     socket.on('session:adopt', safe('session:adopt', (payload) => {
+      // Limited like every other public event. It had no limit at all and wrote
+      // a consent.granted row on every call, so one anonymous socket looping it
+      // filled the activity buffer in under a second and a half — after which
+      // every other event, admin audit records included, was being dropped.
+      if (!allowConsent()) return;
       const { sessionId } = payload || {};
-      if (typeof sessionId === 'string' && /^[a-f0-9]{32}$/.test(sessionId)) {
-        socket.data.sessionId = sessionId;
-        // The visitor has just accepted, so this is the first moment their
-        // session may be recorded — the connect handler deliberately does not.
-        // Guarded because a reconnect re-sends adopt, and a session that
-        // started three times in one visit is a reconnect, not three visits.
-        if (!socket.data.sessionRecorded) {
-          socket.data.sessionRecorded = true;
-          track({ type: 'session.start', socket, meta: { admin: false } });
-        }
-        track({ type: 'consent.granted', socket });
+      if (typeof sessionId !== 'string' || !/^[a-f0-9]{32}$/.test(sessionId)) return;
+      socket.data.sessionId = sessionId;
+      socket.data.trackingOff = false;   // consent given again after a withdrawal
+      // The visitor has just accepted, so this is the first moment their
+      // session may be recorded — the connect handler deliberately does not.
+      // Guarded because the page re-sends adopt — buffered while offline and
+      // again on connect — and a session that started twice in one connection
+      // is one session.
+      if (!socket.data.sessionRecorded) {
+        socket.data.sessionRecorded = true;
+        track({ type: 'session.start', socket, meta: { admin: false } });
       }
+      // Consent once per socket, and once a day per visitor across all their
+      // sockets: a reconnect or a host page re-posting its banner is the same
+      // consent, not a new one.
+      if (!socket.data.consentRecorded) {
+        socket.data.consentRecorded = true;
+        if (consentIsNew(socket.data.showId, sessionId)) track({ type: 'consent.granted', socket });
+      }
+    }, socket));
+
+    // The visitor withdrew consent (the cookie bar, or the host page's banner).
+    // Nothing more is tracked for this socket: the session id goes, and with it
+    // the stand they were looking at, so not even the dwell on it is written
+    // when they leave. Not rate limited — it writes nothing, and a withdrawal
+    // must always be honoured. Consenting again (session:adopt) starts afresh.
+    socket.on('consent:withdrawn', safe('consent:withdrawn', () => {
+      forgetConsent(socket.data.showId, socket.data.sessionId);
+      socket.data.trackingOff = true;
+      socket.data.sessionId = null;
+      socket.data.viewing = null;
+      socket.data.viewStart = null;
+      socket.data.sessionRecorded = false;
+      socket.data.consentRecorded = false;
     }, socket));
 
     socket.on('plan:zoom', safe('plan:zoom', (payload) => {
@@ -411,7 +475,7 @@ function register(io) {
       // stored `meta`; an arbitrarily large string/object would bloat memory and
       // could even produce a >16 MB document Mongo rejects. Non-finite → null.
       const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
-      track({ type: 'plan.zoom', socket, meta: { level: num(level), cx: num(cx), cy: num(cy) } });
+      behaviour({ type: 'plan.zoom', meta: { level: num(level), cx: num(cx), cy: num(cy) } });
     }, socket));
 
     // Replaces booth:book / booth:hold on the public floorplan. Captures the
@@ -1088,9 +1152,10 @@ function register(io) {
       // refreshing a plan nobody had left while the counts on the plan they DID
       // leave stayed stale.
       showContext.runAs(socket.data.showId, () => {
+        // behaviour(): nothing, once this visitor has withdrawn consent.
         if (socket.data.viewing && socket.data.viewStart) {
-          track({ type: 'booth.dwell', boothNumber: socket.data.viewing, socket,
-                  meta: { ms: Date.now() - socket.data.viewStart } });
+          behaviour({ type: 'booth.dwell', boothNumber: socket.data.viewing,
+                      meta: { ms: Date.now() - socket.data.viewStart } });
         }
         delete activeViewers[socket.id];
         // Presence only — a visitor leaving changes nothing about the stands.
@@ -1194,12 +1259,15 @@ async function notifySettings() {
  * fetches it again and re-binds its stands, so a re-issued drawing lands on
  * the pages already looking at it rather than only on the next reload — which
  * is when a stand that moved would otherwise sit bound to where it used to be.
+ *
+ * One emit to the union of both rooms, as broadcastViewers does. Admins are in
+ * their show's public room as well, so emitting to each room in turn made every
+ * open console download the 1–2 MB plan and re-bind its stands twice.
  */
 function notifyArtwork(version) {
   if (!ioRef) return;
   const payload = { version: version || null, at: Date.now() };
-  ioRef.to(pubRoom(config.showId)).emit('floorplan:changed', payload);
-  ioRef.to(adminRoom(config.showId)).emit('floorplan:changed', payload);
+  ioRef.to(pubRoom(config.showId)).to(adminRoom(config.showId)).emit('floorplan:changed', payload);
 }
 
 module.exports = { register, refresh, refreshAll, notifyAreas, notifyStands, notifySettings, notifyArtwork };
