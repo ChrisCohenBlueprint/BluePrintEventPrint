@@ -749,6 +749,110 @@ function renderShortlist() {
   box.querySelectorAll('[data-remove-area]').forEach(btn => {
     btn.onclick = () => toggleAreaShortlist(btn.getAttribute('data-remove-area'));
   });
+  shownShortlistSig = shortlistSig();
+}
+
+// What the chips say, so a broadcast that changed nothing about them leaves
+// them alone. Rebuilding them on every broadcast would throw a keyboard user's
+// focus off the chip they were about to remove.
+let shownShortlistSig = '';
+function shortlistSig() {
+  return [submitted ? 1 : 0, shortlist.map(shownN).join(','),
+          areaShortlist.map(k => areaByKey(k)?.label || k).join(','),
+          sponsorShortlist.map(k => sponsorCache[k]?.name || k).join(',')].join('|');
+}
+function renderShortlistIfChanged() {
+  if (shortlistSig() !== shownShortlistSig) renderShortlist();
+}
+
+// ─── Taken out of the enquiry ────────────────────────────────────────────────
+//
+// Stands sell, go on hold, are merged into a neighbour or taken off the plan
+// while a visitor has them shortlisted; an area is sponsored; a package sells
+// out. None of it used to reach the enquiry: the stand stayed green on the map
+// over the Taken colour, kept its chip and was sent, and a sold-out package
+// was dropped from what was SENT while its chip stayed on screen — so the
+// visitor and sales were looking at two different enquiries. Whatever can no
+// longer be had now comes out, and the visitor is told which and why, here,
+// rather than finding out from a reply.
+let enquiryNotes = [];
+
+/** Say what was taken out, e.g. "Stand 102 — now taken". */
+function noteRemoved(lines) {
+  if (!lines.length) return;
+  // An enquiry already sent is not changed by this; nothing to tell them.
+  if (submitted) return;
+  enquiryNotes = enquiryNotes.concat(lines).slice(-6);
+  renderEnquiryNotes();
+}
+
+function clearEnquiryNotes() {
+  enquiryNotes = [];
+  renderEnquiryNotes();
+}
+
+// Built from DOM nodes: a line carries an area or package name an admin typed.
+function renderEnquiryNotes() {
+  const region = document.getElementById('eq-notice');
+  if (!region) return;
+  region.replaceChildren();
+  if (!enquiryNotes.length) return;
+  const box = document.createElement('div');
+  box.className = 'eq-notice';
+  const head = document.createElement('div');
+  head.className = 'eq-notice-head';
+  const title = document.createElement('strong');
+  title.textContent = 'Removed from your enquiry';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'eq-notice-close';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.textContent = '×';
+  close.onclick = clearEnquiryNotes;
+  head.append(title, close);
+  const ul = document.createElement('ul');
+  enquiryNotes.forEach(line => { const li = document.createElement('li'); li.textContent = line; ul.appendChild(li); });
+  box.append(head, ul);
+  region.appendChild(box);
+}
+
+/**
+ * Drop every shortlisted stand that is no longer available.
+ *
+ * `shownBefore` is the number each one was showing BEFORE this broadcast: the
+ * visitor knows a stand by the number on its chip, and a stand merged away is
+ * no longer in `booths` to be asked.
+ */
+function reconcileShortlist(shownBefore) {
+  const lines = [];
+  const keep = shortlist.filter(n => {
+    const b = booths[n];
+    if (b && b.status === 'available') return true;
+    // A stand taken off the plan is in removedBooths, not booths, so it reads
+    // as gone — which, to the visitor, it is.
+    const why = !b ? 'no longer on the plan' : b.status === 'held' ? 'now on hold' : 'now taken';
+    lines.push(`Stand ${shownBefore.get(n) || n} — ${why}`);
+    return false;
+  });
+  if (!lines.length) return false;
+  shortlist.splice(0, shortlist.length, ...keep);
+  noteRemoved(lines);
+  return true;
+}
+
+/** The same for areas, on every catalogue broadcast. */
+function reconcileAreaShortlist(labelBefore) {
+  const lines = [];
+  const keep = areaShortlist.filter(k => {
+    const a = areaByKey(k);
+    if (a && a.status !== 'taken') return true;
+    lines.push(`${labelBefore.get(k) || a?.label || k} — ${a ? 'now sponsored' : 'no longer on the plan'}`);
+    return false;
+  });
+  if (!lines.length) return false;
+  areaShortlist.splice(0, areaShortlist.length, ...keep);
+  noteRemoved(lines);
+  return true;
 }
 
 // ─── Recommended sponsorship ────────────────────────────────────────────────
@@ -842,12 +946,17 @@ function syncSponsorPanel() {
 function renderSponsors(list) {
   currentSponsorList = list;
   // A package can sell out while someone has it shortlisted. Drop it rather
-  // than sending an enquiry for something that is no longer available.
+  // than sending an enquiry for something that is no longer available — and
+  // take its chip down and say so. Only the first half used to happen, so the
+  // chip stayed in the enquiry the visitor could see while the one sent went
+  // without it.
+  const soldOut = [];
   for (const s of list) {
     if (!s.soldOut) continue;
     const i = sponsorShortlist.indexOf(s.key);
-    if (i > -1) sponsorShortlist.splice(i, 1);
+    if (i > -1) { sponsorShortlist.splice(i, 1); soldOut.push(`${s.name || s.key} — sold out`); }
   }
+  if (soldOut.length) { renderShortlist(); noteRemoved(soldOut); }
   const box = document.getElementById('sponsor-recos');
   box.replaceChildren();
   if (!list.length) { box.innerHTML = '<div class="sponsor-recos-empty">No sponsorship options available.</div>'; return; }
@@ -1047,7 +1156,7 @@ let shownPanelSig = '';
 function forgetRenderedPanel() {
   shownPanelSig = '';
   const panel = document.getElementById('booth-panel');
-  if (panel) delete panel.dataset.booth;
+  if (panel) { delete panel.dataset.booth; delete panel.dataset.areaSig; }
 }
 
 /**
@@ -1130,6 +1239,7 @@ function renderPanel(n, opts) {
   const b = booths[n] || { status: 'sold' };
   panel.classList.remove('hidden');
   panel.dataset.booth = n;
+  delete panel.dataset.areaSig;          // a stand has the panel, not an area
 
   const status = b.status || 'sold';
   const inList = shortlist.includes(n);
@@ -1332,6 +1442,7 @@ function initForm() {
       document.getElementById('eq-shortlist').classList.remove('hidden');
       errBox.classList.add('hidden');
       if (svgDoc) svgDoc.querySelectorAll('.booth-shortlisted').forEach(el => el.classList.remove('booth-shortlisted'));
+      clearEnquiryNotes();       // about the enquiry already sent, not this one
       renderShortlist();
       syncSponsorPanel();
       if (selectedId) renderPanel(selectedId, { force: true });
@@ -1372,6 +1483,7 @@ function initForm() {
 
       if (res && res.ok) {
         submitted = true;
+        clearEnquiryNotes();     // what it said was true of the enquiry just sent
         form.classList.add('hidden');
         document.getElementById('eq-footer').hidden = true;   // hide the Send bar
         document.getElementById('eq-shortlist').classList.add('hidden');
@@ -1461,6 +1573,9 @@ const visualSig = (b) => [b.status, b.company || '', b.sponsored ? 1 : 0,
 const lastVisual = {};
 
 socket.on('state:full', (allRows) => {
+  // The number each shortlisted stand shows NOW, before this broadcast can
+  // renumber it or take it away — it is how the visitor knows it.
+  const shownBefore = new Map(shortlist.map(n => [n, shownN(n)]));
   // Removed stands travel in the same broadcast and are split out here, once,
   // so nothing below this line has to remember they exist.
   const rows = [];
@@ -1495,6 +1610,11 @@ socket.on('state:full', (allRows) => {
     delete lastVisual[n];
   });
   if (selectedId && !booths[selectedId]) { selectedId = null; hideSelection(); }
+  // Whatever the visitor shortlisted that can no longer be had comes out of
+  // the enquiry before anything is painted, so the map, the chips and what is
+  // sent all agree — see reconcileShortlist.
+  if (reconcileShortlist(shownBefore)) syncSponsorPanel();
+  renderShortlistIfChanged();          // a renumbered stand's chip follows it
   stateReady = true;
   clearTimeout(stateWatchdog);
   setBanner('');
@@ -1648,23 +1768,33 @@ function toggleAreaShortlist(key) {
   if (i > -1) areaShortlist.splice(i, 1);
   else if (areaShortlist.length < 10) areaShortlist.push(key);
   renderShortlist();
-  renderAreaPanel(key);
+  // Only when it is that area's panel that is open. A chip can be removed with
+  // a STAND open, and redrawing the area's panel there swapped the stand out
+  // from under the visitor — with the stand still ringed on the map and no
+  // area selected, so the next broadcast swapped it back.
+  if (selectedArea === key) renderAreaPanel(key);
 }
 
 function renderAreaPanel(key) {
   const a = areaByKey(key);
   if (!a) return;
   const panel = document.getElementById('booth-panel');
+  const taken = a.status === 'taken';
+  const inList = areaShortlist.includes(key);
+  // Every catalogue broadcast re-renders the open area, so one that changed
+  // nothing about it must leave it alone — see rebuildPanel() for what a
+  // rebuild costs a keyboard user. renderPanel() and forgetRenderedPanel()
+  // drop this marker whenever anything else takes the panel.
+  const sig = [key, a.label, a.status, a.sponsor || '', a.logo || '', inList ? 1 : 0].join('|');
+  if (panel.dataset.areaSig === sig) return;
   panel.classList.remove('hidden');
   // An area has taken the panel over; whatever stand was in it is no longer
   // rendered, so renderPanel() must not think it still is.
   forgetRenderedPanel();
+  panel.dataset.areaSig = sig;
   document.getElementById('empty-state')?.classList.add('hidden');
 
-  const taken = a.status === 'taken';
-  const inList = areaShortlist.includes(key);
-
-  panel.innerHTML = `
+  rebuildPanel(`
     <div class="stand-header">
       <div class="stand-id">${esc(a.label)}</div>
       <div class="stand-badge ${taken ? 'badge-sold' : 'badge-available'}">${taken ? 'Sponsored' : 'Available'}</div>
@@ -1685,9 +1815,9 @@ function renderAreaPanel(key) {
       <button type="button" class="btn-shortlist ${inList ? 'in-list' : ''}" id="area-shortlist-btn">
         ${inList ? 'Added to enquiry' : 'Add to enquiry'}
       </button>`}
-  `;
-  document.getElementById('area-shortlist-btn')?.addEventListener('click', () => toggleAreaShortlist(key));
-  lucide.createIcons();
+  `, () => {
+    document.getElementById('area-shortlist-btn')?.addEventListener('click', () => toggleAreaShortlist(key));
+  });
   syncSponsorPanel();
 }
 
@@ -1712,9 +1842,23 @@ function updateAreaLegend() {
 }
 
 socket.on('areas:catalogue', (list) => {
+  // Each area's name as the visitor last saw it, for telling them what left
+  // their enquiry — an area that is renamed and sponsored in one change is
+  // still the one on their chip.
+  const labelBefore = new Map(planAreas.map(a => [a.key, a.label]));
   planAreas = Array.isArray(list) ? list : [];
   updateAreaLegend();
   paintAreas();
+  // An area sponsored (or taken off the plan) while it was shortlisted comes
+  // out of the enquiry, and a renamed one's chip follows it.
+  reconcileAreaShortlist(labelBefore);
+  renderShortlistIfChanged();
+  // The open area's panel used to go on saying "Available — Add to enquiry"
+  // after it was sponsored, until the visitor clicked away and back.
+  if (selectedArea) {
+    if (areaByKey(selectedArea)) renderAreaPanel(selectedArea);
+    else { selectedArea = null; hideSelection(); syncSponsorPanel(); }
+  }
 });
 
 socket.on('tags:catalogue', (list) => {
@@ -2460,7 +2604,10 @@ function applyVisual(n) {
   el.classList.remove('booth-available', 'booth-sold', 'booth-held', 'booth-sponsored');
   el.classList.add(`booth-${status}`);
 
-  if (shortlist.includes(n)) el.classList.add('booth-shortlisted');
+  // Only an available stand is shown as shortlisted. state:full takes a stand
+  // out of the shortlist as soon as it stops being available, so this is the
+  // belt to that: the map must never paint a sold stand as one you can have.
+  if (status === 'available' && shortlist.includes(n)) el.classList.add('booth-shortlisted');
   else el.classList.remove('booth-shortlisted');
 
   // Search highlight. Set here as well as in paintFilter() because applyVisual

@@ -575,14 +575,19 @@ body {
 .stand-hint, .stand-alt { font-size: 11.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
 
 
-.booth-shortlisted {
+/* Only on an AVAILABLE stand. This used to be `.booth-shortlisted` alone, and
+   coming later than the status fills it beat them — so a shortlisted stand
+   that sold went on showing green over the Taken colour. The page now drops a
+   stand from the shortlist the moment it stops being available; this makes
+   sure the map could not say otherwise even if it did not. */
+.booth-available.booth-shortlisted {
   stroke: #16a34a !important; stroke-width: 3px !important;
   fill: rgba(74,222,128,.35) !important;
 }
 /* A split cell's overlay is an OPAQUE mask over the artwork's stale baked
    number/size; a translucent shortlist fill would let those figures bleed
    through, so keep it solid. */
-.booth-shortlisted.booth-split-cell { fill: #86efac !important; }
+.booth-available.booth-shortlisted.booth-split-cell { fill: #86efac !important; }
 
 /* ─── Consent bar ──────────────────────────────────────────────────────────── */
 .consent-bar {
@@ -973,6 +978,28 @@ body {
   background: rgba(34,197,94,.10); border: 1px solid rgba(34,197,94,.32); color: #15803d;
 }
 .wl-done svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+/* ─── Taken out of the enquiry ────────────────────────────────────────────── */
+/* The region is always rendered — a live region that only appears with its
+   message in it is often not announced — so an empty one is zero height and
+   gives back the column's 12px gap (.fp-enquiry-col) rather than leaving a
+   hole above the enquiry. */
+.eq-notice-region:empty { margin-top: -12px; }
+.eq-notice {
+  padding: 11px 12px; border-radius: 10px;
+  font-size: 12.5px; line-height: 1.45;
+  background: rgba(249,115,22,.10); border: 1px solid rgba(249,115,22,.35); color: #9a3412;
+}
+.eq-notice-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.eq-notice-head strong { font-weight: 700; }
+.eq-notice ul { list-style: none; }
+.eq-notice li + li { margin-top: 2px; }
+.eq-notice-close {
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+  border: 1px solid transparent; background: transparent; color: inherit;
+  font-family: inherit; font-size: 15px; line-height: 1;
+}
+.eq-notice-close:hover, .eq-notice-close:focus-visible { border-color: rgba(154,52,18,.4); outline: none; }
 
 /* ─── Start another enquiry ───────────────────────────────────────────────── */
 .btn-again {
