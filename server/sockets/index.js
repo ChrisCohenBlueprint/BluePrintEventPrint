@@ -147,6 +147,36 @@ function consentIsNew(showId, sessionId) {
 }
 const forgetConsent = (showId, sessionId) => consentSeen.delete(`${showId}|${sessionId}`);
 
+// ─── Payload ceiling for visitors ─────────────────────────────────────────────
+// server.js lets a message be up to 3 MB, because an admin's sponsor logo is
+// sent over the socket and the models' own "too large" answer has to be what
+// the admin hears, not a dropped connection. Nothing a VISITOR's page sends is
+// anywhere near that: the biggest is an enquiry, a few kilobytes with the
+// comments box full. So a visitor's socket gets a ceiling of its own, checked
+// before any handler runs.
+const PUBLIC_MAX_PAYLOAD = 64 * 1024;
+
+/**
+ * Is this decoded payload bigger than `max`? Strings and binary count their
+ * length, everything else a little; the walk stops as soon as the answer is
+ * yes, so a huge payload costs no more than a small one to refuse.
+ */
+function oversized(value, max) {
+  let size = 0;
+  const stack = [value];
+  while (stack.length) {
+    const v = stack.pop();
+    if (typeof v === 'string') size += v.length;
+    else if (v && (ArrayBuffer.isView(v) || v instanceof ArrayBuffer)) size += v.byteLength;
+    else if (v && typeof v === 'object') {
+      size += 2;
+      for (const k of Object.keys(v)) { size += k.length; stack.push(v[k]); }
+    } else size += 8;
+    if (size > max) return true;
+  }
+  return false;
+}
+
 // ─── Denied admin attempts ────────────────────────────────────────────────────
 // The auth guard records every rejected admin event as a `security.denied`
 // activity entry. That record was uncapped, so one anonymous socket emitting an
@@ -339,6 +369,26 @@ function register(io) {
     const allowClick  = limiter(120);
     const allowSubmit = limiter(5);
     const allowConsent = limiter(10);
+
+    // A visitor's socket is held to what a visitor's page ever sends (see
+    // PUBLIC_MAX_PAYLOAD). Refused before any handler sees it, and answered, so
+    // a form waiting on its acknowledgement says something rather than hanging.
+    if (!isAdmin) {
+      socket.use((packet, next) => {
+        if (!oversized(packet.slice(1), PUBLIC_MAX_PAYLOAD)) return next();
+        const ack = packet[packet.length - 1];
+        const error = 'That is too large to send. Please shorten it and try again.';
+        if (typeof ack === 'function') ack({ ok: false, error, errors: [error] });
+        next(new Error('payload too large'));
+      });
+      // A refusal above is delivered as this socket's 'error' event; without a
+      // listener Socket.IO prints a stack trace for every one.
+      socket.on('error', (e) => {
+        if (socket.data.warnedLarge) return;
+        socket.data.warnedLarge = true;
+        console.warn(`⚠  Refused from visitor socket ${socket.id}: ${e.message}`);
+      });
+    }
 
     // Behavioural tracking — what a visitor looks at, clicks and zooms — stops
     // on this socket once they withdraw consent (consent:withdrawn), until they

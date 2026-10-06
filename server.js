@@ -106,6 +106,14 @@ async function start() {
   // must be constrained — a wildcard origin with credentials is unsafe.
   const io = new Server(server, {
     cors: { origin: config.isProd ? (process.env.PUBLIC_ORIGIN || false) : true, credentials: true },
+    // Sponsor logos travel over the socket as data URIs, and the models accept
+    // up to 2,000,000 characters. Socket.IO's default ceiling is 1 MB, so a
+    // logo between the two never reached them: the admin's socket was dropped
+    // with "transport error" — no acknowledgement, no message, a console that
+    // just hung. 3 MB leaves room for the envelope and matches the JSON body
+    // limit below, so it is the models' own "too large" that answers. A
+    // visitor's socket is held to far less in sockets/index.js.
+    maxHttpBufferSize: 3e6,
   });
 
   app.set('trust proxy', 1);          // Render terminates TLS upstream
