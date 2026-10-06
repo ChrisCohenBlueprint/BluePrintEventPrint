@@ -256,21 +256,28 @@ function register(io) {
   // would start empty and stay empty until someone edited them.
   refreshAll().catch(e => console.error('Show caches not warmed:', e.message));
 
-  // slug → id, for resolving a socket's show from its handshake.
-  const resolveShow = (slug) => {
-    const s = showsModel.bySlug(slug);
-    return s && s.active !== false ? s.showId : null;
-  };
+  // slug → show, for resolving a socket's event from its handshake. The same
+  // rules the REST side applies to X-Show — see show-middleware.js.
+  const { showForSocket } = require('../show-middleware');
 
   io.on('connection', (socket) => {
     const isAdmin = socket.data.isAdmin;
 
     // Which event this socket is watching. The page passes its slug in the
-    // handshake; anything unrecognised falls back to the default rather than
-    // failing the connection, since a visitor with a stale bookmark should
-    // still see a floorplan.
+    // handshake. A visitor's socket falls back to the default on anything it
+    // cannot place, since a visitor with a stale bookmark should still see a
+    // floorplan. An admin's does not: its page is labelled with one event, so
+    // it joins that one — retired included — or, if the slug names nothing,
+    // is told so and let go, rather than reconnecting into the default
+    // event's rooms and booking its stands under the other event's name.
     const slug = String(socket.handshake.query?.show || '').trim().toLowerCase();
-    socket.data.showId = resolveShow(slug) || config.defaultShow;
+    const show = showForSocket(slug, { admin: !!isAdmin });
+    if (show.gone) {
+      socket.emit('show:gone');
+      socket.disconnect(true);
+      return;
+    }
+    socket.data.showId = show.showId;
 
     // Two rooms, both scoped to this socket's show, so a broadcast for one
     // event never reaches another's viewers.
