@@ -1806,6 +1806,11 @@ const importActorOf = (actor) => (actor && IMPORT_ACTORS.includes(actor) ? actor
 // file carries a list price for every stand, and the price is the one thing the
 // public plan deliberately withholds.
 const BOOTH_DATA = path.join(__dirname, '..', 'data', 'booth_data.json');
+// Whose plan that file is: EUROPE's — its 262 stands read off LEX27 — and
+// Europe is the event the deployment was built around, filed under the default
+// show id (see shows.ensureSeeded). It is nobody else's: rebuilt from it, North
+// America became a copy of Europe's hall.
+const boothDataShow = () => config.defaultShow;
 
 // ─── Snapshots ────────────────────────────────────────────────────────────────
 /**
@@ -2871,9 +2876,13 @@ async function repairHalvedStands({ apply = false, actor = 'repair:halved-stands
 
 /**
  * Read the blank-plan source — the stand rectangles extracted from the original
- * artwork — or say plainly why it cannot be read.
+ * artwork — or say plainly why it cannot be read: including that it is not this
+ * event's plan at all. `scripts/reset-blank-layout.js --show lna --apply`, as
+ * its own usage text suggested, would have rebuilt North America from Europe's
+ * stands at Europe's prices.
  */
-function readBoothData() {
+function readBoothData(showId = config.showId) {
+  if (showId !== boothDataShow()) return { ok: false, reason: 'wrong_event', showId, belongsTo: boothDataShow() };
   try {
     const raw = JSON.parse(fs.readFileSync(BOOTH_DATA, 'utf8'));
     const rows = Object.values(raw);
@@ -2898,9 +2907,12 @@ async function restoreOriginalLayout({ apply = false, force = false, actor = 're
   const db = getDb();
   const showId = config.showId;
 
-  const src = readBoothData();
-  if (!src.ok) return { ok: false, reason: src.reason, detail: src.detail };
+  const src = readBoothData(showId);
+  if (!src.ok) return { ok: false, reason: src.reason, detail: src.detail, showId, belongsTo: src.belongsTo };
   const fresh = src.rows;
+  // Priced at this event's own rate. The file's prices are Europe's at the rate
+  // it had when the file was made, and the rate has been changed since.
+  const perUnit = await settings.rate();
 
   const committed = await countCommitted(showId);
   if (committed > 0 && !force) return { ok: false, reason: 'has_bookings', committed, showId };
@@ -2958,7 +2970,7 @@ async function restoreOriginalLayout({ apply = false, force = false, actor = 're
     boothNumber: toNum(f),
     svgElementId: f.boothId,
     geometry: { x: f.x, y: f.y, w: f.w, h: f.h },
-    sqm: f.sqm, sqmSource: 'estimated', listPrice: f.price,
+    sqm: f.sqm, sqmSource: 'estimated', listPrice: Math.round((f.sqm || 0) * perUnit),
     status: f.status,
     assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
     clicks: 0, createdAt: now, updatedAt: now, updatedBy: actor,
@@ -3040,9 +3052,12 @@ async function resetToBlankLayout({ apply = false, force = false, actor = 'reset
   const db = getDb();
   const showId = config.showId;
 
-  const src = readBoothData();
-  if (!src.ok) return { ok: false, reason: src.reason, detail: src.detail };
+  const src = readBoothData(showId);
+  if (!src.ok) return { ok: false, reason: src.reason, detail: src.detail, showId, belongsTo: src.belongsTo };
   const fresh = src.rows;
+  // Priced at this event's own rate. The file's prices are Europe's at the rate
+  // it had when the file was made, and the rate has been changed since.
+  const perUnit = await settings.rate();
 
   const committed = await countCommitted(showId);
   if (committed > 0 && !force) return { ok: false, reason: 'has_bookings', committed, showId };
@@ -3067,7 +3082,7 @@ async function resetToBlankLayout({ apply = false, force = false, actor = 'reset
     boothNumber: String(f.boothId).replace(/^booth-/, ''),
     svgElementId: f.boothId,
     geometry: { x: f.x, y: f.y, w: f.w, h: f.h },
-    sqm: f.sqm, sqmSource: 'estimated', listPrice: f.price,
+    sqm: f.sqm, sqmSource: 'estimated', listPrice: Math.round((f.sqm || 0) * perUnit),
     status: 'available',                 // FORCE available — blank, sell-able plan
     assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
     clicks: 0, createdAt: now, updatedAt: now, updatedBy: actor,

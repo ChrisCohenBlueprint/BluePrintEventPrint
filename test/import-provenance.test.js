@@ -147,6 +147,26 @@ const PLAN = (over = {}) => [
         db.store.holds.some(h => h.boothNumber === '201' && h.company === 'Holding Co'),
         JSON.stringify(db.store.holds));
 
+  console.log('\nThe blank plan is Europe\'s, and rebuilds nobody else');
+  // server/data/booth_data.json is Europe's hall. Every event used to be
+  // rebuilt from it, at the rate the file was priced at.
+  fresh();
+  await run(() => booths.importFromArtwork(PLAN({ 101: { status: 'available', exhibitor: null },
+                                                   105: { status: 'available', exhibitor: null } }), { actor: 'chris' }));
+  r = await run(() => booths.resetToBlankLayout({ apply: true, force: true }));
+  check('North America is refused, not rebuilt as a copy of Europe',
+        !r.ok && r.reason === 'wrong_event' && db.store.booths.length === 4, JSON.stringify([r.reason, r.belongsTo]));
+  r = await run(() => booths.restoreOriginalLayout({ apply: true, force: true }));
+  check('and so is the original-layout rebuild', !r.ok && r.reason === 'wrong_event', JSON.stringify(r.reason));
+  const EUROPE = require('../server/config').defaultShow;
+  db = fakeDb({ booths: [], holds: [], booths_snapshots: [], settings: [{ _id: EUROPE, ratePerSqm: 660 }] });
+  r = await showContext.runAs(EUROPE, () => booths.resetToBlankLayout({ apply: true }));
+  const rebuilt = db.store.booths;
+  check('Europe is rebuilt from it', r.ok && rebuilt.length > 200, JSON.stringify(r.reason || rebuilt.length));
+  check('priced at Europe\'s rate now, not the rate the file was made at',
+        rebuilt.every(b => b.listPrice === Math.round(b.sqm * 660)),
+        JSON.stringify(rebuilt.slice(0, 2).map(b => [b.sqm, b.listPrice])));
+
   const f = out.filter(x => !x).length;
   console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);
   process.exit(f ? 1 : 0);
