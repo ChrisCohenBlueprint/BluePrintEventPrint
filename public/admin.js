@@ -183,7 +183,12 @@ const aFrame = document.getElementById('admin-map-frame');
 const aInner = document.getElementById('admin-map-inner');
 
 let pzAdmin;
+// Once per page. The pan/zoom lives on the frame around the plan, which a new
+// drawing does not replace, so a second call only stacked a second panzoom and
+// a second set of button and search listeners on top of the first — every
+// zoom click then zoomed twice.
 function initAdminPanZoom() {
+  if (pzAdmin) return;
   pzAdmin = panzoom(aInner, {
     maxZoom: 8,
     minZoom: 0.3,
@@ -217,8 +222,8 @@ function initAdminPanZoom() {
   wireMultiBar();
 }
 
-// Wire the floating multi-select action bar once (initAdminPanZoom re-runs on
-// every floorplan (re)load, so guard against stacking duplicate listeners).
+// Wire the floating multi-select action bar once — guarded on its own, so it
+// can never stack duplicate listeners whoever calls it.
 let multiWired = false;
 function wireMultiBar() {
   if (multiWired) return;
@@ -356,7 +361,29 @@ function runAdminBoothSearch() {
 let adminSvgReady = false;
 let adminTagged = false;
 
-async function loadAdminSVG() {
+/**
+ * Fetch the plan — once, however many times it is asked for.
+ *
+ * Opening the Floorplan tab started a load whenever the plan was not there
+ * yet, so a double-click on the nav, or leaving the tab and coming back while
+ * the plan was still on its way, ran two. The second replaced the drawing with
+ * a fresh UNTAGGED copy while the console still believed the plan was tagged,
+ * and set up pan/zoom a second time: a plan whose stands answered no clicks,
+ * under buttons that zoomed twice, until a reload. Now everyone who asks waits
+ * for the one load in flight.
+ */
+let adminSvgLoad = null;
+function loadAdminSVG() {
+  if (!adminSvgLoad) adminSvgLoad = fetchAdminSVG().finally(() => { adminSvgLoad = null; });
+  return adminSvgLoad;
+}
+
+/** Resolves once the plan is on the page — or has failed, and the tab says why. */
+function adminPlanReady() {
+  return svgDoc ? Promise.resolve() : loadAdminSVG();
+}
+
+async function fetchAdminSVG() {
   const mount = document.getElementById('admin-svg-mount');
   try {
     // The artwork for THIS show — uploaded per event, falling back to the file
@@ -380,6 +407,9 @@ async function loadAdminSVG() {
     svgDoc.setAttribute('width', '100%');
     svgDoc.setAttribute('height', '100%');
     adminSvgReady = true;
+    // A drawing straight off the server carries no stands, whatever was true
+    // of the one before it.
+    adminTagged = false;
     tagAdminBooths();
     lucide.createIcons();
     initAdminPanZoom();
@@ -637,6 +667,13 @@ function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 
 // ─── Admin Select Booth ───────────────────────────────────────────────────────
 function selectAdminBooth(id) {
+  // Asked for before the plan has arrived — a link in the Activity Log is often
+  // the first thing to open the Floorplan tab — this threw on the missing
+  // drawing. It waits for the plan instead, then selects.
+  if (!svgDoc) {
+    adminPlanReady().then(() => { if (svgDoc && booths[id]) selectAdminBooth(id); });
+    return;
+  }
   clearMultiSelect();                              // a plain click abandons any shift-selection
   if (splitUI.id && splitUI.id !== id) exitSplitMode();   // …and a half-placed divider on another stand
   if (selectedAreaKey) {
@@ -3038,9 +3075,17 @@ function logEntry({ msg, type = 'info', time, boothNumber = null, live = false }
     entry.tabIndex = 0;
     entry.setAttribute('role', 'button');
     entry.title = `Open stand ${shownN(boothNumber)} on the plan`;
-    const go = () => {
+    // The plan may still be on its way — this is often the first thing to open
+    // the Floorplan tab — so wait for it, and for the tab to be laid out,
+    // rather than guessing at 60 ms and selecting on a plan that is not there.
+    const go = async () => {
       showAdminSection('floorplan');
-      setTimeout(() => { selectAdminBooth(boothNumber); focusAdminBooth(boothNumber); }, 60);
+      await adminPlanReady();
+      await new Promise(r => requestAnimationFrame(() => r()));
+      if (!svgDoc) return;
+      if (!booths[boothNumber]) return adminToast(`Stand ${boothNumber} is no longer on the plan.`, 'error');
+      selectAdminBooth(boothNumber);
+      focusAdminBooth(boothNumber);
     };
     entry.addEventListener('click', go);
     entry.addEventListener('keydown', (e) => {
