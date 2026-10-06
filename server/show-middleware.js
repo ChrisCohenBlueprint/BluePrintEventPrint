@@ -29,7 +29,14 @@ const GONE = 'This event is no longer at that address. Reload the page.';
 
 // Everything under /api acts as somebody: the console, the sales dashboard,
 // the Settings cards. Those are the calls that must never land on another event.
-const isApi = (req) => /^\/api(\/|$)/.test(req.path || '');
+//
+// Except what belongs to no event at all. /api/me answers who is signed in
+// (auth-routes.js), and a tab whose event has gone still has to be able to ask
+// that — and to sign out, which with /login lives outside /api already. Nothing
+// it does is filed under a show, so falling back cannot put anything in the
+// wrong one.
+const SHOWLESS_API = new Set(['/api/me']);
+const isApi = (req) => /^\/api(\/|$)/.test(req.path || '') && !SHOWLESS_API.has(String(req.path).replace(/\/+$/, ''));
 
 /**
  * The show a slug names, whether or not it is still on the air.
