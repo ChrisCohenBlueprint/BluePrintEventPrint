@@ -532,9 +532,10 @@ async function readStandsFromLive(req) {
   // 99 stands with no exhibitors and no way back.
   let namesRemoved = 0;
   try {
-    // Every name the plan prints inside a shape, including any on shapes
-    // dropped as duplicates — those have no stand of ours to draw over them,
-    // so if they are left they stay printed for good.
+    // Every exhibitor name the plan prints inside a stand, including any on
+    // shapes dropped as duplicates — those have no stand of ours to draw over
+    // them, so if they are left they stay printed for good. Area names stay:
+    // nothing else draws them.
     const stripped = stripExhibitorNames(f.svg, r.printedNames);
     if (stripped.removed) {
       const saved = await floorplans.setDisplaySvg(stripped.svg);

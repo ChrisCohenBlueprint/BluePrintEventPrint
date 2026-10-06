@@ -647,12 +647,6 @@ function extractStands(svg) {
     byNumber.set(st.number, st);
     stands.push(st);
   }
-  if (dropped.length) {
-    // Their names are still printed on the plan. If they are not taken out
-    // they stay there for good, because no stand of ours will ever draw over
-    // them — "Barentz" sat on the plan exactly this way.
-    for (const d of dropped) if (d.exhibitor) printedNames.push(d.exhibitor);
-  }
   if (repeated.length) {
     warnings.push(`${repeated.length} stand numbers are printed on two different shapes — ${repeated.join(', ')}. Only the first is kept; the artwork needs correcting before these stands can be sold.`);
   }
@@ -700,7 +694,23 @@ function extractStands(svg) {
   if (noArea) warnings.push(`${noArea} stands print no area; theirs is derived from the drawing.`);
 
   const fills = statusFromColour(stands, warnings);
-  for (const st of stands) if (st.exhibitor) printedNames.push(st.exhibitor);
+
+  // The names to take out of the copy we show, because we draw them
+  // ourselves: EXHIBITOR names, on stands. An area's name — VIP Lounge,
+  // Conference Track 1 — is the area's label and its identity (R24), and
+  // nothing redraws it: the page letters stands, not areas. Taking those out
+  // too left North America's six areas as blank dark boxes.
+  const isArea = (s) => s.sponsored === true;
+  for (const st of stands) if (st.exhibitor && !isArea(st)) printedNames.push(st.exhibitor);
+  // A shape dropped as a repeated number still has its name printed on the
+  // plan, and no stand of ours will ever draw over it, so if it is not taken
+  // out it stays there for good — "Barentz" sat on the plan exactly this way.
+  // It was dropped before the colours were read, so whether it is an area is
+  // judged by the colour group it would have joined.
+  const areaPaint = new Set(fills.filter(f => f.sponsored).map(f => `${f.fill || '?'}|${f.stroke || '?'}`));
+  for (const d of dropped) {
+    if (d.exhibitor && !areaPaint.has(`${d.fill || '?'}|${d.stroke || '?'}`)) printedNames.push(d.exhibitor);
+  }
 
   // The same findings as the warnings above, as data rather than prose, so the
   // artwork check can score a live-text plan on what was actually read instead
@@ -730,14 +740,25 @@ function extractStands(svg) {
  *               read at all. A plan draws empty space pale; it is the one
  *               convention that holds across every floorplan seen so far, and
  *               it is what Europe uses too.
- *   held      — a stand outlined differently to every other stand. A designer
- *               changes a stroke and adds a glow to make something stand out,
- *               and a reserved stand is the thing worth standing out.
  *   sponsored — a dark fill used by only a handful of shapes. The ordinary
  *               sold colour is used dozens of times; a colour used three times
  *               is marking something particular, which on these plans is the
  *               lounges and conference tracks.
+ *   held      — exactly what BEC-FP-01 R12 and the brief (section 5) say a
+ *               reserved stand is: the TAKEN fill, outlined in a different
+ *               stroke colour to the taken stands. Not "outlined differently
+ *               to most stands": on a plan whose available stands are the
+ *               majority and outlined in grey, that made every taken stand
+ *               a hold, and a dark lounge drawn with no outline became a
+ *               held stand instead of an area.
  *   sold      — everything else.
+ *
+ * The taken fill is the one most of the non-available stands share, leaving
+ * out the handful-of-shapes dark fills that mark areas. The stroke the taken
+ * stands share is, of the strokes drawn on that fill, the one the rest of the
+ * plan is outlined in most — so an early issue with more holds than sales
+ * still reads its holds as the odd ones out, and an outline only the
+ * available stands use can never make a taken stand look marked.
  *
  * An unreadable colour defaults to AVAILABLE, not sold. The two failures are
  * not symmetrical: a stand wrongly available is offered to a buyer and
@@ -763,25 +784,36 @@ function statusFromColour(stands, warnings) {
   const all = [...groups.values()];
   if (!all.length) return [];
 
-  // The stroke nearly every stand shares. A stand that departs from it has
-  // been marked deliberately.
-  const strokeTally = new Map();
-  for (const g of all) strokeTally.set(g.stroke, (strokeTally.get(g.stroke) || 0) + g.count);
-  const commonStroke = [...strokeTally.entries()].sort((a, b) => b[1] - a[1])[0][0];
-
   const biggest = all.reduce((a, b) => (b.count > a.count ? b : a));
-
+  const few = Math.max(6, stands.length * 0.1);
   for (const g of all) {
     const light = lightness(g.fill);
-    if (!g.fill) g.status = 'available';                        // unreadable — see the header
-    else if (light !== null && light > 0.9) g.status = 'available';
-    else if (g.stroke !== commonStroke) g.status = 'held';
-    else g.status = 'sold';
-
+    // Unreadable is available — see the header.
+    g.available = !g.fill || (light !== null && light > 0.9);
     // A dark fill used by only a few shapes is marking something particular.
-    g.sponsored = g.status === 'sold' && g !== biggest &&
-                  g.count <= Math.max(6, stands.length * 0.1) &&
-                  light !== null && light < 0.5;
+    g.fewDark = !g.available && g !== biggest && g.count <= few && light !== null && light < 0.5;
+  }
+
+  const tallyBy = (key, groups) => {
+    const t = new Map();
+    for (const g of groups) t.set(g[key], (t.get(g[key]) || 0) + g.count);
+    return t;
+  };
+  const takenFills = tallyBy('fill', all.filter(g => !g.available && !g.fewDark));
+  const takenFill = takenFills.size ? [...takenFills.entries()].sort((a, b) => b[1] - a[1])[0][0] : null;
+
+  const planStrokes = tallyBy('stroke', all);
+  const onTaken = tallyBy('stroke', all.filter(g => takenFill !== null && g.fill === takenFill));
+  const takenStroke = onTaken.size
+    ? [...onTaken.keys()].sort((a, b) => (planStrokes.get(b) - planStrokes.get(a)) || (onTaken.get(b) - onTaken.get(a)))[0]
+    : null;
+
+  for (const g of all) {
+    if (g.available) g.status = 'available';
+    else if (g.fill === takenFill && g.stroke !== takenStroke) g.status = 'held';
+    else g.status = 'sold';
+    // The taken fill itself is never an area, however few stands are sold.
+    g.sponsored = g.status === 'sold' && g.fewDark && g.fill !== takenFill;
   }
 
   for (const g of all) {
@@ -816,7 +848,9 @@ function statusFromColour(stands, warnings) {
  *
  * `names` is the text runs the extractor attributed to stands, so nothing is
  * matched by guesswork — a room label like "ENTRANCE" or "Dining Area" that
- * sits outside every stand is never touched.
+ * sits outside every stand is never touched, and neither is the name printed
+ * in a lounge or a conference track, which the extractor leaves out of
+ * `printedNames` because nothing else would draw it.
  */
 function stripExhibitorNames(svg, names) {
   const wanted = new Set(names.filter(Boolean).map(n => n.trim()));
