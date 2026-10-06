@@ -484,8 +484,30 @@ function setBanner(text, kind) {
   el.hidden = false;
 }
 
+// The artwork for THIS show — uploaded per event, falling back to the file
+// shipped with the app. The page's X-Show header decides which comes back.
+// The event is in the URL, not only in a header. Every event used to request
+// the same /floorplan.svg and rely on X-Show to distinguish them, which any
+// cache in between is entitled to ignore — and did: one event's plan was
+// served for another's for the five minutes it stayed cached.
+const ARTWORK_URL = `/floorplan.svg?show=${encodeURIComponent(SHOW)}`;
+
+// Which drawing is on screen: the server's ETag for it (its version), so a
+// reconnect can ask "has it changed?" for the price of a 304. See
+// revalidateArtwork().
+let artworkTag = null;
+let artworkLoading = false;       // a load() is in flight
+let recheckArtwork = false;       // …and something asked for a newer drawing meanwhile
+
 let collapsersWired = false;
-async function load() {
+/**
+ * Fetch the drawing and bind every stand to it.
+ *
+ * `fetched` is a response already in hand — revalidateArtwork() has just
+ * downloaded the new drawing to find out it IS new, and fetching it a second
+ * time would be another 2 MB for nothing.
+ */
+async function load(fetched) {
   if (!collapsersWired) { collapsersWired = true; wireCollapsers(); }
   const mount = document.getElementById('svg-mount');
   mount.replaceChildren();
@@ -494,19 +516,15 @@ async function load() {
   loading.textContent = 'Loading floorplan…';
   mount.appendChild(loading);
   armStateWatchdog();
+  artworkLoading = true;
   try {
-    // The artwork for THIS show — uploaded per event, falling back to the file
-    // shipped with the app. The page's X-Show header decides which comes back.
-    // The event is in the URL, not only in a header. Every event used to
-    // request the same /floorplan.svg and rely on X-Show to distinguish them,
-    // which any cache in between is entitled to ignore — and did: one event's
-    // plan was served for another's for the five minutes it stayed cached.
-    const svgRes = await fetch(`/floorplan.svg?show=${encodeURIComponent(SHOW)}`);
+    const svgRes = fetched || await fetch(ARTWORK_URL);
     // A 4xx/5xx does not throw. Checked BEFORE the body is used, or an error
     // page is injected as markup and every failure after it is a null-deref
     // with a misleading message.
     if (!svgRes.ok) throw new Error(`The plan could not be fetched (${svgRes.status}).`);
     const text = await svgRes.text();
+    artworkTag = svgRes.headers.get('ETag');
     mount.innerHTML = text;
     svgDoc = mount.querySelector('svg');
     if (!svgDoc) throw new Error('The plan came back without any artwork in it.');
@@ -526,7 +544,45 @@ async function load() {
   } catch (e) {
     svgReady = false;
     showLoadError(e && e.message ? e.message : '');
+  } finally {
+    artworkLoading = false;
+    // A re-issue announced while this was downloading may have been published
+    // after the server answered it. Ask again — a 304 if not.
+    if (recheckArtwork) { recheckArtwork = false; revalidateArtwork(); }
   }
+}
+
+/**
+ * Is the drawing on screen still the current one? If not, put the new one up.
+ *
+ * floorplan:changed is a broadcast: sent once, to whoever is connected at the
+ * moment the drawing is replaced, and never replayed. A visitor whose
+ * connection was down then came back to a state:full carrying the NEW
+ * geometry, and retagMap() bound it to the OLD drawing still on screen — a
+ * stand that moved became a transparent overlay over wherever the old
+ * artwork was, until a reload. So every reconnect asks. The request carries
+ * the version on screen (If-None-Match), and an unchanged drawing answers 304
+ * with no body: one round trip, nothing downloaded, the plan left alone.
+ */
+async function revalidateArtwork() {
+  if (artworkLoading) { recheckArtwork = true; return; }
+  // Never loaded, or failed: load() — or its retry button — fetches whatever
+  // is current anyway.
+  if (!svgDoc || !svgReady) return;
+  let res;
+  try {
+    res = await fetch(ARTWORK_URL, artworkTag
+      ? { headers: { 'If-None-Match': artworkTag } }
+      // No version to compare (both real routes send one, so this is a
+      // fallback): let the browser revalidate, and compare the version it
+      // reports. With none at all there is no cheap answer, and putting up
+      // the drawing again is the safe one.
+      : { cache: 'no-cache' });
+  } catch { return; }                 // offline again: the next reconnect asks
+  if (res.status === 304 || !res.ok) return;
+  const tag = res.headers.get('ETag');
+  if (tag && tag === artworkTag) return;
+  load(res);
 }
 
 // Fires callback only when the pointer barely moved, so panning never selects.
@@ -1660,6 +1716,8 @@ function setConnectionState(online) {
 }
 
 socket.on('connect', () => {
+  // A REconnect may have missed a re-issued drawing — see revalidateArtwork.
+  if (everConnected) revalidateArtwork();
   everConnected = true;
   setConnectionState(true);
   setBanner('');
@@ -1955,7 +2013,10 @@ function renderAreaPanel(key) {
 // every stand, exactly as a first load does; the stands, the shortlist and the
 // open panel are all state this page already holds and are left alone.
 socket.on('floorplan:changed', () => {
-  if (!svgDoc) return;         // still loading, or failed: load() will fetch the current one
+  // Mid-download, the drawing coming in may be the one just replaced: check
+  // again once it has landed.
+  if (artworkLoading) { recheckArtwork = true; return; }
+  if (!svgDoc) return;         // failed: load() will fetch the current one
   load();
 });
 

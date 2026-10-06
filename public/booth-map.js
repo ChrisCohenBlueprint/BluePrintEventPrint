@@ -262,7 +262,7 @@
   /**
    * How the artwork lettered THIS stand: the cap height of its number and
    * where it sits from the top-left corner, and the same for the size figure
-   * at the bottom-right. Cached per stand box — the artwork does not move.
+   * at the bottom-right. Cached per stand box, per drawing (cachesFor).
    *
    * Europe's plan carries no text, only outlines, so its lettering is found
    * the way printedNameIn finds an area's name: every glyph inside the box,
@@ -274,12 +274,35 @@
    * The fallbacks are Europe's measured figures, used only where a box holds
    * no lettering at all.
    */
-  var labelMetricsCache = {};
   var LABEL_FALLBACK = { numCap: 7.6, numLeft: 3, numTop: 3.5, numWeight: '400',
                          sizeCap: 4.6, sizeRight: 5.5, sizeBottom: 1.2, sizeWeight: '400' };
 
+  /**
+   * Everything measured off ONE drawing, kept with that drawing.
+   *
+   * The lettering of each stand (bakedLabelMetrics), every glyph's box
+   * (allGlyphBoxes) and where each area's printed name is (printedNameIn) are
+   * worth measuring once — "the artwork does not move". But a re-issued plan
+   * is a NEW document, and these used to be module globals that only clear()
+   * reset: the public page builds a fresh <svg> for a new drawing without
+   * calling clear() on the old one, so after a re-issue the page went on
+   * reading the old drawing. An area's name was "found" as elements of the
+   * detached old document — shrunk where nobody could see it, while the logo
+   * was drawn over the full-size name on screen — and a split cell's number
+   * was sized from the old drawing's lettering. Keyed on the <svg> element
+   * itself, a new drawing starts with nothing, whoever forgets to say so, and
+   * the old one's measurements go when it does.
+   */
+  var docCaches = new WeakMap();
+  function cachesFor(svgDoc) {
+    var c = docCaches.get(svgDoc);
+    if (!c) { c = { metrics: {}, names: {}, glyphs: null }; docCaches.set(svgDoc, c); }
+    return c;
+  }
+
   function bakedLabelMetrics(svgDoc, box) {
     if (!box) return LABEL_FALLBACK;
+    var labelMetricsCache = cachesFor(svgDoc).metrics;
     var key = [box.x, box.y, box.w, box.h].join(',');
     if (Object.prototype.hasOwnProperty.call(labelMetricsCache, key)) return labelMetricsCache[key];
 
@@ -1114,9 +1137,8 @@
    * glyphs are clustered by vertical position — lines of the same name merge,
    * the corner labels stay apart — and the heaviest cluster is the name.
    *
-   * ~2000 bboxes, so the answer is cached per area: the artwork does not move.
+   * ~2000 bboxes, so the answer is cached per area, per drawing (cachesFor).
    */
-  var nameCache = {};
 
   /**
    * Every glyph box on the plan, measured once.
@@ -1127,12 +1149,12 @@
    * identical every time. The artwork does not move, so the sweep happens once
    * and each area filters the result.
    *
-   * Dropped by clear(), because a re-tag can rebuild nodes underneath it.
+   * Kept per drawing (cachesFor), and dropped by clear() as well, because a
+   * re-tag can rebuild nodes underneath it.
    */
-  var glyphBoxCache = null;
-
   function allGlyphBoxes(svgDoc) {
-    if (glyphBoxCache) return glyphBoxCache;
+    var caches = cachesFor(svgDoc);
+    if (caches.glyphs) return caches.glyphs;
     var out = [];
     var glyphs = svgDoc.querySelectorAll('path, polygon');
     for (var i = 0; i < glyphs.length; i++) {
@@ -1149,11 +1171,12 @@
       b.el = el;
       out.push(b);
     }
-    glyphBoxCache = out;
+    caches.glyphs = out;
     return out;
   }
 
   function printedNameIn(svgDoc, box, cacheKey) {
+    var nameCache = cachesFor(svgDoc).names;
     if (Object.prototype.hasOwnProperty.call(nameCache, cacheKey)) return nameCache[cacheKey];
 
     var marks = [], heights = [];
@@ -1422,9 +1445,12 @@
   }
 
   function clear(svgDoc) {
-    // Both measurement caches describe nodes this is about to replace.
-    glyphBoxCache = null;
-    nameCache = {};
+    // The glyph and name caches describe nodes this is about to replace. The
+    // lettering measurements are of the drawing itself, which a re-tag does
+    // not change, so they stay.
+    var caches = cachesFor(svgDoc);
+    caches.glyphs = null;
+    caches.names = {};
     unhideRemoved(svgDoc);
     var added = '[data-overlay],[data-split-box],[data-split-label],[data-split-size],[data-removed-mask],[data-removed-edge]';
     Array.prototype.forEach.call(svgDoc.querySelectorAll(added), function (n) {
@@ -1446,12 +1472,26 @@
     });
     // Artwork rects tagged directly (exact matches) carry data-booth AND
     // hover/click listeners; clone-replace strips the listeners and we reset the
-    // state classes, so a re-attach starts from a clean slate with no doubles.
+    // state, so a re-attach starts from a clean slate with no doubles.
+    //
+    // ALL the state, not just the stand number and status. A rectangle whose
+    // stand has been merged away or split is plain artwork again, and it kept
+    // what the pages had put on it: still in the tab order and announced as a
+    // button with the old stand's name (tabindex, role, aria-label — the public
+    // page's onTag), still faded or ringed by a search, still marked as found
+    // or multi-selected on the admin plan, and still filled in the sponsor's
+    // colour. A rectangle that is re-bound gets all of it back from its page.
     Array.prototype.forEach.call(svgDoc.querySelectorAll('[data-booth]:not([data-overlay])'), function (el) {
       var fresh = el.cloneNode(true);
       fresh.removeAttribute('data-booth');
-      ['booth-interactive', 'booth-available', 'booth-sold', 'booth-held', 'booth-selected', 'booth-shortlisted']
+      ['tabindex', 'role', 'aria-label'].forEach(function (a) { fresh.removeAttribute(a); });
+      ['booth-interactive', 'booth-available', 'booth-sold', 'booth-held', 'booth-selected', 'booth-shortlisted',
+       'booth-sponsored', 'booth-dim', 'booth-match', 'booth-search-hit', 'booth-multi']
         .forEach(function (c) { fresh.classList.remove(c); });
+      // The sponsor fill is set inline with !important (that is how it beats
+      // the status fills); the artwork's own inline styles, if it has any, are
+      // not, and are left alone.
+      if (fresh.style && fresh.style.getPropertyPriority('fill') === 'important') fresh.style.removeProperty('fill');
       if (el.parentNode) el.parentNode.replaceChild(fresh, el);
     });
   }
