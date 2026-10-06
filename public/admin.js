@@ -5597,7 +5597,8 @@ async function previewStands(row, { revision = null } = {}) {
     `${p.totalArea.toLocaleString()} ${unit} in total. ` +
     (p.existing
       ? `This event has ${p.existing} stands now: against this plan, ${ds.added || 0} new, ${ds.moved || 0} moved, ` +
-        `${ds.resized || 0} resized, ${ds.unchanged || 0} unchanged, ${ds.missing || 0} no longer drawn` +
+        `${ds.resized || 0} resized, ${ds.unchanged || 0} unchanged, ` +
+        (ds.absorbed ? `${ds.absorbed} inside merged blocks, ` : '') + `${ds.missing || 0} no longer drawn` +
         (ds.committedMissing ? ` — ${ds.committedMissing} of them sold or on hold` : '') + '. '
       : '') +
     'Exhibitor names become ours: drawn in our own type, searchable, and editable here.';
@@ -5616,17 +5617,23 @@ async function previewStands(row, { revision = null } = {}) {
   }
 
   const list = (rows, f) => rows.slice(0, 40).map(f).join(', ') + (rows.length > 40 ? ` … and ${rows.length - 40} more` : '');
+  // Numbers the drawing prints that this event has merged into a block: not
+  // new stands, and not stands to add — the update keeps the block whole. A
+  // server from before the diff reported them sends no such list.
+  const absorbed = (d && d.absorbed) || [];
   const pre = document.createElement('pre');
   pre.className = 'spec-report-body';
   pre.textContent = [
     ...(d && p.existing ? [
       'What this drawing changes:',
       ...(d.added.length   ? [`  new        ${list(d.added, a => a.boothNumber)}`] : []),
+      ...(absorbed.length  ? [`  inside merged blocks  ${list(absorbed, a => `${a.boothNumber} (in ${a.into})`)}`] : []),
       ...(d.moved.length   ? [`  moved      ${list(d.moved, a => a.boothNumber)}`] : []),
       ...(d.resized.length ? [`  resized    ${list(d.resized, a => `${a.boothNumber} (${a.from ?? '?'}→${a.to ?? '?'} ${unit})`)}`] : []),
       ...(d.missing.length ? [`  not drawn  ${list(d.missing, a => `${a.boothNumber}${a.committed ? ' *' : ''}`)}` +
                               (d.missing.some(m => m.committed) ? '   (* sold or on hold — kept)' : '   (empty stands are removed by Update)')] : []),
-      ...(!d.added.length && !d.moved.length && !d.resized.length && !d.missing.length ? ['  nothing — every stand is where it was'] : []),
+      ...(!d.added.length && !absorbed.length && !d.moved.length && !d.resized.length && !d.missing.length
+        ? ['  nothing — every stand is where it was'] : []),
       '',
     ] : []),
     ...(p.fills && p.fills.length ? [

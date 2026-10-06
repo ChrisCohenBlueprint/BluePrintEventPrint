@@ -15,6 +15,8 @@
  *     dialogs must not promise visitors a plan nobody can reach.
  *   - When the server says this console's event has gone (show:gone), the page
  *     stops and says to reload, rather than letting every button fail in turn.
+ *   - A re-issued plan's check lists the numbers it prints inside a block this
+ *     event has merged, rather than calling the plan unchanged.
  */
 const { startConsole, seedStands, toasts, checker, launch } = require('./admin-console-harness');
 
@@ -59,6 +61,16 @@ const revisions = { lme: [{ revisionId: 'r-lme-1', label: 'LME27', status: 'supe
       uploadedAt: null, spec: null, boothCount: 0, ...(plan[sh.showId] || {}),
     }))); });
     app.get('/api/floorplan/revisions', (req, res) => res.json(revisions[req.get('X-Show')] || []));
+    // A re-issued plan read against the stands: one whose only news is numbers
+    // printed inside a merged block, and one from a server that predates them.
+    app.get('/api/stands/preview', (req, res) => {
+      const absorbedOnly = req.get('X-Show') === 'absorbed';
+      res.json({ ok: true, stands: 40, byStatus: { available: 30, sold: 10, held: 0 }, unit: 'sqm', totalArea: 900,
+        warnings: [], sample: [], fills: [], existing: 40, committed: 10, handwork: 0,
+        diff: { added: [], moved: [], resized: [], missing: [], unchanged: [],
+                ...(absorbedOnly ? { absorbed: [{ boothNumber: '103', into: '102' }, { boothNumber: '104', into: '102' }] } : {}),
+                summary: { added: 0, moved: 0, resized: 0, missing: 0, unchanged: 38, committedMissing: 0, ...(absorbedOnly ? { absorbed: 2 } : {}) } } });
+    });
     app.get('/api/palette', (req, res) => {
       headers.push({ path: '/api/palette', show: req.get('X-Show') });
       if (req.get('X-Show') === 'gone') return res.status(409).json({ error: 'This event is no longer at that address. Reload the page.' });
@@ -175,6 +187,20 @@ const revisions = { lme: [{ revisionId: 'r-lme-1', label: 'LME27', status: 'supe
       .find(b => b.textContent === 'Colours').click());
     await page.waitForTimeout(300);
     check('and its controls name that event to the server', headers.some(h => h.show === 'lex26'), JSON.stringify(headers));
+
+    console.log('\nA re-issued plan whose stands sit inside a merged block');
+    await page.evaluate(() => previewStands({ slug: 'absorbed', showId: 'LEX', name: 'Lubricant Expo Europe' }));
+    await page.waitForSelector('#stand-report');
+    let report = await page.$eval('#stand-report', r => r.textContent);
+    check('lists them, and the block each one is inside', /inside merged blocks\s+103 \(in 102\), 104 \(in 102\)/.test(report), report.slice(0, 300));
+    check('and does not call the plan unchanged', !/nothing — every stand is where it was/.test(report));
+    check('the summary counts them too', /2 inside merged blocks/.test(report));
+    await page.evaluate(() => previewStands({ slug: 'older', showId: 'LEX', name: 'Lubricant Expo Europe' }));
+    await page.waitForTimeout(300);
+    report = await page.$eval('#stand-report', r => r.textContent);
+    check('a server that does not send them still reads as unchanged', /nothing — every stand is where it was/.test(report) &&
+          !/inside merged blocks/.test(report), report.slice(0, 300));
+    await page.evaluate(() => document.getElementById('stand-report')?.remove());
 
     console.log('\nThe server\'s "no longer at that address"');
     await page.evaluate(() => openPalettePanel({ slug: 'gone', name: 'An old event' }));
