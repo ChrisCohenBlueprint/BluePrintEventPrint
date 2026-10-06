@@ -228,7 +228,8 @@ const standsIn = (showId) => db.store.booths.filter(b => b.showId === showId);
 
   console.log('\nWhat counts as work an import must not destroy');
   const f2 = JSON.stringify(booths.commercialFilter());
-  check('a stand on hold that a person made counts', /"status":"held"|\$ne":"available"/.test(f2));
+  check('a stand on hold that a person made counts',
+        /"status":"held"|\$ne":"available"|"status":\{"\$nin":\["available","removed"\]\}/.test(f2));
   check('but an import\'s own held stands are excluded alongside its sold ones',
         /"status":\{"\$in":\["sold","held"\]\}/.test(f2), f2.slice(0, 120));
   check('a contact or an agreed price counts',

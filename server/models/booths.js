@@ -1743,13 +1743,25 @@ const IMPORT_NOTE = 'Name read from the supplied floorplan artwork.';
 /**
  * The actors that are not people: an import, a deploy-time seed, a reset.
  *
- * A stand's `source` says an import PUT its state there; `updatedBy` says who
- * touched it LAST, and the two together are what tell a booking apart from a
- * colour read off a drawing. Checking only `source` was the whole defect: the
- * field is never cleared on its own, so a stand an admin booked kept the mark
- * and the guard counted a paying exhibitor as import output.
+ * A stand's `source` says an import PUT its booking state there, and every
+ * write a person makes to that state — a booking, a hold, a release, a price,
+ * a tag, a country, a move — takes the mark off. (It was once never cleared at
+ * all, so a stand an admin booked kept the mark and the guard counted a paying
+ * exhibitor as import output; that is what the clearing fixed.) So the mark
+ * alone now says who wrote the booking last.
+ *
+ * `updatedBy` is PROVENANCE, not just an audit name: an import writes one of
+ * these actors there for the state it writes, and records the person who ran
+ * it in `importedBy`. It used to stamp the admin's own name, so after the first
+ * "Make live" from the console every stand the plan drew as sold read as a
+ * person's booking — every later import was refused, and ?mode=update could
+ * not correct a misread status. It matters for stands imported before the
+ * mark existed, which are known only by the import's note and need an import
+ * to have written them last.
  */
 const IMPORT_ACTORS = ['import', 'deploy', 'seed', 'reset-blank', 'restore-original', null];
+/** What an import writes in `updatedBy`: its own name if it has one of these, 'import' if run by a person. */
+const importActorOf = (actor) => (actor && IMPORT_ACTORS.includes(actor) ? actor : 'import');
 
 // The source file the blank-plan rebuild reads. It lives in server/data rather
 // than public/ because express.static serves everything under public/ — this
@@ -2045,15 +2057,24 @@ function commercialFilter() {
     status: { $in: ['sold', 'held'] },
     'assignment.contactId': null,
     'assignment.actualPrice': null,
-    $or: [{ source: IMPORT_SOURCE }, { 'assignment.notes': IMPORT_NOTE }],
-    // Last written by something that is not a person. setStatus, move and every
-    // other human-driven write stamp the admin's name here and clear `source`,
-    // so a booking can never satisfy this.
-    updatedBy: { $in: IMPORT_ACTORS },
+    $or: [
+      // The import's mark: every write a person makes to the booking clears it
+      // (see IMPORT_ACTORS), so a booking can never carry it.
+      { source: IMPORT_SOURCE },
+      // A stand imported before the mark existed carries only the import's
+      // note, which a person converting a hold to a sale for the same company
+      // keeps — so for these, an import also has to have written it last.
+      { 'assignment.notes': IMPORT_NOTE, updatedBy: { $in: IMPORT_ACTORS } },
+    ],
   };
   return {
     $and: [
-      { $or: [{ status: { $ne: 'available' } }, { 'assignment.company': { $nin: [null, ''] } }] },
+      // A stand taken off the plan is not a booking: remove() refuses anything
+      // booked, and its 'removed' status used to read as "not available" here,
+      // so one pulled stand refused every import and blank reset as
+      // "has bookings".
+      { removed: { $ne: true } },
+      { $or: [{ status: { $nin: ['available', 'removed'] } }, { 'assignment.company': { $nin: [null, ''] } }] },
       { $nor: [fromImport] },
     ],
   };
@@ -2096,12 +2117,13 @@ const isImportOutput = (b) => {
   const a = b.assignment || {};
   return ['sold', 'held'].includes(b.status) &&
          a.contactId == null && a.actualPrice == null &&
-         (b.source === IMPORT_SOURCE || a.notes === IMPORT_NOTE) &&
-         IMPORT_ACTORS.includes(b.updatedBy ?? null);
+         (b.source === IMPORT_SOURCE ||
+          (a.notes === IMPORT_NOTE && IMPORT_ACTORS.includes(b.updatedBy ?? null)));
 };
 const isCommitted = (b) => {
+  if (b.removed === true) return false;
   const a = b.assignment || {};
-  const marked = b.status !== 'available' || !!(a.company && String(a.company).trim());
+  const marked = !['available', 'removed'].includes(b.status) || !!(a.company && String(a.company).trim());
   return marked && !isImportOutput(b);
 };
 const hasHandwork = (b) => {
@@ -2273,8 +2295,28 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   // has done something to.
   const SHAPE = ['svgElementId', 'geometry', 'sqm', 'sqmSource', 'listPrice'];
 
+  // Provenance, kept apart from the person: the booking state an import writes
+  // is stamped as the import's (see IMPORT_ACTORS), and whoever ran it is
+  // recorded alongside rather than in its place.
+  const importActor = importActorOf(actor);
   const docs = stands.map(s => ({ showId, ...fromArtwork(s), clicks: 0,
-                                  createdAt: now, updatedAt: now, updatedBy: actor || 'import' }));
+                                  createdAt: now, updatedAt: now, updatedBy: importActor,
+                                  importedBy: actor || importActor }));
+  const prevByNumber = new Map(existing.map(b => [b.boothNumber, b]));
+
+  // A plan with no readable areas — a re-issue whose printed figures failed to
+  // calibrate — gives every stand an area of nothing. That is the reader not
+  // knowing, not the stand having shrunk, so a size and price already known
+  // are kept rather than overwritten with 0 m² and no price — on every stand,
+  // the sold ones included.
+  for (const d of docs) {
+    const prev = prevByNumber.get(d.boothNumber);
+    if (!(d.sqm > 0) && prev && prev.sqm > 0) {
+      d.sqm = prev.sqm;
+      d.sqmSource = prev.sqmSource;
+      d.listPrice = prev.listPrice ?? null;
+    }
+  }
 
   const result = { ok: true, showId, mode: replace ? 'replace' : (keep ? 'update' : 'upsert'),
                    imported: docs.length,
@@ -2286,6 +2328,10 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
 
   // ── Replace ─────────────────────────────────────────────────────────────────
   if (replace) {
+    // The holds go with the stands, so they come back with them too: a failed
+    // insert used to restore the stands and leave every hold deleted, and the
+    // sweep then released each restored held stand within the minute.
+    const priorHolds = await db.collection('holds').find({ showId }).toArray();
     await col().deleteMany({ showId });
     await db.collection('holds').deleteMany({ showId });
     try {
@@ -2300,8 +2346,10 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
       console.error('Import: insert failed, restoring the previous stands —', e.message);
       await col().deleteMany({ showId });
       if (existing.length) await col().insertMany(existing);
+      await db.collection('holds').deleteMany({ showId });
+      if (priorHolds.length) await db.collection('holds').insertMany(priorHolds);
       return { ok: false, reason: 'insert_failed', detail: e.message, restored: existing.length,
-               snapshotId, showId };
+               holdsRestored: priorHolds.length, snapshotId, showId };
     }
     await writeImportHolds(db, showId, docs.filter(d => d.status === 'held'), actor, now);
     return result;
@@ -2310,15 +2358,27 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   // ── Upsert ──────────────────────────────────────────────────────────────────
   const personHolds = new Set(await db.collection('holds')
     .distinct('boothNumber', { showId, source: { $ne: IMPORT_SOURCE } }));
-  const prevByNumber = new Map(existing.map(b => [b.boothNumber, b]));
+  // Numbers that live inside a merged block. The plan the block was merged
+  // from may still draw them — a designer's file that predates the merge, or
+  // one that never had it — and creating them again put a stand back on top of
+  // the block: merge 102+103, make live a plan still drawing 103, and 103 came
+  // back available on 102's floor. They are skipped and named instead.
+  const absorbedInto = new Map();
+  for (const b of existing) {
+    for (const n of (Array.isArray(b.mergedFrom) ? b.mergedFrom : [])) absorbedInto.set(String(n), b.boothNumber);
+  }
 
   const ops = [];
-  const created = [], refreshed = [], reshaped = [], untouched = [], released = [];
+  const created = [], refreshed = [], reshaped = [], untouched = [], released = [], absorbed = [];
   for (const doc of docs) {
     const prev = prevByNumber.get(doc.boothNumber);
     const filter = { showId, boothNumber: doc.boothNumber };
 
     if (!prev) {
+      if (absorbedInto.has(doc.boothNumber)) {
+        absorbed.push({ boothNumber: doc.boothNumber, into: absorbedInto.get(doc.boothNumber) });
+        continue;
+      }
       created.push(doc.boothNumber);
       ops.push({ updateOne: { filter, update: { $set: doc }, upsert: true } });
       continue;
@@ -2327,11 +2387,22 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
     // Its shape is ours now, not the plan's — leave the whole record alone.
     if (isComposite(prev)) { untouched.push(doc.boothNumber); continue; }
 
+    // Conditional on the stand's shape revision as read (see revFilter): a
+    // stand merged or split while the import ran is composite now, and the
+    // plan's rectangle must not be written over the block.
+    Object.assign(filter, revFilter(prev));
     const mayRewrite = !isCommitted(prev) && !hasHandwork(prev) && !personHolds.has(prev.boothNumber);
-    const $set = { updatedAt: now, updatedBy: actor || 'import' };
+    // Only the shape is the import's to rewrite on a stand somebody has worked
+    // on, so only the shape is stamped: `updatedBy` is the provenance of the
+    // BOOKING (see IMPORT_ACTORS), and re-stamping a person's booking with
+    // 'deploy' while re-reading its outline turned it into import output that
+    // the next import set available.
+    const $set = { updatedAt: now, shapeReadBy: actor || importActor };
     for (const k of SHAPE) $set[k] = doc[k];
 
     if (mayRewrite) {
+      $set.updatedBy = importActor;
+      $set.importedBy = actor || importActor;
       $set.status = doc.status;
       $set.source = doc.source;
       $set.sponsored = doc.sponsored;
@@ -2349,7 +2420,7 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
       reshaped.push(doc.boothNumber);
     }
     ops.push({ updateOne: { filter, update: released.includes(doc.boothNumber)
-      ? { $set, $unset: { holdExpiresAt: '' } } : { $set } } });
+      ? { $set, $unset: { holdExpiresAt: '' }, $inc: BUMP } : { $set, $inc: BUMP } } });
   }
 
   if (ops.length) await col().bulkWrite(ops, { ordered: false });
@@ -2397,7 +2468,8 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
            reshaped: reshaped.length, untouched: untouched.length,
            released: released.length, orphaned, preserved: reshaped.concat(untouched),
            createdNumbers: created, reshapedNumbers: reshaped, untouchedNumbers: untouched,
-           removed, kept };
+           // { boothNumber, into }: drawn by the plan, but inside merged block `into`.
+           absorbed, removed, kept };
 }
 
 /**
@@ -2528,7 +2600,9 @@ async function restoreOriginalLayout({ apply = false, force = false, actor = 're
   const fc        = f => centre({ x: f.x, y: f.y, w: f.w, h: f.h });
   const near      = (a, b) => Math.abs(a.x - b.x) < TOL && Math.abs(a.y - b.y) < TOL;
   const sizeClose = (a, b) => Math.abs(a.w - b.w) < TOL * 4 && Math.abs(a.h - b.h) < TOL * 4;
-  const hasState  = b => { const a = b.assignment || {}; return b.status !== 'available' || a.company || a.actualPrice || a.notes || (b.clicks || 0) > 0; };
+  // A booking, not a removal: a stand taken off the plan has status 'removed',
+  // which is no booking to carry (see commercialFilter).
+  const hasState  = b => { const a = b.assignment || {}; return ['sold', 'held'].includes(b.status) || a.company || a.actualPrice || a.notes || (b.clicks || 0) > 0; };
   // Carry a stand's data forward if it holds a booking OR an admin override.
   const hasCarry  = b => hasState(b) || b.displayNumber || b.sponsored;
 
@@ -2593,7 +2667,9 @@ async function restoreOriginalLayout({ apply = false, force = false, actor = 're
   for (const m of finalMatches) {
     const a = m.old.assignment || {};
     const $set = {
-      status: m.old.status,
+      // A removed stand carried for its shown number or sponsor flag comes back
+      // available, never with a 'removed' status and no flag to match it.
+      status: m.old.removed === true ? 'available' : m.old.status,
       'assignment.company': a.company ?? null,
       'assignment.contactId': a.contactId ?? null,
       'assignment.actualPrice': a.actualPrice ?? null,
@@ -2660,7 +2736,8 @@ async function resetToBlankLayout({ apply = false, force = false, actor = 'reset
   if (committed > 0 && !force) return { ok: false, reason: 'has_bookings', committed, showId };
 
   const oldBooths = await col().find({ showId }).toArray();
-  const heldOrSold = oldBooths.filter(b => b.status !== 'available')
+  // Bookings only: a stand taken off the plan is not one (see commercialFilter).
+  const heldOrSold = oldBooths.filter(b => ['sold', 'held'].includes(b.status) && b.removed !== true)
     .map(b => ({ boothNumber: b.boothNumber, status: b.status, company: b.assignment?.company || null }));
   const holds = await db.collection('holds').countDocuments({ showId });
 
