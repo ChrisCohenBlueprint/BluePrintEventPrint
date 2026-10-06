@@ -24,6 +24,9 @@
  *                         no window and no expiry.
  *   itself reversible   — going back is a change too, so going back is undoable.
  *   bounded             — the collection cannot grow without end.
+ *   shape, not bookings — going back puts the hall's shape back and leaves every
+ *                         sale and hold as it is now; a point that would move or
+ *                         take away a booked stand is refused, naming it.
  */
 const { fakeDb } = require('./fake-mongo');
 
@@ -33,6 +36,7 @@ require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
 
 const showContext = require('../server/show-context');
 const booths = require('../server/models/booths');
+const holds = require('../server/services/holds');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`); };
@@ -165,6 +169,137 @@ const tick = () => new Promise(r => setTimeout(r, 3));
   check('one header per point, and the stands stored under it',
         rows.length === 12 && db.store.booths_snapshots.length > 12,
         `${rows.length} headers, ${db.store.booths_snapshots.length} rows`);
+
+  // ─── Shape, not bookings ────────────────────────────────────────────────────
+  console.log('\nGoing back puts the shape back, and keeps every booking as it is now');
+  seed();
+  db.store.holds = [];
+  await run(() => booths.setStatus('D', 'held', { company: 'Was Holding Co', actor: 'chris',
+                                                  holdExpiresAt: new Date(Date.now() - 86_400_000) }));
+  await run(() => booths.consolidateMany(['A', 'B'], { actor: 'chris' })); await tick();
+  const mergePoint = (await run(() => booths.history()))[0];
+  // Since the point: D's old hold is released, C is sold with a deal, and D is
+  // held again by someone else with a live hold document.
+  await run(() => booths.setStatus('D', 'available', { actor: 'chris' }));
+  await run(() => booths.setStatus('C', 'sold', { company: 'Acme', actor: 'chris' }));
+  await run(() => booths.updateDeal('C', { actualPrice: 9000, notes: 'corner deal', actor: 'chris' }));
+  const placed = await run(() => holds.create({ boothNumber: 'D', company: 'Beta', actor: 'chris' }));
+  check('(a hold is placed on D since the point)', placed.ok, JSON.stringify(placed));
+  let dryRun = await run(() => booths.restoreSnapshot(mergePoint.id));
+  check('the dry run says what changes and that two bookings ride through',
+        dryRun.ok && dryRun.bookingsKept === 2 && dryRun.conflicts.length === 0 &&
+        dryRun.changes.added.join() === 'B' && dryRun.changes.reshaped.join() === 'A',
+        JSON.stringify({ kept: dryRun.bookingsKept, changes: dryRun.changes }));
+  let back2 = await run(() => booths.restoreSnapshot(mergePoint.id, { apply: true, actor: 'chris' }));
+  check('the merge is undone', back2.ok && numbers() === 'A,B,C,D' && totalSqm() === 36, `${numbers()} ${totalSqm()}`);
+  check('the sale made since is still a sale, deal and all',
+        now('C').status === 'sold' && now('C').assignment.company === 'Acme' &&
+        now('C').assignment.actualPrice === 9000 && now('C').assignment.notes === 'corner deal',
+        JSON.stringify(now('C').assignment));
+  check('the hold made since is still held, by Beta, to its own expiry',
+        now('D').status === 'held' && now('D').assignment.company === 'Beta' &&
+        +now('D').holdExpiresAt === +placed.expiresAt, `${now('D').status} ${now('D').assignment.company}`);
+  check('with its hold document beside it, so stand and holds still agree',
+        db.store.holds.length === 1 && db.store.holds[0].boothNumber === 'D' && db.store.holds[0].company === 'Beta');
+  check('and the hold the point remembers, long expired, does not come back with it',
+        (await run(() => holds.reconcile())).length === 0 && now('D').status === 'held');
+
+  console.log('\nA point that would take a booking away is refused, naming it');
+  seed();
+  await run(() => booths.split('A', { parts: 2, axis: 'vertical', actor: 'chris' })); await tick();
+  const splitPoint = (await run(() => booths.history()))[0];
+  await run(() => booths.setStatus('A-2', 'sold', { company: 'Cell Buyer Ltd', actor: 'chris' }));
+  dryRun = await run(() => booths.restoreSnapshot(splitPoint.id));
+  check('the dry run names the booked stand that would disappear',
+        dryRun.ok && dryRun.conflicts.length === 1 && dryRun.conflicts[0].boothNumber === 'A-2' &&
+        dryRun.conflicts[0].why === 'gone' && dryRun.conflicts[0].company === 'Cell Buyer Ltd',
+        JSON.stringify(dryRun.conflicts));
+  const historyBefore = (await run(() => booths.history())).length;
+  back2 = await run(() => booths.restoreSnapshot(splitPoint.id, { apply: true, actor: 'chris' }));
+  check('applying it is refused', !back2.ok && back2.reason === 'bookings_in_the_way', JSON.stringify(back2.reason));
+  check('and nothing moved — the sale is where it was', now('A-2') && now('A-2').status === 'sold' && now('A').sqm === 5,
+        `${numbers()} ${now('A').sqm}`);
+  check('nor did it leave a point for a change that did not happen',
+        (await run(() => booths.history())).length === historyBefore);
+
+  seed();
+  await run(() => booths.consolidateMany(['C', 'D'], { actor: 'chris' })); await tick();
+  await run(() => booths.split('A', { parts: 2, axis: 'vertical', actor: 'chris' })); await tick();
+  const blockPoint = (await run(() => booths.history()))[0];      // C is an 18 m² block here
+  await run(() => booths.reset('C', { actor: 'chris' }));
+  await run(() => booths.setStatus('C', 'held', { company: 'Wants C', actor: 'chris' }));
+  dryRun = await run(() => booths.restoreSnapshot(blockPoint.id));
+  check('a booked stand whose size the point would change is named too',
+        dryRun.conflicts.length === 1 && dryRun.conflicts[0].boothNumber === 'C' && dryRun.conflicts[0].why === 'resized',
+        JSON.stringify(dryRun.conflicts));
+
+  console.log('\nA logo inside a merged block survives the trip');
+  seed();
+  Object.assign(now('D'), { sponsored: true, sponsorLogo: 'data:image/png;base64,LOGO' });
+  await run(() => booths.consolidateMany(['C', 'D'], { actor: 'chris' })); await tick();
+  await run(() => booths.split('A', { parts: 2, axis: 'vertical', actor: 'chris' })); await tick();
+  const withBlock = (await run(() => booths.history()))[0];        // C carries D, logo and all
+  await run(() => booths.reset('C', { actor: 'chris' }));             // D is back on its own
+  dryRun = await run(() => booths.restoreSnapshot(withBlock.id));
+  check('nothing is reported lost: D\'s logo is still on the plan to carry back in',
+        dryRun.logosNotRestored.length === 0, JSON.stringify(dryRun.logosNotRestored));
+  await run(() => booths.restoreSnapshot(withBlock.id, { apply: true, actor: 'chris' }));
+  const inside = (now('C').mergeSnapshot.parts || []).find(p => p.boothNumber === 'D');
+  check('the block holds D again, with its logo and no marker left on it',
+        inside && inside.sponsorLogo === 'data:image/png;base64,LOGO' && inside.sponsorLogoOmitted === undefined,
+        JSON.stringify(inside && Object.keys(inside)));
+  await run(() => booths.reset('C', { actor: 'chris' }));
+  check('so resetting the block brings D back with it', now('D') && now('D').sponsorLogo === 'data:image/png;base64,LOGO');
+
+  console.log('\nTwo points in one millisecond are two points');
+  const ids = new Set();
+  for (let i = 0; i < 5; i++) ids.add((await run(() => booths.snapshot('burst', []))).snapshotId);
+  check('each has an id of its own', ids.size === 5, [...ids].join(' '));
+
+  console.log('\nA restore that loses a race undoes all of itself');
+  seed();
+  await run(() => booths.consolidateMany(['A', 'B'], { actor: 'chris' })); await tick();
+  await run(() => booths.consolidateMany(['C', 'D'], { actor: 'chris' })); await tick();
+  const twoBlocks = (await run(() => booths.history())).find(p => p.op === 'consolidateMany' && p.boothNumbers.join() === 'A,B');
+  const plain = db;
+  db = { ...plain, collection: (name) => {
+    const c = plain.collection(name);
+    if (name !== 'booths') return c;
+    // C is changed by somebody else in the instant before the restore reaches it.
+    return { ...c, updateOne: async (f, u, o) => (f.boothNumber === 'C' && f.shapeRev !== undefined
+      ? { matchedCount: 0, modifiedCount: 0 } : c.updateOne(f, u, o)) };
+  } };
+  const before2 = { nums: numbers(), sqm: totalSqm(), a: JSON.stringify(now('A').geometry) };
+  const pointsBefore = (await run(() => booths.history())).length;
+  back2 = await run(() => booths.restoreSnapshot(twoBlocks.id, { apply: true, actor: 'chris' }));
+  db = plain;
+  check('it says a stand changed under it', !back2.ok && back2.reason === 'changed_meanwhile' && back2.boothNumber === 'C',
+        JSON.stringify([back2.reason, back2.boothNumber]));
+  check('and the hall is exactly as it was before it started',
+        numbers() === before2.nums && totalSqm() === before2.sqm && JSON.stringify(now('A').geometry) === before2.a,
+        `${numbers()} ${totalSqm()}`);
+  check('with no point left behind for it', (await run(() => booths.history())).length === pointsBefore);
+
+  console.log('\nGoing back to an earlier drawing puts its lounges and unit back too');
+  const styled = require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'plan-to-spec.svg'), 'utf8')
+    .replace(/(<svg[^>]*>)/, '$1<style>.a{fill:#ffffff}.b{fill:#5a1030}</style>');
+  db = fakeDb({
+    booths: ROW(),
+    floorplans: [{ showId: SHOW, svg: '<svg/>', revisionId: 'r2', label: 'LEX27.1', version: 'v2' }],
+    floorplan_revisions: [
+      { showId: SHOW, revisionId: 'r1', seq: 1, label: 'LEX27', status: 'superseded', svg: styled, filename: 'a.svg', bytes: 1 },
+      { showId: SHOW, revisionId: 'r2', seq: 2, label: 'LEX27.1', status: 'live', svg: '<svg/>', filename: 'b.svg', bytes: 1 },
+    ],
+    planAreas: [{ showId: SHOW, key: 'newer-lounge', geometry: { x: 1, y: 1, w: 1, h: 1 }, fromArtwork: true, artworkLabel: 'Newer Lounge' }],
+    settings: [{ _id: SHOW, unit: 'm' }],
+  });
+  const onR1 = await run(() => booths.snapshot('publish', db.store.booths.map(b => ({ ...b })), { revisionId: 'r1' }));
+  back2 = await run(() => booths.restoreSnapshot(onR1.snapshotId, { apply: true, actor: 'chris' }));
+  check('the drawing goes back', back2.ok && back2.artwork && back2.artwork.label === 'LEX27' &&
+        db.store.floorplans[0].revisionId === 'r1', JSON.stringify(back2.artwork));
+  const areas = db.store.planAreas.filter(a => a.geometry && a.fromArtwork).map(a => a.key);
+  check('its lounge is the one on the plan, not the newer plan\'s', areas.join() === 'networking-lounge', areas.join());
+  check('and its unit, which it prints in ft²', db.store.settings[0].unit === 'ft', db.store.settings[0].unit);
 
   const f = out.filter(x => !x).length;
   console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);

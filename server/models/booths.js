@@ -3,8 +3,10 @@ const config    = require('../config');
 const countries = require('../data/countries');
 const settings  = require('./settings');
 const { safeImage } = require('../lib/safe-url');
-const { readRects } = require('../lib/extract-stands');
+const { readRects, extractStands, paletteOf } = require('../lib/extract-stands');
 const floorplans = require('./floorplans');
+const planAreas = require('./plan-areas');
+const crypto    = require('crypto');
 const fs        = require('fs');
 const path      = require('path');
 
@@ -1791,13 +1793,19 @@ const snapshots = () => getDb().collection('booths_snapshots');
  * A sponsor logo is an inline data URI of up to 2 MB, and there can be one per
  * stand. They are what took the old single-document snapshot past the limit.
  * They are also the one thing here that is trivially re-uploadable, so they are
- * left out and their absence is RECORDED rather than being silently lost.
+ * left out and their absence is RECORDED rather than being silently lost —
+ * including on the stands a merged block carries inside its record, and inside
+ * the earlier merge a block split and merged again carries underneath.
  */
 function withoutLogos(booth) {
   const out = { ...booth };
   if (out.sponsorLogo) { delete out.sponsorLogo; out.sponsorLogoOmitted = true; }
-  if (out.mergeSnapshot && Array.isArray(out.mergeSnapshot.parts)) {
-    out.mergeSnapshot = { ...out.mergeSnapshot, parts: out.mergeSnapshot.parts.map(withoutLogos) };
+  const snap = out.mergeSnapshot;
+  if (snap && typeof snap === 'object') {
+    const self = snap.self && snap.self.under && snap.self.under.mergeSnapshot
+      ? { ...snap.self, under: { ...snap.self.under, mergeSnapshot: withoutLogos({ mergeSnapshot: snap.self.under.mergeSnapshot }).mergeSnapshot } }
+      : snap.self;
+    out.mergeSnapshot = { ...snap, self, parts: Array.isArray(snap.parts) ? snap.parts.map(withoutLogos) : snap.parts };
   }
   return out;
 }
@@ -1808,9 +1816,13 @@ function withoutLogos(booth) {
  * Returns ok:false rather than throwing, because every caller has to be able to
  * ABORT on a failed snapshot — proceeding to delete an event's inventory with
  * no way back is the failure this exists to prevent.
+ *
+ * The id carries a random tail as well as the time. It was the time alone, to
+ * the millisecond, so two points written inside one — two admins' changes, a
+ * script — shared an id, and restoring one put back the stands of both.
  */
 async function snapshot(reason, rows, { actor = null, showId = config.showId, revisionId: knownRevision } = {}) {
-  const snapshotId = `${reason}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  const snapshotId = `${reason}-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}`;
   const at = new Date();
   try {
     if (rows.length) {
@@ -1841,11 +1853,98 @@ async function listSnapshots({ showId = config.showId, limit = 25 } = {}) {
 }
 
 /**
- * Put a snapshot back.
+ * What a point in the plan's history puts back: a stand's SHAPE — where it is,
+ * how big, what it is merged from or split into, the number it shows, whether
+ * it is on the plan at all. Everything else a stand carries is its booking —
+ * status, exhibitor, price, notes, contact, tags, country, hold expiry, sponsor
+ * flag and logo, who wrote it, its clicks — and that stays exactly as it is now.
+ */
+const SHAPE_FIELDS = ['svgElementId', 'geometry', 'sqm', 'sqmSource', 'listPrice',
+  'displayNumber', 'displayNumberKey', 'mergedFrom', 'mergeSnapshot', 'splitSnapshot', 'splitFrom', 'splitAxis',
+  'removed', 'removedAt', 'removedBy', 'removedReason'];
+const NOT_BOOKING = new Set([...SHAPE_FIELDS, '_id', 'showId', 'boothNumber', 'shapeRev', 'sponsorLogoOmitted']);
+const shapeOf = (b) => Object.fromEntries(SHAPE_FIELDS.filter(k => b[k] !== undefined).map(k => [k, b[k]]));
+const bookingOf = (b) => Object.fromEntries(Object.keys(b).filter(k => !NOT_BOOKING.has(k)).map(k => [k, b[k]]));
+/** Booked, for the purpose of what a restore may not move: sold, held, or carrying an exhibitor. */
+const isBooked = (b) => b.removed !== true &&
+  (['sold', 'held'].includes(b.status) || !!(b.assignment && String(b.assignment.company || '').trim()));
+const sameFootprint = (a, b) => {
+  const near = (x, y) => Math.abs((x || 0) - (y || 0)) < 0.05;
+  const g = a.geometry, h = b.geometry;
+  const box = (!g && !h) || (!!g && !!h && near(g.x, h.x) && near(g.y, h.y) && near(g.w, h.w) && near(g.h, h.h));
+  return box && Math.abs((a.sqm || 0) - (b.sqm || 0)) < 0.005;
+};
+
+/** Every stand record a hall holds: the stands on it, and those inside its merged blocks' records. */
+function recordsOf(docs) {
+  const out = new Map();
+  const walk = (snap) => {
+    if (!snap || typeof snap !== 'object') return;
+    for (const p of snap.parts || []) {
+      if (p && p.boothNumber && !out.has(p.boothNumber)) { out.set(p.boothNumber, p); walk(p.mergeSnapshot); }
+    }
+    if (snap.self && snap.self.under) walk(snap.self.under.mergeSnapshot);
+  };
+  for (const d of docs) out.set(d.boothNumber, d);
+  for (const d of docs) walk(d.mergeSnapshot);
+  return out;
+}
+
+/**
+ * The drawing's own settings, read back off a restored revision: its lounges
+ * and theatres, the unit it prints, the colours it is drawn in.
  *
- * Dry by default and loud about what it would do, because this replaces the
- * event's entire inventory in the other direction. The CURRENT stands are
- * snapshotted first on apply, so an ill-judged restore is itself reversible.
+ * Making a plan live re-reads all three from the new drawing. Going back to a
+ * point from before it switched the drawing back and left them as the newer
+ * plan had them — lounges drawn where the old plan has a row of stands. The
+ * colours go through setPaletteFromArtwork, which leaves a palette an admin
+ * chose alone, exactly as the publish did.
+ */
+async function restoreDrawingSettings(svg, { actor = null } = {}) {
+  const out = { areas: null, unit: null, paletteKept: null };
+  let read;
+  try { read = extractStands(svg); }
+  catch (e) { console.error('Restore: the drawing could not be read back —', e.message); return out; }
+  try {
+    const ar = await planAreas.replaceFromArtwork(read.stands.filter(s => s.sponsored), { actor });
+    out.areas = ar && ar.areas;
+  } catch (e) { console.error('Restore: plan areas not put back —', e.message); }
+  try {
+    if (read.unit) out.unit = (await settings.setUnit(read.unit === 'sqft' ? 'ft' : 'm')).unit;
+  } catch (e) { console.error('Restore: unit not put back —', e.message); }
+  try {
+    if (read.fills && read.fills.length) {
+      const pr = await settings.setPaletteFromArtwork(paletteOf(read.fills));
+      out.paletteKept = !!(pr && pr.kept);
+    }
+  } catch (e) { console.error('Restore: palette not put back —', e.message); }
+  return out;
+}
+
+/**
+ * Put a point back — the SHAPE of the hall, and never its bookings.
+ *
+ * It used to delete the event's stands and insert the stored ones, status and
+ * exhibitor included, so every sale, hold and deal made since the point was
+ * quietly reverted to how it stood then. The holds collection was not touched,
+ * so a stand held since came back available with its hold document still
+ * there (the next hold on it then failed on the one-hold-per-stand index); a
+ * stand held at the point came back with an expiry long past. And the history
+ * says, in as many words, that it is about the shape of the plan.
+ *
+ * Now each stand on the plan both then and now keeps its booking and has its
+ * shape put back; a stand only the point has comes back available; a stand
+ * only the hall has now goes. A stand that is booked NOW and would go, be
+ * taken off the plan, or change size or footprint makes the whole restore
+ * refuse (`bookings_in_the_way`), naming each — the admin moves or releases
+ * those first. The dry run reports the same, so the console can say so before
+ * asking for a password.
+ *
+ * Written stand by stand rather than by emptying the event, each write
+ * conditional on the stand still being what was read, and the whole of it is
+ * undone if any write misses — so a booking that lands mid-restore is never
+ * overwritten. The CURRENT stands are snapshotted first, so an ill-judged
+ * restore is itself reversible.
  */
 async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId = config.showId } = {}) {
   const rows = await snapshots().find({ showId, snapshotId, header: { $ne: true } }).toArray();
@@ -1858,9 +1957,79 @@ async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId
     return { ok: false, reason: header ? 'empty_snapshot' : 'no_such_snapshot', snapshotId };
   }
 
-  const stored = rows.map(r => r.booth).filter(Boolean);
-  const current = await col().find({ showId }).toArray();
-  const logos = stored.filter(b => b.sponsorLogoOmitted).map(b => b.boothNumber);
+  const stored = rows.map(r => r.booth).filter(Boolean).map(detach);
+  const current = detach(await col().find({ showId }).toArray());
+  const then = new Map(stored.map(b => [b.boothNumber, b]));
+  const nowBy = new Map(current.map(b => [b.boothNumber, b]));
+  const records = recordsOf(current);   // what each number is now, wherever it lives
+  const logos = new Set();
+
+  // The booking a stand carries into the restored hall: its own, now — or,
+  // for a stand that is now inside a merged block, what the block recorded of
+  // it. A number the hall no longer holds anywhere comes back with no booking.
+  const bookingFor = (n, fallback) => {
+    const rec = records.get(n);
+    if (rec) return bookingOf(rec);
+    return { status: 'available', sponsored: fallback.sponsored === true,
+             assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null } };
+  };
+  // A stored stand, made whole for the hall it is going back into: its shape
+  // from the point, its booking from now, its logo from now where there is one.
+  const rebuild = (p) => {
+    const shape = shapeOf(p);
+    const booking = bookingFor(p.boothNumber, p);
+    const doc = { ...booking, ...shape, showId, boothNumber: p.boothNumber };
+    if (doc.removed === true) doc.status = 'removed';
+    else if (!['sold', 'held'].includes(doc.status)) doc.status = 'available';
+    if (doc.status !== 'held') delete doc.holdExpiresAt;
+    // A logo is the booking's, so a stand the hall still holds keeps its own.
+    // Only one coming back from nowhere — a point stores no logos — is short.
+    if (p.sponsorLogoOmitted && !records.has(p.boothNumber)) logos.add(p.boothNumber);
+    if (doc.mergeSnapshot) doc.mergeSnapshot = rebuildMerge(doc.mergeSnapshot);
+    return doc;
+  };
+  const rebuildMerge = (snap) => {
+    const self = snap.self && snap.self.under && snap.self.under.mergeSnapshot
+      ? { ...snap.self, under: { ...snap.self.under, mergeSnapshot: rebuildMerge(snap.self.under.mergeSnapshot) } }
+      : snap.self;
+    // A recovery copy's id is not a real one, and does not survive copying.
+    return { ...snap, self, parts: (snap.parts || []).map(part => { const { _id, ...d } = rebuild(part); return d; }) };
+  };
+
+  const conflicts = [], updates = [], inserts = [], deletes = [];
+  const said = (b, why) => conflicts.push({ boothNumber: b.boothNumber, displayNumber: b.displayNumber || null,
+                                            status: b.status, company: (b.assignment && b.assignment.company) || null, why });
+  for (const b of current) {
+    const p = then.get(b.boothNumber);
+    if (!p) { if (isBooked(b)) said(b, 'gone'); deletes.push(b); continue; }
+    if (isBooked(b)) {
+      if (p.removed === true) said(b, 'removed');
+      else if (!sameFootprint(b, p)) said(b, 'resized');
+    }
+  }
+  for (const p of stored) {
+    const b = nowBy.get(p.boothNumber);
+    if (!b) { inserts.push(rebuild(p)); continue; }
+    // Its shape from the point, its booking left alone. Only what differs is
+    // written; the list price follows the shape only where the size changes,
+    // so a stand whose size is the same keeps the price today's rate gives it.
+    const target = rebuild(p);
+    if (Math.abs((b.sqm || 0) - (p.sqm || 0)) < 0.005) {
+      if (b.listPrice === undefined) delete target.listPrice; else target.listPrice = b.listPrice;
+    }
+    const $set = {}, $unset = {};
+    for (const k of SHAPE_FIELDS) {
+      if (target[k] === undefined) { if (b[k] !== undefined) $unset[k] = ''; }
+      else if (JSON.stringify(target[k]) !== JSON.stringify(b[k])) $set[k] = target[k];
+    }
+    // Coming off the plan or going back on it is the one change to a status
+    // that is the shape's: only ever an available stand, never a booking.
+    if (target.status === 'removed' && b.status !== 'removed') $set.status = 'removed';
+    if (b.status === 'removed' && target.removed !== true) $set.status = 'available';
+    if (!Object.keys($set).length && !Object.keys($unset).length) continue;
+    updates.push({ b, $set, $unset, moves: !sameFootprint(b, p) || 'status' in $set });
+  }
+
   // The drawing those stands were placed on, when it is not the one live now.
   // Points written before revisions existed carry none, and leave the artwork.
   const header = await snapshots().findOne({ showId, snapshotId, header: true });
@@ -1868,11 +2037,99 @@ async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId
   const wantRev = header && header.revisionId;
   const rev = wantRev && wantRev !== liveRev ? await floorplans.getRevision(wantRev, { showId }) : null;
   const artwork = rev ? { revisionId: rev.revisionId, label: rev.label } : null;
-  const plan = { snapshotId, stands: stored.length, replacing: current.length, logosNotRestored: logos, artwork };
+  const plan = {
+    snapshotId, stands: stored.length, replacing: current.length,
+    // Bookings ride through untouched; these are the ones that do.
+    bookingsKept: current.filter(isBooked).length,
+    conflicts,
+    changes: { reshaped: updates.map(u => u.b.boothNumber), added: inserts.map(d => d.boothNumber),
+               dropped: deletes.map(d => d.boothNumber) },
+    logosNotRestored: [...logos], artwork,
+  };
   if (!apply) return { ok: true, dryRun: true, ...plan };
+  if (conflicts.length) return { ok: false, reason: 'bookings_in_the_way', ...plan };
 
   const back = await snapshot('pre-restore', current, { actor, showId });
   if (!back.ok) return { ok: false, reason: 'snapshot_failed', detail: back.error };
+
+  // ── The writes, each conditional on the stand being as it was read ─────────
+  // Shown numbers are held unique by the database, and a restore can swap two
+  // of them; so every label that changes is cleared first, numbers that go are
+  // deleted, then the shapes and labels are written, then the stands that come
+  // back are inserted. Anything that misses undoes all of it, in reverse.
+  const done = { cleared: [], deleted: [], inserted: [] };
+  const revOf = (b) => ({ showId, boothNumber: b.boothNumber, ...revFilter(b) });
+  const now = new Date();
+  let missed = null;
+  try {
+    for (const u of updates) {
+      if (!('displayNumberKey' in u.$set) && !('displayNumberKey' in u.$unset)) continue;
+      const r = await col().updateOne(revOf(u.b), { $unset: { displayNumberKey: '' }, $inc: BUMP });
+      if (!r.matchedCount) { missed = u.b.boothNumber; break; }
+      u.b = { ...u.b, shapeRev: ourRev(u.b) };
+      done.cleared.push(u);
+    }
+    for (const b of missed ? [] : deletes) {
+      const r = await col().deleteOne({ ...revOf(b), status: b.status, 'assignment.company': { $in: [null, ''] } });
+      if (!r.deletedCount) { missed = b.boothNumber; break; }
+      done.deleted.push(b);
+    }
+    for (const u of missed ? [] : updates) {
+      // A stand whose footprint or place on the plan changes must still be
+      // unbooked; one whose only change is a label or a record need not be.
+      const filter = revOf(u.b);
+      if (u.moves) Object.assign(filter, { status: u.b.status, 'assignment.company': { $in: [null, ''] } });
+      const update = { $set: { ...u.$set, updatedAt: now }, $inc: BUMP };
+      if (Object.keys(u.$unset).length) update.$unset = u.$unset;
+      const r = await col().updateOne(filter, update);
+      if (!r.matchedCount) { missed = u.b.boothNumber; break; }
+      u.b = { ...u.b, shapeRev: ourRev(u.b) };
+      u.written = true;
+    }
+    for (const d of missed ? [] : inserts) {
+      await col().insertOne({ ...d, shapeRev: ((records.get(d.boothNumber) || d).shapeRev || 0) + 1, updatedAt: now });
+      done.inserted.push(d);
+    }
+  } catch (e) {
+    missed = missed || `(${e.message})`;
+  }
+
+  if (missed) {
+    // Back out, newest first: the stands that came back go, the shapes are put
+    // back with no shown numbers, the stands that went return, and only then do
+    // the shown numbers go back on — the same order, for the same index.
+    // Each put back only where our own write is still the last one, and only
+    // the fields we wrote — a stand whose only change was a label may have
+    // been booked since, and that booking stays.
+    const touched = updates.filter(u => u.written || done.cleared.includes(u));
+    for (const d of done.inserted) await col().deleteOne({ showId, boothNumber: d.boothNumber, status: d.status });
+    for (const u of touched) {
+      const orig = nowBy.get(u.b.boothNumber);
+      const $set = {}, $unset = { displayNumberKey: '' };
+      if (u.written) {
+        for (const k of [...Object.keys(u.$set), ...Object.keys(u.$unset)]) {
+          if (k === 'displayNumberKey') continue;
+          if (orig[k] === undefined) $unset[k] = ''; else $set[k] = orig[k];
+        }
+      }
+      const update = { $unset, $inc: BUMP };
+      if (Object.keys($set).length) update.$set = $set;
+      const r = await col().updateOne({ showId, boothNumber: orig.boothNumber, ...revFilter(u.b) }, update);
+      if (r.matchedCount) u.b = { ...u.b, shapeRev: ourRev(u.b) };
+    }
+    for (const b of done.deleted) await col().insertOne(b);
+    for (const u of touched) {
+      const orig = nowBy.get(u.b.boothNumber);
+      if (orig.displayNumberKey === undefined) continue;
+      try { await col().updateOne({ showId, boothNumber: orig.boothNumber, ...revFilter(u.b) },
+                                  { $set: { displayNumberKey: orig.displayNumberKey } }); }
+      catch (e) { console.error(`Restore rollback: shown number of ${orig.boothNumber} not re-reserved —`, e.message); }
+    }
+    // The point stored a moment ago describes a change that did not happen.
+    await snapshots().deleteMany({ showId, snapshotId: back.snapshotId });
+    return { ok: false, reason: 'changed_meanwhile', boothNumber: missed, ...plan };
+  }
+
   // Going back is a change like any other, so it takes its place in the
   // history. Without this the hall as it stood before a restore was stored
   // faithfully and shown nowhere — so the one change that replaces the entire
@@ -1884,14 +2141,13 @@ async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId
               detail: snapshotId, boothNumbers: [] } }
   );
 
-  await col().deleteMany({ showId });
-  // `_id` is dropped: these are new documents in the live collection, and
-  // re-using the stored ids would collide with anything not yet deleted.
-  await col().insertMany(stored.map(({ _id, sponsorLogoOmitted, ...b }) => ({ ...b, showId })));
   if (artwork) {
     const made = await floorplans.makeLive(artwork.revisionId, { actor, showId });
     if (!made.ok) plan.artwork = null;
-    else plan.artworkVersion = made.version;
+    else {
+      plan.artworkVersion = made.version;
+      plan.drawing = await restoreDrawingSettings(rev.svg, { actor });
+    }
   }
   return { ok: true, ...plan, previousSnapshot: back.snapshotId };
 }
@@ -1921,7 +2177,8 @@ async function restoreSnapshot(snapshotId, { apply = false, actor = null, showId
  * What is NOT recorded: bookings. A sale, a hold and a release have their own
  * undo, which restores the booking without touching the rest of the hall, and
  * they happen hundreds of times where a merge happens once. The history is
- * about the SHAPE of the plan.
+ * about the SHAPE of the plan — and going back to a point puts back only the
+ * shape, leaving every booking as it is (see restoreSnapshot).
  */
 const HISTORY_KEEP = Number(process.env.HISTORY_KEEP || 200);
 

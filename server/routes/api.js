@@ -1444,14 +1444,28 @@ router.get('/history', async (req, res, next) => {
 });
 
 /**
+ * The bookings that stop a point being put back, in a sentence an admin can
+ * act on: which stands, whose, and what going back would do to each.
+ */
+function bookingsInTheWay(conflicts) {
+  const what = { gone: 'would disappear', removed: 'would be taken off the plan', resized: 'would change size or place' };
+  const list = (conflicts || []).map(c => `stand ${c.displayNumber || c.boothNumber} (${c.status}` +
+    `${c.company ? ` — ${c.company}` : ''}) ${what[c.why] || 'would change'}`);
+  return `Bookings are kept when the plan goes back, and these are in the way: ${list.join('; ')}. ` +
+         'Move or release them first, then go back to this point.';
+}
+
+/**
  * Put the hall back to one of those points.
  *
- * Dry by default: a GET-shaped answer describing what it WOULD do, because this
- * replaces the event's entire inventory and the number of stands it is about to
- * replace is the thing worth reading before agreeing. `apply` does it, behind
- * the same secret every destructive route asks for — and the hall as it stands
- * right now is stored first, so going back is itself something to come back
- * from.
+ * Dry by default: a GET-shaped answer describing what it WOULD do — which
+ * stands change shape, come back or go, and which BOOKINGS are in the way —
+ * because that is the thing worth reading before agreeing. Only the shape of
+ * the hall goes back: every sale and hold stays as it is now, and a point that
+ * would move, resize or remove a booked stand is refused, naming each one.
+ * `apply` does it, behind the same secret every destructive route asks for —
+ * and the hall as it stands right now is stored first, so going back is
+ * itself something to come back from.
  */
 router.post('/history/:id/restore', async (req, res, next) => {
   try {
@@ -1464,26 +1478,39 @@ router.post('/history/:id/restore', async (req, res, next) => {
           ? 'That point holds no stands — restoring it would empty the event.'
           : 'That point no longer exists.' });
       }
-      return res.json(plan);
+      return res.json(plan.conflicts.length ? { ...plan, blocked: bookingsInTheWay(plan.conflicts) } : plan);
     }
     if (!await confirmDestructive(req, res, 'the plan was not put back')) return;
     const r = await booths.restoreSnapshot(id, { apply: true, actor: req.admin?.user || null });
     if (!r.ok) {
+      if (r.reason === 'bookings_in_the_way') {
+        return res.status(409).json({ reason: r.reason, conflicts: r.conflicts, error: bookingsInTheWay(r.conflicts) });
+      }
+      if (r.reason === 'changed_meanwhile') {
+        return res.status(409).json({ reason: r.reason,
+          error: `Stand ${r.boothNumber} changed while the plan was being put back, so nothing was changed. Try again.` });
+      }
       return res.status(r.reason === 'snapshot_failed' ? 500 : 404).json({ error: r.reason === 'snapshot_failed'
         ? 'The hall as it stands could not be stored first, so nothing was changed.'
         : 'That point no longer exists.' });
     }
     track({ type: 'booth.history_restore', boothNumber: null, actor: req.admin?.user || 'unknown',
             meta: { id, stands: r.stands, replaced: r.replacing, previous: r.previousSnapshot,
-                    artwork: r.artwork ? r.artwork.label : null } });
+                    bookingsKept: r.bookingsKept, artwork: r.artwork ? r.artwork.label : null } });
     // Open pages were left showing the hall from before the restore until
     // someone reloaded; the cache the sockets serve from is only refreshed
     // when told.
     try { await sockets.notifyStands(); }
     catch (e) { console.error('History restore: viewers not refreshed —', e.message); }
     if (r.artwork) {
+      // The drawing went back, and with it its lounges, its unit and (unless
+      // an admin chose them) its colours — every open page hears all of it.
       try { sockets.notifyArtwork(r.artworkVersion); }
       catch (e) { console.error('History restore: artwork change not broadcast —', e.message); }
+      try { await sockets.notifyAreas(); }
+      catch (e) { console.error('History restore: areas not broadcast —', e.message); }
+      try { await sockets.notifySettings(); }
+      catch (e) { console.error('History restore: settings not broadcast —', e.message); }
     }
     res.json(r);
   } catch (e) { next(e); }
