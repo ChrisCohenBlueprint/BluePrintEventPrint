@@ -650,13 +650,21 @@ async function importSnapshotSince(since) {
  * and say so. From the import's own snapshot when it took one; a hall that
  * was empty before has no snapshot, and going back means taking away what
  * the import made.
+ *
+ * `undoImport`, not the history's restore: a history point puts back only the
+ * shape of the hall and refuses to move a booked stand, and an update-mode
+ * import reshapes booked stands — so the old call was refused, and the stands
+ * were left on the new drawing while this said they had been put back. The
+ * undo puts back every shape and the booking state the import wrote, keeps
+ * anything a person booked meanwhile, and writes no history point of its own.
  */
 async function failedAfterImport({ snapshotId, hadStands, actor }) {
   let restored = false;
   try {
     if (snapshotId) {
-      const back = await booths.restoreSnapshot(snapshotId, { apply: true, actor });
+      const back = await booths.restoreSnapshot(snapshotId, { apply: true, undoImport: true, actor });
       restored = !!(back && back.ok);
+      if (!restored) console.error('Stand import: not put back —', back && back.reason, JSON.stringify(back && (back.conflicts || back.kept)));
     } else if (!hadStands) {
       await booths.col().deleteMany({ showId: config.showId });
       restored = true;

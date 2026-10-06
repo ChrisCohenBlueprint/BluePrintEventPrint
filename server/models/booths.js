@@ -2210,22 +2210,181 @@ async function restorePoint(snapshotId, { apply = false, actor = null, showId = 
 
 
 /**
- * restorePoint, holding the plan lock while it writes.
+ * Undo an import that has just run and could not be finished, from the
+ * snapshot it took before its first write.
  *
- * Applying a point writes stand after stand and may switch the drawing; a
+ * Not a history point being put back, and deliberately not restorePoint: that
+ * keeps every booking and refuses to move a booked stand, which is right for a
+ * change a person made and wrong here. An update-mode import RESHAPES booked
+ * stands and re-reads the status of the ones it owns, so restorePoint refused
+ * to undo it ("bookings in the way") and left the hall on a drawing the caller
+ * was about to take back down — while the route told the admin the stands had
+ * been put back exactly as they were. Here:
+ *
+ *   - every stand's SHAPE goes back to the snapshot's, whatever its footprint:
+ *     the import moved it, not a person;
+ *   - the booking state the IMPORT wrote goes back to the snapshot's — the
+ *     provenance marks say which (see IMPORT_ACTORS) — while anything a PERSON
+ *     wrote since is kept: a booking made over a socket during the import is
+ *     not under the plan lock, and is never overwritten;
+ *   - stands the import created go, and stands it deleted come back. A stand
+ *     it created that a person has since booked or built on refuses the whole
+ *     undo before anything is written (`booked_since`).
+ *
+ * Every write is conditional on the stand being as it was read, and one that
+ * misses is read again and decided again. Hold documents follow the stands.
+ * It writes no history point: an import that failed is not a change the admin
+ * made, and the snapshot it took is still there.
+ */
+async function undoImport(snapshotId, { actor = null, showId = config.showId } = {}) {
+  const header = await snapshots().findOne({ showId, snapshotId, header: true });
+  if (!header) return { ok: false, reason: 'no_such_snapshot', snapshotId };
+  const rows = await snapshots().find({ showId, snapshotId, header: { $ne: true } }).toArray();
+  const then = new Map(rows.map(r => r.booth).filter(Boolean).map(b => [b.boothNumber, detach(b)]));
+
+  const importOwns = (b) => b.source === IMPORT_SOURCE && IMPORT_ACTORS.includes(b.updatedBy ?? null);
+  const builtOn = (b) => (isBooked(b) && !importOwns(b)) || isComposite(b);
+  const fresh = async (n) => detach(await get(n));
+
+  const current = detach(await col().find({ showId }).toArray());
+  const created = current.filter(b => !then.has(b.boothNumber));
+  const blocked = created.filter(builtOn);
+  if (blocked.length) {
+    return { ok: false, reason: 'booked_since', snapshotId,
+             conflicts: blocked.map(b => ({ boothNumber: b.boothNumber, status: b.status,
+                                            company: (b.assignment && b.assignment.company) || null })) };
+  }
+
+  // What the undo writes on a stand both have. A booking field the import
+  // wrote goes back to the snapshot's; clicks, the logo and when it was made
+  // are not the import's and stay.
+  const KEEP = new Set(['clicks', 'sponsorLogo', 'createdAt', 'updatedAt']);
+  const now = new Date();
+  const writeFor = (p, b) => {
+    const $set = {}, $unset = {};
+    const put = (k) => {
+      if (p[k] === undefined) { if (b[k] !== undefined) $unset[k] = ''; }
+      else if (JSON.stringify(p[k]) !== JSON.stringify(b[k])) $set[k] = p[k];
+    };
+    // A stand reshaped by a person since — a merge or split landing while the
+    // import ran — has moved on more than the import's one write, and keeps
+    // the shape that person gave it.
+    if ((b.shapeRev || 0) <= (p.shapeRev || 0) + 1) SHAPE_FIELDS.forEach(put);
+    if (importOwns(b)) {
+      for (const k of new Set([...Object.keys(bookingOf(p)), ...Object.keys(bookingOf(b))])) if (!KEEP.has(k)) put(k);
+    } else {
+      put('shapeReadBy');   // only its outline was the import's
+    }
+    if (!Object.keys($set).length && !Object.keys($unset).length) return null;
+    const update = { $set: { ...$set, updatedAt: now }, $inc: BUMP };
+    if (Object.keys($unset).length) update.$unset = $unset;
+    // As read: a person's write in the gap changes the status, the exhibitor
+    // or the import's mark, and this then misses rather than overwriting it.
+    const filter = { showId, boothNumber: b.boothNumber, ...revFilter(b), status: b.status,
+                     'assignment.company': (b.assignment && b.assignment.company) ?? null, source: b.source ?? null };
+    return { filter, update };
+  };
+
+  const reverted = [], removed = [], reinserted = [], kept = [];
+  const putBackHeld = new Set();
+
+  // Stands the import created go first, so nothing it put on the floor is
+  // standing there when the ones it deleted come back.
+  for (const c of created) {
+    let b = c, gone = false;
+    for (let attempt = 0; attempt < 3 && b; attempt++) {
+      if (builtOn(b)) break;
+      const r = await col().deleteOne({ showId, boothNumber: b.boothNumber, status: b.status, source: b.source ?? null,
+                                        'assignment.company': (b.assignment && b.assignment.company) ?? null,
+                                        ...revFilter(b) });
+      if (r.deletedCount) { gone = true; break; }
+      b = await fresh(c.boothNumber);
+    }
+    if (gone || !b) removed.push(c.boothNumber);
+    else kept.push({ boothNumber: b.boothNumber, status: b.status, company: (b.assignment && b.assignment.company) || null });
+  }
+
+  for (const [n, p] of then) {
+    let b = await fresh(n);
+    if (!b) continue;   // deleted by the import; it comes back below
+    let done = false;
+    for (let attempt = 0; attempt < 3 && b; attempt++) {
+      const w = writeFor(p, b);
+      if (!w) { done = true; break; }
+      const r = await col().updateOne(w.filter, w.update);
+      if (r.matchedCount) {
+        done = true;
+        reverted.push(n);
+        if (w.update.$set.status === 'held' || (p.status === 'held' && importOwns(b))) putBackHeld.add(n);
+        break;
+      }
+      b = await fresh(n);
+    }
+    if (!done && b) kept.push({ boothNumber: n, status: b.status, company: (b.assignment && b.assignment.company) || null });
+  }
+
+  // Stands the import deleted — never one now inside a merged block, whose
+  // floor a person has since given to the block.
+  const absorbed = new Set((await col().find({ showId }).toArray())
+    .flatMap(b => (Array.isArray(b.mergedFrom) ? b.mergedFrom.map(String) : [])));
+  for (const [n, p] of then) {
+    if (await get(n)) continue;
+    if (absorbed.has(n)) { kept.push({ boothNumber: n, status: 'merged', company: null }); continue; }
+    const { _id, sponsorLogoOmitted, ...doc } = p;
+    try {
+      await col().insertOne({ ...doc, showId, shapeRev: (doc.shapeRev || 0) + 1, updatedAt: now });
+      reinserted.push(n);
+      if (doc.status === 'held') putBackHeld.add(n);
+    } catch (e) {
+      kept.push({ boothNumber: n, status: 'taken', company: null });
+    }
+  }
+
+  // The hold documents follow the stands: the import's own on a stand no
+  // longer held go, and a stand put back on hold whose document the import
+  // took away gets one, with the expiry the stand carries.
+  const holdsCol = getDb().collection('holds');
+  const heldNow = await col().find({ showId, status: 'held' }).toArray();
+  const heldNums = heldNow.map(b => b.boothNumber);
+  await holdsCol.deleteMany({ showId, source: IMPORT_SOURCE, boothNumber: { $nin: heldNums } });
+  const withDoc = new Set(await holdsCol.distinct('boothNumber', { showId }));
+  for (const b of heldNow) {
+    if (!putBackHeld.has(b.boothNumber) || withDoc.has(b.boothNumber)) continue;
+    await holdsCol.insertOne({
+      showId, boothNumber: b.boothNumber, company: (b.assignment && b.assignment.company) || null,
+      contactId: null, sessionId: null, createdAt: now,
+      ...(b.holdExpiresAt instanceof Date ? { expiresAt: b.holdExpiresAt } : {}),
+      createdBy: actor || 'import', ...(b.source === IMPORT_SOURCE ? { source: IMPORT_SOURCE } : {}),
+      restoredFrom: snapshotId,
+    });
+  }
+
+  return { ok: !kept.length, ...(kept.length ? { reason: 'booked_since' } : {}),
+           snapshotId, reverted, removed, reinserted, kept };
+}
+
+/**
+ * Put a snapshot back, holding the plan lock while it writes.
+ *
+ * `undoImport: true` undoes an import that has just run from the snapshot it
+ * took (see undoImport); otherwise the snapshot is a history point, and only
+ * its shape goes back (see restorePoint).
+ *
+ * Applying either writes stand after stand and may switch the drawing; a
  * publish or a stand import doing the same at that moment would interleave
  * with it, each reading the hall the other is halfway through rewriting. Both
  * of those hold the event's plan lock for their whole sequence, so applying a
- * point holds it too. A dry run writes nothing and does not wait. (The lock
- * lives with the drawings in floorplans.js; on a build without it, the restore
- * runs as it always did.)
+ * point holds it too — re-entrantly, so an import undoing itself inside its own
+ * lock is not kept waiting. A dry run writes nothing and does not wait. (The
+ * lock lives with the drawings in floorplans.js; on a build without it, the
+ * restore runs as it always did.)
  */
 async function restoreSnapshot(snapshotId, opts = {}) {
   const { apply = false, showId = config.showId } = opts;
-  if (apply && typeof floorplans.withPlanLock === 'function') {
-    return floorplans.withPlanLock(showId, () => restorePoint(snapshotId, opts));
-  }
-  return restorePoint(snapshotId, opts);
+  const run = () => (opts.undoImport ? undoImport(snapshotId, opts) : restorePoint(snapshotId, opts));
+  if (opts.undoImport && !apply) return { ok: false, reason: 'undo_needs_apply', snapshotId };
+  if (apply && typeof floorplans.withPlanLock === 'function') return floorplans.withPlanLock(showId, run);
+  return run();
 }
 
 // ─── The plan's history ───────────────────────────────────────────────────────
@@ -2733,6 +2892,12 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
     for (const k of SHAPE) $set[k] = doc[k];
 
     if (mayRewrite) {
+      // The booking it rewrites is the one it read. A sale or hold made over a
+      // socket while the import runs is not under the plan lock, and used to
+      // be overwritten by the plan's reading of the stand; it now makes this
+      // write miss, and the booking stands.
+      Object.assign(filter, { status: prev.status, source: prev.source ?? null,
+                              'assignment.company': (prev.assignment && prev.assignment.company) ?? null });
       $set.updatedBy = importActor;
       $set.importedBy = actor || importActor;
       $set.status = doc.status;
