@@ -75,14 +75,16 @@ real state in memory and there is no shared adapter or store behind it:
 | Socket.IO rooms (no Redis adapter) | `server/sockets/index.js` | A booking made on instance A never reaches the plans connected to B — stale plans, stale stats, no live updates |
 | Per-show booth / tag / area caches | `server/sockets/index.js` | B serves yesterday's stands until something happens to write on B |
 | Viewer presence map | `server/sockets/index.js` | Viewer counts only ever reflect one instance |
-| Spent 2FA pending-token set | `server/auth.js` | A captured pending token spent on A is replayable on B for five minutes |
-| Login rate limits and the per-account delay | `server/routes/auth-routes.js` | N instances = N× the password guesses |
+| Spent 2FA pending-token set, and each token's wrong-code count | `server/auth.js` | A captured pending token spent on A is replayable on B for five minutes, and each instance allows its own five wrong codes |
+| Login rate limits, attempts in flight and the per-account delay | `server/routes/auth-routes.js` | N instances = N× the password and code guesses |
+| Per-address enquiry limit | `server/sockets/index.js` | N instances = N× the enquiries one address can send |
+| Per-event plan lock | `server/models/floorplans.js` | Two publishes or a publish and a restore on one event can interleave on different instances |
 | Recovery-key attempt throttle | `server/auth.js` | Same multiplication of the 5-attempt limit |
 | Show registry cache | `server/models/shows.js` | A new or renamed event is invisible to the other instance until restart |
 | Buffered analytics | `server/services/tracking.js` | Each instance holds its own unflushed batch |
 
 Making this horizontally scalable means adding `@socket.io/redis-adapter` and
-moving those four caches and three limiters into shared storage. Until then, one
+moving those caches, limiters and the plan lock into shared storage. Until then, one
 instance is not a limitation to work around — it is a correctness requirement.
 A single Render instance comfortably serves an exhibition's traffic.
 

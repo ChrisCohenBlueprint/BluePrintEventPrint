@@ -57,6 +57,12 @@ checked on every request:
   browser**, immediately. The rows carry the token's own expiry and a TTL index
   drops them, so the list never outgrows the sessions still theoretically alive.
 
+The same checks run on **every admin socket event**, not only when the socket
+connects: a console left open after its person was signed out, demoted or
+deleted is refused on its next action and dropped, and a sweep once a minute
+drops an idle one, so it stops receiving the prices and deal notes broadcast to
+the admin room (`auth.requireAdmin`, `auth.sweepAdminSockets`).
+
 `scripts/admin-account.js` is the break-glass path: it talks to the database, not
 to a login, so a lost 2FA device is recoverable without a session.
 
@@ -64,10 +70,20 @@ to a login, so a lost 2FA device is recoverable without a session.
 
 * **Login.** A per-IP budget counts **failures only** (a busy office behind one
   NAT address is not rationed), and each account carries a delay that doubles
-  with each wrong attempt, capped at five minutes. The credential is **always**
-  checked first and a correct one clears the record — a stranger can slow an
-  account down but can never lock its owner out, which the old hard lock allowed
-  with ten guesses every five minutes.
+  with each wrong attempt, capped at five minutes. On the password step the
+  credential is **always** checked and a correct one clears the record — a
+  stranger can slow an account down but can never lock its owner out, which the
+  old hard lock allowed with ten guesses every five minutes.
+* **Limits are claimed before any `await`.** An attempt takes its place in the
+  IP budget the moment it arrives and gives it back when it ends, so a burst of
+  parallel requests cannot all slip past a counter that was only charged after
+  the check. (Before this, 400 simultaneous guesses at a 2FA code were all
+  evaluated.)
+* **The code steps are strict**, because only someone holding the password
+  reaches them: one code per account is checked at a time, a code sent while a
+  penalty is owed is refused unread, and a pending token is burnt after five
+  wrong codes. Wrong codes count separately from wrong passwords, so a
+  stranger's guesses at the password cannot stall the owner's code step.
 * **`RECOVERY_KEY`.** Optional, and off unless set. When set, releasing a booked
   stand, forcing one back to Available and changing the €/unit rate require it.
   Five wrong attempts pause that account for fifteen minutes, and every failure
@@ -140,12 +156,28 @@ led to it. Behavioural events are **not sent at all** until the visitor consents
 * **The artwork check reads live-text plans through the extractor** and
   outlined plans through the glyph heuristics. Europe still scores 3/8; North
   America is judged on its real stands, not on an empty set.
-* **The artwork is user-uploaded SVG sanitised by regex.** It is served under its
-  own locked-down CSP (`default-src 'none'`) for that reason.
-* **One instance only.** Rooms, caches, limiters and the spent-2FA set are all
-  per-process with no shared adapter. The README table lists exactly what breaks.
+* **The artwork is user-uploaded SVG.** The sanitiser scans it the way a
+  browser tokenises markup (not by regex, which `<rect/onload=…>`, an unclosed
+  `<script>` and entity-encoded `javascript:` all slipped past) and reports what
+  it removed. It is still served under its own locked-down CSP
+  (`default-src 'none'`), as defence in depth.
+* **Going back in the plan's history puts back the SHAPE, never the bookings.**
+  Every sale, hold and deal stays as it is now; a point that would remove,
+  resize or move a booked stand is refused with those stands named. An import
+  that fails part-way is undone by a different path (`undoImport`) that also
+  reverts what the import itself wrote.
+* **An event named in `X-Show` is the event acted on — retired or not.** A slug
+  that names no event is refused on `/api/*` with a 409 (except `/api/me`), and
+  an admin socket on one is told `show:gone` and disconnected. Only the public
+  plan still falls back to the default event.
+* **One plan change at a time per event.** Publish, stand import, history
+  restore and the revision operations hold `floorplans.withPlanLock` for their
+  whole sequence. It is in-process, like everything else on this list.
+* **One instance only.** Rooms, caches, limiters, the spent-2FA set and the
+  per-event plan lock are all per-process with no shared adapter. The README table lists exactly what breaks.
 * **Render redeploys send SIGTERM.** Shutdown is graceful now (stop reporting
-  healthy → close sockets → drain HTTP → flush analytics → close Mongo, 10s hard
+  healthy → close sockets → drain HTTP → wait for socket handlers still running
+  (`server/lib/in-flight.js`) → flush analytics → close Mongo, 10s hard
   deadline). Do not add work after `process.exit`.
 
 ## 6. Verification
