@@ -27,12 +27,35 @@ const col = () => getDb().collection('booths');
  * `splitSnapshot.created`. Dropping the snapshots wholesale took those buttons
  * off the page while leaving every test green, because no test opens that menu.
  * Both remaining objects are small — a geometry, an area, a price, a list of
- * numbers — so keeping them costs the broadcast almost nothing.
+ * numbers — so keeping them costs the broadcast almost nothing. The one part
+ * of a merge record that is not small is the earlier merge a block split and
+ * merged again carries underneath (`self.under`, see nextMergeSnapshot), which
+ * holds parts of its own, so it goes the same way.
  */
 const all = () => col().find({ showId: config.showId })
-  .project({ 'mergeSnapshot.parts': 0 }).toArray();
+  .project({ 'mergeSnapshot.parts': 0, 'mergeSnapshot.self.under': 0 }).toArray();
 
 const get = (boothNumber) => col().findOne({ showId: config.showId, boothNumber });
+
+/**
+ * A copy of a stored stand that later writes cannot reach.
+ *
+ * The rows a driver hands back are not guaranteed to be detached from what a
+ * write is about to change — the test stand-in hands back the stored objects
+ * themselves — and a rollback that "restores" the object the write already
+ * changed restores nothing. structuredClone would do, except that it turns an
+ * ObjectId into a plain object; ids and other BSON values are carried by
+ * reference instead, since nothing ever writes to one.
+ */
+function detach(v) {
+  if (v === null || typeof v !== 'object') return v;
+  if (v instanceof Date) return new Date(v.getTime());
+  if (v._bsontype) return v;
+  if (Array.isArray(v)) return v.map(detach);
+  const out = {};
+  for (const k of Object.keys(v)) out[k] = detach(v[k]);
+  return out;
+}
 
 /**
  * Projection sent to the public floorplan.
@@ -330,38 +353,60 @@ async function incrementClicks(boothNumber) {
 async function recomputeListPrices(rate, { actor = null } = {}) {
   const r = Number(rate);
   if (!Number.isFinite(r) || r <= 0) return { ok: false, reason: 'bad_rate' };
-  const rows = await col().find({ showId: config.showId })
-    .project({ boothNumber: 1, sqm: 1, mergeSnapshot: 1, splitSnapshot: 1 }).toArray();
-  if (!rows.length) return { ok: true, repriced: 0 };
-  const now = new Date();
+  const read = (filter = {}) => col().find({ showId: config.showId, ...filter })
+    .project({ boothNumber: 1, sqm: 1, listPrice: 1, mergeSnapshot: 1, splitSnapshot: 1, shapeRev: 1 }).toArray();
+  let pending = await read();
+  if (!pending.length) return { ok: true, repriced: 0 };
+  const total = pending.length;
   const at = (sqm) => Math.round((sqm || 0) * r);
 
   // The composite snapshots hold their own prices — the footprint a merged
   // stand had before it was merged, and the full record of every stand it
   // absorbed. A rate change that did not reach into them meant Reset restored
   // PRE-RATE-CHANGE prices onto live stands, quietly putting the old rate back
-  // on the plan months after it was raised.
-  const ops = rows.map(b => {
-    const $set = { listPrice: at(b.sqm), updatedAt: now, updatedBy: actor };
-    if (b.mergeSnapshot) {
-      const snap = b.mergeSnapshot;
-      $set.mergeSnapshot = {
-        ...snap,
-        self: { ...snap.self, listPrice: at(snap.self && snap.self.sqm) },
-        parts: (snap.parts || []).map(part => ({ ...part, listPrice: at(part.sqm) })),
-      };
+  // on the plan months after it was raised. A merge laid over a split carries
+  // the earlier merge underneath (see nextMergeSnapshot), which is repriced the
+  // same way.
+  const repriceMerge = (snap) => {
+    const self = { ...snap.self, listPrice: at(snap.self && snap.self.sqm) };
+    if (self.under && self.under.mergeSnapshot) {
+      self.under = { ...self.under, mergeSnapshot: repriceMerge(self.under.mergeSnapshot) };
     }
-    if (b.splitSnapshot) {
-      const snap = b.splitSnapshot;
-      $set.splitSnapshot = { ...snap, self: { ...snap.self, listPrice: at(snap.self && snap.self.sqm) } };
-    }
-    return { updateOne: { filter: { showId: config.showId, boothNumber: b.boothNumber }, update: { $set } } };
-  });
+    return { ...snap, self, parts: (snap.parts || []).map(part => ({ ...part, listPrice: at(part.sqm) })) };
+  };
+  const repriced = (b) => b.listPrice === at(b.sqm) &&
+    (!b.mergeSnapshot || JSON.stringify(repriceMerge(b.mergeSnapshot)) === JSON.stringify(b.mergeSnapshot)) &&
+    (!b.splitSnapshot || (b.splitSnapshot.self && b.splitSnapshot.self.listPrice === at(b.splitSnapshot.self.sqm)));
 
-  // One round trip rather than one per stand: this ran ~270 sequential updates
-  // on a rate change, which is minutes of an admin watching a spinner.
-  const res = await col().bulkWrite(ops, { ordered: false });
-  return { ok: true, repriced: res.modifiedCount ?? ops.length };
+  // Every write is conditional on the revision it was computed from (see
+  // revFilter). The snapshots are rewritten whole, so one computed from a read
+  // taken before a merge used to write that merge's record back to what it was
+  // before the merge, and the stand it absorbed vanished from it. A stand
+  // reshaped in the gap simply misses, and is read again and repriced from
+  // what it is now. A merge that read the old price before this write misses
+  // in its turn, because this write moves the revision on.
+  for (let pass = 0; pass < 5 && pending.length; pass++) {
+    const now = new Date();
+    const ops = pending.map(b => {
+      const $set = { listPrice: at(b.sqm), updatedAt: now, updatedBy: actor };
+      if (b.mergeSnapshot) $set.mergeSnapshot = repriceMerge(b.mergeSnapshot);
+      if (b.splitSnapshot) {
+        const snap = b.splitSnapshot;
+        $set.splitSnapshot = { ...snap, self: { ...snap.self, listPrice: at(snap.self && snap.self.sqm) } };
+      }
+      return { updateOne: { filter: { showId: config.showId, boothNumber: b.boothNumber, ...revFilter(b) },
+                            update: { $set, $inc: BUMP } } };
+    });
+    // One round trip rather than one per stand: this ran ~270 sequential
+    // updates on a rate change, which is minutes of an admin watching a spinner.
+    await col().bulkWrite(ops, { ordered: false });
+    pending = (await read({ boothNumber: { $in: pending.map(b => b.boothNumber) } })).filter(b => !repriced(b));
+  }
+  if (pending.length) {
+    console.error(`Rate change: ${pending.length} stand(s) kept changing under the repricing —`,
+                  pending.map(b => b.boothNumber).join(', '));
+  }
+  return { ok: true, repriced: total - pending.length };
 }
 
 // Flag (or unflag) a stand as the floorplan sponsor's — it then renders in the
@@ -472,6 +517,11 @@ async function ensureIndexes() {
  * An empty value clears the override. The label must be unique across the show —
  * it can't collide with another stand's shown number OR with any stand's real
  * identity, or two stands would read as the same number.
+ *
+ * The label is part of what a merge stores of a stand it absorbs, so changing
+ * it moves the stand's shape revision on (see revFilter): a merge that read the
+ * stand before the change misses, rather than storing the old label for a
+ * reset to bring back.
  */
 async function setDisplayNumber(boothNumber, value, { actor = null } = {}) {
   const booth = await get(boothNumber);
@@ -481,14 +531,14 @@ async function setDisplayNumber(boothNumber, value, { actor = null } = {}) {
 
   if (!raw) {                          // clear the override
     await col().updateOne({ showId: config.showId, boothNumber },
-      { $unset: CLEAR_DISPLAY, $set: { updatedAt: new Date(), updatedBy: actor } });
+      { $unset: CLEAR_DISPLAY, $set: { updatedAt: new Date(), updatedBy: actor }, $inc: BUMP });
     return { ok: true, cleared: true, before: booth, after: await get(boothNumber) };
   }
 
   if (!/^[A-Za-z0-9 /.\-]{1,20}$/.test(raw)) return { ok: false, reason: 'bad_value' };
   if (raw === boothNumber) {            // "showing its own identity" = no override needed
     await col().updateOne({ showId: config.showId, boothNumber },
-      { $unset: CLEAR_DISPLAY, $set: { updatedAt: new Date(), updatedBy: actor } });
+      { $unset: CLEAR_DISPLAY, $set: { updatedAt: new Date(), updatedBy: actor }, $inc: BUMP });
     return { ok: true, cleared: true, before: booth, after: await get(boothNumber) };
   }
 
@@ -509,7 +559,7 @@ async function setDisplayNumber(boothNumber, value, { actor = null } = {}) {
 
   await col().updateOne({ showId: config.showId, boothNumber },
     { $set: { displayNumber: raw, displayNumberKey: displayKey(raw),
-              updatedAt: new Date(), updatedBy: actor } });
+              updatedAt: new Date(), updatedBy: actor }, $inc: BUMP });
   return { ok: true, value: raw, before: booth, after: await get(boothNumber) };
 }
 
@@ -735,6 +785,128 @@ function contiguousMerge(g1, g2) {
 const stampOf = (snap) => (snap ? (snap.at ? new Date(snap.at).getTime() : 0) : -1);
 /** Is the split the most recent thing done to this stand? */
 const splitIsLatest = (b) => !!(b && b.splitSnapshot) && stampOf(b.splitSnapshot) >= stampOf(b.mergeSnapshot);
+/**
+ * The stamp for a new shaping of this stand: now, and in any case later than
+ * every shaping it already carries. Two inside one millisecond — a script, a
+ * merge selection that undoes a split, a test — used to tie, and a tie reads
+ * as the split being the later, whichever actually came last.
+ */
+const stampAfter = (b) => new Date(Math.max(Date.now(),
+  stampOf(b && b.splitSnapshot) + 1, stampOf(b && b.mergeSnapshot) + 1));
+
+/**
+ * Which version of its shape a stand is at.
+ *
+ * Every reshaping reads a stand, decides, and then writes, and two admins can
+ * do that to the same stand at once. The writes used to be conditional only on
+ * the stand still being available — which both admins' stands still were. Merge
+ * A+B and A+C at the same moment and the second write replaced the first one's
+ * merge record: C was deleted and in no record at all, 18 m² of a 27 m² block,
+ * and no Reset could bring it back. Two splits at once half-split the hall, and
+ * a rate change wrote back a merge record read from before the merge.
+ *
+ * So every write that changes a stand's shape or its shaping records bumps
+ * `shapeRev`, and every one is conditional on the revision it was computed
+ * from. The write that loses the race matches nothing, and the operation undoes
+ * whatever it had already done. A stand never reshaped has no revision; null in
+ * a filter matches a missing field as well as a stored null.
+ */
+const revFilter = (b) => ({ shapeRev: (b && b.shapeRev != null) ? b.shapeRev : null });
+const BUMP = { shapeRev: 1 };
+/** The revision a stand is at once OUR write to it has landed. */
+const ourRev = (b) => ((b && b.shapeRev) || 0) + 1;
+
+/** Why a conditional write on this stand matched nothing: gone, booked, or reshaped under us. */
+async function whyMissed(boothNumber) {
+  const b = await get(boothNumber);
+  if (!b || b.removed === true) return 'missing_booth';
+  if (b.status !== 'available' || (b.assignment && b.assignment.company)) return 'not_available';
+  return 'changed';
+}
+
+/**
+ * Put fields of a stand back to what they were before a write of ours, when a
+ * later step of the same operation failed.
+ *
+ * `prior` must be a detached copy (see detach): the failed-merge rollback used
+ * to "restore" the very snapshot object the merge had already extended, which
+ * restored the extension. Conditional on our write still being the last one,
+ * so it can never undo somebody else's change; a field the stand did not have
+ * before is removed rather than set to null.
+ */
+async function putBack(boothNumber, prior, fields, actor) {
+  const $set = { updatedAt: new Date(), updatedBy: actor }, $unset = {};
+  for (const k of fields) { if (prior[k] === undefined) $unset[k] = ''; else $set[k] = prior[k]; }
+  const update = { $set, $inc: BUMP };
+  if (Object.keys($unset).length) update.$unset = $unset;
+  return col().updateOne({ showId: config.showId, boothNumber, shapeRev: ourRev(prior) }, update);
+}
+
+// Areas are stored to the hundredth (a printed 12.5 m² stays 12.5); a sum is
+// rounded back to that so a merge cannot add floating-point dust.
+const area2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const decimalsOf = (n) => { const s = String(n); const i = s.indexOf('.'); return i < 0 || /e/i.test(s) ? 0 : s.length - i - 1; };
+
+/**
+ * Divide `total` in proportion to `weights` so the parts add back to the total
+ * EXACTLY, at the precision the total is stored to (whole numbers for a price,
+ * hundredths at most for an area).
+ *
+ * Largest remainder: each part gets its share rounded down to that precision,
+ * and what is left goes one unit at a time to the parts the rounding cut most —
+ * the earliest first on a tie, so an equal split of 9 is 5 + 4. The old rule
+ * floored to WHOLE numbers and handed the remainder to the first cells, which
+ * is right for whole m² and wrong for anything else: 12.5 m² in two came out
+ * 7 + 6 = 13, and 12.3 in three came out 13. A custom split rounded each part's
+ * price on its own, so €1,001 in thirds came to €1,002.
+ */
+function apportion(total, weights) {
+  const t = Number(total) || 0;
+  const scale = 10 ** Math.min(2, decimalsOf(t));
+  const units = Math.round(t * scale);
+  const sumW = weights.reduce((s, w) => s + (Number(w) || 0), 0) || 1;
+  const raw = weights.map(w => units * (Number(w) || 0) / sumW);
+  const out = raw.map(r => Math.floor(r + 1e-9));
+  let left = units - out.reduce((s, v) => s + v, 0);
+  const order = raw.map((r, i) => [r - out[i], i]).sort((p, q) => (q[0] - p[0]) || (p[1] - q[1]));
+  for (let k = 0; left > 0 && order.length; k = (k + 1) % order.length, left--) out[order[k][1]]++;
+  return out.map(u => u / scale);
+}
+
+/**
+ * What a merge keeps of a stand it absorbs: the whole record as it was, so a
+ * reset can put it back exactly — less its database id, which a re-inserted
+ * stand does not need and which does not survive being copied.
+ */
+const partOf = (d) => { const { _id, ...rest } = detach(d); return rest; };
+
+/**
+ * The merge record a block carries once it has absorbed `others`.
+ *
+ * Growing a block whose merge is the latest thing done to it EXTENDS that
+ * record: `self` stays the footprint before the FIRST merge, so one reset
+ * still walks all the way back to the stands it started as.
+ *
+ * But a block that has been split since its merge is not the hall that record
+ * describes any more — the split carved part of the merged footprint into
+ * cells that are still on the plan. Extending the old record re-stamped it as
+ * the newest shaping, and the next Reset put the pre-merge stands back over
+ * the live cells: merge A+X, split A, merge A+B, reset A, and X came back on
+ * top of A-2 — 36 m² in a 27 m² hall, with no way to take it out again. So a
+ * merge laid over a split starts a record of its own, whose `self` is the
+ * stand as it stands now, carrying the earlier merge underneath it to be put
+ * back when this one is undone.
+ */
+function nextMergeSnapshot(survivor, others, at) {
+  const parts = others.map(partOf);
+  const prev = survivor.mergeSnapshot;
+  if (prev && !splitIsLatest(survivor)) {
+    return { ...detach(prev), parts: [...(prev.parts || []).map(detach), ...parts], at };
+  }
+  const self = { geometry: detach(survivor.geometry), sqm: survivor.sqm, listPrice: survivor.listPrice };
+  if (prev) self.under = { mergeSnapshot: detach(prev), mergedFrom: [...(survivor.mergedFrom || [])] };
+  return { self, parts, at };
+}
 
 /**
  * Putting a split back together, cell for cell, IS undoing the split.
@@ -766,15 +938,16 @@ function wholeSplitOf(docs, nums) {
  * bounding box of the two, so the merged stand still maps onto the plan.
  */
 async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
-  let a = await get(primaryNum);
-  let b = await get(secondaryNum);
+  // Detached: these are what a failed merge is rolled back to.
+  let a = detach(await get(primaryNum));
+  let b = detach(await get(secondaryNum));
   if (!a || !b) return { ok: false, reason: 'missing_booth' };
   if (primaryNum === secondaryNum) return { ok: false, reason: 'same_booth' };
 
   // A two-cell split being put back together is that split being undone.
   const whole2 = wholeSplitOf([a, b], [primaryNum, secondaryNum]);
   if (whole2) {
-    const r = await reset(whole2.boothNumber);
+    const r = await reset(whole2.boothNumber, { actor });
     return r.ok ? { ok: true, primary: await get(whole2.boothNumber), unsplit: true } : r;
   }
 
@@ -825,32 +998,28 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
     h: Math.max(g1.y + g1.h, g2.y + g2.h) - Math.min(g1.y, g2.y),
   } : (g1 || g2 || null);
 
-  // Snapshot for a later reset: the primary's own footprint before its FIRST
-  // merge (captured once), plus the full record of each absorbed stand. Reset
-  // uses this to restore everything exactly.
-  const mergeSnapshot = a.mergeSnapshot
-    || { self: { geometry: a.geometry, sqm: a.sqm, listPrice: a.listPrice }, parts: [] };
-  mergeSnapshot.parts = [...mergeSnapshot.parts, b];
-  // When this shaping happened. A stand may now carry a merge and a split at
-  // once (merge then split, or split then merge), and reset has to undo the
-  // LATER one — undoing them in the wrong order restores a footprint over the
-  // top of cells that still exist. Growing an existing merge re-stamps it,
-  // which is right: the merge is, again, the most recent thing done here.
-  mergeSnapshot.at = new Date();
+  // Snapshot for a later reset — see nextMergeSnapshot for what it holds and
+  // why a merge over a split starts a record of its own. Stamped with when it
+  // happened: a stand may carry a merge and a split at once, and reset has to
+  // undo the LATER one.
+  const at = stampAfter(a);
+  const mergeSnapshot = nextMergeSnapshot(a, [b], at);
 
   const $set = {
-    sqm: (a.sqm || 0) + (b.sqm || 0),
+    sqm: area2((a.sqm || 0) + (b.sqm || 0)),
     listPrice: (a.listPrice || 0) + (b.listPrice || 0),
     mergedFrom: [...(a.mergedFrom || []), secondaryNum],
     mergeSnapshot,
-    updatedAt: new Date(), updatedBy: actor,
+    updatedAt: at, updatedBy: actor,
   };
   if (box) $set.geometry = box;   // never $set an undefined geometry
 
   // The status re-checks above are only a read; between them and the writes
-  // another admin could book either stand. Both writes are therefore
-  // conditional on the stand still being available, and if the second fails we
-  // undo the first — so a booking made mid-merge is never silently destroyed.
+  // another admin could book either stand, or reshape it. Both writes are
+  // therefore conditional on the stand still being available AND still at the
+  // revision read (see revFilter), and if the second fails we undo the first —
+  // so a booking made mid-merge is never silently destroyed, and a merge into
+  // the same block at the same moment cannot overwrite this one's record.
   // (No multi-document transaction: it would require a replica set and break
   // local single-node Mongo.)
   //
@@ -859,24 +1028,19 @@ async function consolidate(primaryNum, secondaryNum, { actor = null } = {}) {
   // grown, secondary still present) that `reset` recovers — never a silently
   // lost stand, which the old delete-first order risked.
   const upd = await col().updateOne(
-    { showId: config.showId, boothNumber: primaryNum, status: 'available' },
-    { $set }
+    { showId: config.showId, boothNumber: primaryNum, status: 'available', ...revFilter(a) },
+    { $set, $inc: BUMP }
   );
-  if (!upd.matchedCount) return { ok: false, reason: 'not_available' };   // primary taken; nothing to undo
+  if (!upd.matchedCount) return { ok: false, reason: await whyMissed(primaryNum) };   // nothing to undo
 
-  const del = await col().deleteOne({ showId: config.showId, boothNumber: secondaryNum, status: 'available' });
+  const del = await col().deleteOne({ showId: config.showId, boothNumber: secondaryNum, status: 'available',
+                                      'assignment.company': { $in: [null, ''] }, ...revFilter(b) });
   if (!del.deletedCount) {
-    // Secondary was booked/held between the read and now. Roll the primary back
-    // to exactly its pre-merge shape so the enlargement doesn't stick. Fields
-    // that didn't exist before the merge (first-ever merge) are removed, not set
-    // to null, so the record matches its original form.
-    const restore = { $set: { sqm: a.sqm, listPrice: a.listPrice, updatedAt: new Date(), updatedBy: actor }, $unset: {} };
-    if (a.geometry)      restore.$set.geometry      = a.geometry;      else restore.$unset.geometry = '';
-    if (a.mergedFrom)    restore.$set.mergedFrom    = a.mergedFrom;    else restore.$unset.mergedFrom = '';
-    if (a.mergeSnapshot) restore.$set.mergeSnapshot = a.mergeSnapshot; else restore.$unset.mergeSnapshot = '';
-    if (!Object.keys(restore.$unset).length) delete restore.$unset;
-    await col().updateOne({ showId: config.showId, boothNumber: primaryNum }, restore);
-    return { ok: false, reason: 'not_available' };
+    // Secondary was booked or reshaped between the read and now. Roll the
+    // primary back to exactly its pre-merge shape so the enlargement doesn't
+    // stick.
+    await putBack(primaryNum, a, ['geometry', 'sqm', 'listPrice', 'mergedFrom', 'mergeSnapshot'], actor);
+    return { ok: false, reason: await whyMissed(secondaryNum) };
   }
   return { ok: true, primary: await get(primaryNum) };
 }
@@ -892,7 +1056,12 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
   const nums = [...new Set(boothNumbers || [])];
   if (nums.length < 2) return { ok: false, reason: 'need_two' };
   const docs = [];
-  for (const n of nums) { const d = await get(n); if (!d) return { ok: false, reason: 'missing_booth' }; docs.push(d); }
+  for (const n of nums) {
+    // Detached: these are what a failed merge is rolled back to and re-inserted from.
+    const d = detach(await get(n));
+    if (!d) return { ok: false, reason: 'missing_booth' };
+    docs.push(d);
+  }
   for (const d of docs) {
     if (d.status !== 'available' || (d.assignment && d.assignment.company)) return { ok: false, reason: 'not_available' };
     // Split cells and split parents may be merged (see consolidate). Whether a
@@ -903,11 +1072,8 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
   // The whole of one split, selected: undo it rather than re-merge it.
   const whole = wholeSplitOf(docs, nums);
   if (whole) {
-    // Read off the cells BEFORE the reset: it is the reset that takes the
-    // snapshot off the stand, and the driver may well have handed us the very
-    // document it is about to change.
     const cells = [...whole.splitSnapshot.created];
-    const r = await reset(whole.boothNumber);
+    const r = await reset(whole.boothNumber, { actor });
     return r.ok ? { ok: true, primary: await get(whole.boothNumber), absorbed: cells, unsplit: true } : r;
   }
 
@@ -950,38 +1116,35 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
   // the only copies of the stands IT absorbed, would go with it.
   for (const o of others) if (o.mergeSnapshot) return { ok: false, reason: 'reset_first', blockedBy: o.boothNumber };
 
-  const totalSqm   = docs.reduce((s, d) => s + (d.sqm || 0), 0);
+  const totalSqm   = area2(docs.reduce((s, d) => s + (d.sqm || 0), 0));
   const totalPrice = docs.reduce((s, d) => s + (d.listPrice || 0), 0);
-  // Growing a block EXTENDS its snapshot rather than replacing it: `self` stays
-  // the survivor's footprint before its FIRST merge, so one reset still walks
-  // all the way back to the stands it started as. Replacing it recorded the
-  // block as its own original and stranded everything absorbed before.
-  const mergeSnapshot = survivor.mergeSnapshot
-    ? { ...survivor.mergeSnapshot, parts: [...(survivor.mergeSnapshot.parts || []), ...others] }
-    : { self: { geometry: survivor.geometry, sqm: survivor.sqm, listPrice: survivor.listPrice }, parts: others };
-  mergeSnapshot.at = new Date();   // see consolidate: reset undoes the later shaping first
+  // See nextMergeSnapshot: a growing block extends its record, a block split
+  // since its merge starts a new one over the old.
+  const at = stampAfter(survivor);
+  const mergeSnapshot = nextMergeSnapshot(survivor, others, at);
 
+  // Conditional on the revision read, as in consolidate: two merges into the
+  // same block at once must not leave one of them in no record at all.
   const upd = await col().updateOne(
-    { showId: config.showId, boothNumber: survivorNum, status: 'available' },
+    { showId: config.showId, boothNumber: survivorNum, status: 'available', ...revFilter(survivor) },
     { $set: { geometry: box, sqm: totalSqm, listPrice: totalPrice,
               mergedFrom: [...(survivor.mergedFrom || []), ...others.map(o => o.boothNumber)],
-              mergeSnapshot, updatedAt: new Date(), updatedBy: actor } }
+              mergeSnapshot, updatedAt: at, updatedBy: actor },
+      $inc: BUMP }
   );
-  if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
+  if (!upd.matchedCount) return { ok: false, reason: await whyMissed(survivorNum) };
 
   const removed = [];
   for (const o of others) {
-    const del = await col().deleteOne({ showId: config.showId, boothNumber: o.boothNumber, status: 'available' });
+    const del = await col().deleteOne({ showId: config.showId, boothNumber: o.boothNumber, status: 'available',
+                                        'assignment.company': { $in: [null, ''] }, ...revFilter(o) });
     if (!del.deletedCount) {
-      // One got booked mid-merge: roll the survivor back to its pre-merge shape
-      // and re-insert whatever we already removed, so nothing is lost.
-      const restore = { $set: { geometry: survivor.geometry, sqm: survivor.sqm, listPrice: survivor.listPrice, updatedAt: new Date() }, $unset: {} };
-      if (survivor.mergedFrom)    restore.$set.mergedFrom = survivor.mergedFrom;       else restore.$unset.mergedFrom = '';
-      if (survivor.mergeSnapshot) restore.$set.mergeSnapshot = survivor.mergeSnapshot; else restore.$unset.mergeSnapshot = '';
-      if (!Object.keys(restore.$unset).length) delete restore.$unset;
-      await col().updateOne({ showId: config.showId, boothNumber: survivorNum }, restore);
+      // One got booked or reshaped mid-merge: roll the survivor back to its
+      // pre-merge shape and re-insert whatever we already removed, so nothing
+      // is lost.
+      await putBack(survivorNum, survivor, ['geometry', 'sqm', 'listPrice', 'mergedFrom', 'mergeSnapshot'], actor);
       for (const dd of removed) await col().insertOne(dd);
-      return { ok: false, reason: 'not_available' };
+      return { ok: false, reason: await whyMissed(o.boothNumber) };
     }
     removed.push(o);
   }
@@ -994,7 +1157,7 @@ async function consolidateMany(boothNumbers, { actor = null } = {}) {
  * numbered `<n>-2`, `<n>-3`, … The area and list price divide evenly.
  */
 async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, actor = null } = {}) {
-  const b = await get(boothNum);
+  const b = detach(await get(boothNum));
   if (!b) return { ok: false, reason: 'missing_booth' };
   // Splitting is a pre-sale layout operation. On a sold/held stand it would
   // shrink a paid booking to 1/n of its area, so only available stands split.
@@ -1033,20 +1196,12 @@ async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, 
     if (!Number.isFinite(first) || first < 1 || first > totalSqm - 1) return { ok: false, reason: 'bad_ratio' };
   }
 
-  // Distribute sqm and list price so the parts sum EXACTLY to the original:
-  // each cell gets floor(total/n), and the first `remainder` cells get one
-  // more. Previously every cell (primary included) took round(total/n), so
-  // n×part ≠ whole and the headline stats drifted on every split. An uneven
-  // split gives the first cell its chosen share (of the price, pro rata) and
-  // the second the remainder, so the pair still sums exactly.
-  const share = (total, i) => {
-    if (first != null) {
-      const a = total === totalSqm ? first : Math.round(total * first / totalSqm);
-      return i === 0 ? a : total - a;
-    }
-    const base = Math.floor(total / n), rem = total - base * n;
-    return base + (i < rem ? 1 : 0);
-  };
+  // Sizes and list prices that sum EXACTLY to the original, at the precision
+  // each is stored to (see apportion). An uneven split gives the first cell
+  // its chosen share (of the price, pro rata) and the second the remainder.
+  const weights = first != null ? [first, totalSqm - first] : Array.from({ length: n }, () => 1);
+  const sizes  = first != null ? [first, area2(totalSqm - first)] : apportion(totalSqm, weights);
+  const prices = apportion(totalPrice, weights);
 
   // The footprint divides in the same proportion as the area, so the divider
   // sits on the plan exactly where the admin dragged it.
@@ -1080,51 +1235,51 @@ async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, 
   // The snapshot keeps the box AS WRITTEN (b.geometry, not the footprint): it
   // is what a reset puts back, and what binds the stand to its artwork shape.
   const splitSnapshot = { self: { geometry: b.geometry, sqm: totalSqm, listPrice: totalPrice },
-                          created: nums, at: new Date() };   // see consolidate: reset undoes the later shaping first
+                          created: nums, at: stampAfter(b) };   // see consolidate: reset undoes the later shaping first
 
-  // Conditional on the stand still being available: if it was booked between
-  // the read above and here, matchedCount is 0 and nothing else is touched, so
-  // a paid booking can never be shrunk to a fraction of its area.
+  // Conditional on the stand still being available and at the revision read:
+  // if it was booked between the read above and here, matchedCount is 0 and
+  // nothing else is touched, so a paid booking can never be shrunk to a
+  // fraction of its area — and a second split of the same stand at the same
+  // moment loses here, cleanly, instead of half-splitting the hall.
   const primRes = await col().updateOne(
-    { showId: config.showId, boothNumber: boothNum, status: 'available' },
-    { $set: { geometry: cellGeom(0), sqm: share(totalSqm, 0), listPrice: share(totalPrice, 0),
-              splitSnapshot, updatedAt: new Date(), updatedBy: actor } }
+    { showId: config.showId, boothNumber: boothNum, status: 'available', ...revFilter(b) },
+    { $set: { geometry: cellGeom(0), sqm: sizes[0], listPrice: prices[0],
+              splitSnapshot, updatedAt: new Date(), updatedBy: actor },
+      $inc: BUMP }
   );
-  if (!primRes.matchedCount) return { ok: false, reason: 'not_available' };
+  if (!primRes.matchedCount) return { ok: false, reason: await whyMissed(boothNum) };
 
   const created = [];
-  for (let i = 1; i < n; i++) {
-    await col().insertOne({
-      showId: config.showId, boothNumber: nums[i - 1],
-      svgElementId: null, geometry: cellGeom(i),
-      sqm: share(totalSqm, i), sqmSource: 'split', listPrice: share(totalPrice, i), status: 'available',
-      assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
-      clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
-      createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
-    });
-    created.push(nums[i - 1]);
+  try {
+    for (let i = 1; i < n; i++) {
+      await col().insertOne({
+        showId: config.showId, boothNumber: nums[i - 1],
+        svgElementId: null, geometry: cellGeom(i),
+        sqm: sizes[i], sqmSource: 'split', listPrice: prices[i], status: 'available',
+        assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
+        clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
+        createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
+      });
+      created.push(nums[i - 1]);
+    }
+  } catch (e) {
+    // A cell's number taken in the gap since the check above — the unique
+    // index refuses the second. Undo the half of the split that landed.
+    for (const num of created) await col().deleteOne({ showId: config.showId, boothNumber: num, status: 'available' });
+    await putBack(boothNum, b, ['geometry', 'sqm', 'listPrice', 'splitSnapshot'], actor);
+    return { ok: false, reason: 'suffix_exists' };
   }
-  return { ok: true, created, sizes: Array.from({ length: n }, (_, i) => share(totalSqm, i)) };
+  return { ok: true, created, sizes };
 }
-
-/**
- * Undo whatever composite operation shaped this stand.
- *
- *   - merged stand  → split back into the originals (restore self + re-insert
- *                     every absorbed stand from the snapshot)
- *   - split parent  → delete the created cells and restore the parent footprint
- *   - leftover split cell with no snapshot (legacy) → just remove the stray cell
- *
- * Only touches available stands, so it can never disturb a booking.
- */
 
 /**
  * Custom split: re-carve one available stand (which may be a merged block) into
  * cells with the admin's OWN numbers and sizes. `parts` is [{ number, sqm }].
- * The sizes must add up to the stand's total; the geometry is divided in those
- * proportions along `axis`. Each cell is a split cell (so the plan masks the
- * stale baked figures and draws the given number + size), and the survivor keeps
- * the original identity.
+ * The sizes must add up to the stand's total — exactly, to the hundredth it is
+ * stored to; the geometry is divided in those proportions along `axis`. Each
+ * cell is a split cell (so the plan masks the stale baked figures and draws the
+ * given number + size), and the survivor keeps the original identity.
  *
  * A merged block keeps its merge. It used to be thrown away here — the block was
  * re-carved and the records of every stand it had absorbed went with it, so the
@@ -1133,7 +1288,7 @@ async function split(boothNum, { parts = 2, axis = 'vertical', firstSqm = null, 
  * it into the stands it was made from.
  */
 async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = null } = {}) {
-  const b = await get(boothNum);
+  const b = detach(await get(boothNum));
   if (!b) return { ok: false, reason: 'missing_booth' };
   if (b.status !== 'available' || (b.assignment && b.assignment.company)) return { ok: false, reason: 'not_available' };
   if (b.splitSnapshot) return { ok: false, reason: 'reset_first' };   // already split; a MERGED block is fine
@@ -1142,13 +1297,15 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
 
   const clean = (parts || []).map(p => ({
     displayNumber: String(p && p.number != null ? p.number : '').trim(),
-    sqm: Math.round(Number(p && p.sqm)),
+    sqm: area2(p && p.sqm),
   })).filter(p => p.displayNumber && p.sqm > 0);
   if (clean.length < 2 || clean.length > 8) return { ok: false, reason: 'bad_parts' };
 
+  // The sizes have to add up to the stand, not to within a square metre of
+  // it: a tolerance of one let 15 + 16 re-carve a 30 m² stand into 31.
   const totalSqm = b.sqm || 0;
-  const sumParts = clean.reduce((s, p) => s + p.sqm, 0);
-  if (Math.abs(sumParts - totalSqm) > 1) return { ok: false, reason: 'size_mismatch', total: totalSqm, got: sumParts };
+  const sumParts = area2(clean.reduce((s, p) => s + p.sqm, 0));
+  if (Math.abs(sumParts - totalSqm) >= 0.005) return { ok: false, reason: 'size_mismatch', total: totalSqm, got: sumParts };
   if (new Set(clean.map(p => p.displayNumber.toLowerCase())).size !== clean.length) return { ok: false, reason: 'dup_number' };
 
   // The same show-wide uniqueness rule setDisplayNumber enforces: a part may not
@@ -1184,8 +1341,9 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
     offset += len;
   });
 
-  const totalPrice = b.listPrice || 0;
-  const priceOf = (sqm) => Math.round(totalPrice * (sqm / (sumParts || 1)));
+  // The list price shares out in the same proportions and adds back to the
+  // whole (see apportion); each part rounded on its own did not.
+  const prices = apportion(b.listPrice || 0, clean.map(p => p.sqm));
 
   const nums = [];
   for (let i = 1; i < cells.length; i++) {
@@ -1198,40 +1356,103 @@ async function splitCustom(boothNum, { axis = 'vertical', parts = [], actor = nu
   // footprint — this is the only split that overwrites the parent's
   // displayNumber and splitAxis, so it is the only one whose reset must put them
   // back. The prior values are recorded for exactly that.
-  const splitSnapshot = { custom: true, at: new Date(),   // see consolidate: reset undoes the later shaping first
-                          self: { geometry: b.geometry, sqm: totalSqm, listPrice: totalPrice,   // as written — what a reset puts back
+  const splitSnapshot = { custom: true, at: stampAfter(b),   // see consolidate: reset undoes the later shaping first
+                          self: { geometry: b.geometry, sqm: totalSqm, listPrice: b.listPrice || 0,   // as written — what a reset puts back
                                   displayNumber: b.displayNumber ?? null, splitAxis: b.splitAxis ?? null },
                           created: nums };
   const p0 = cells[0];
+  // The parent's label changes BEFORE any cell is inserted, so a cell may take
+  // the number the parent showed until now without the unique index on shown
+  // numbers ever seeing two stands hold it.
   const primRes = await col().updateOne(
-    { showId: config.showId, boothNumber: boothNum, status: 'available' },
-    { $set: { geometry: p0.geometry, sqm: p0.sqm, listPrice: priceOf(p0.sqm),
+    { showId: config.showId, boothNumber: boothNum, status: 'available', ...revFilter(b) },
+    { $set: { geometry: p0.geometry, sqm: p0.sqm, listPrice: prices[0],
               displayNumber: p0.displayNumber, displayNumberKey: displayKey(p0.displayNumber),
               splitSnapshot,
               splitAxis: vertical ? 'vertical' : 'horizontal', updatedAt: new Date(), updatedBy: actor },
-    }
+      $inc: BUMP }
   );
-  if (!primRes.matchedCount) return { ok: false, reason: 'not_available' };
+  if (!primRes.matchedCount) return { ok: false, reason: await whyMissed(boothNum) };
 
   const created = [];
-  for (let i = 1; i < cells.length; i++) {
-    const c = cells[i];
-    await col().insertOne({
-      showId: config.showId, boothNumber: nums[i - 1], svgElementId: null,
-      geometry: c.geometry, sqm: c.sqm, sqmSource: 'split', listPrice: priceOf(c.sqm),
-      displayNumber: c.displayNumber, displayNumberKey: displayKey(c.displayNumber),
-      status: 'available',
-      assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
-      clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
-      createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
-    });
-    created.push(nums[i - 1]);
+  try {
+    for (let i = 1; i < cells.length; i++) {
+      const c = cells[i];
+      await col().insertOne({
+        showId: config.showId, boothNumber: nums[i - 1], svgElementId: null,
+        geometry: c.geometry, sqm: c.sqm, sqmSource: 'split', listPrice: prices[i],
+        displayNumber: c.displayNumber, displayNumberKey: displayKey(c.displayNumber),
+        status: 'available',
+        assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
+        clicks: 0, splitFrom: boothNum, splitAxis: vertical ? 'vertical' : 'horizontal',
+        createdAt: new Date(), updatedAt: new Date(), updatedBy: actor,
+      });
+      created.push(nums[i - 1]);
+    }
+  } catch (e) {
+    // A cell's number or shown number taken in the gap since the checks above.
+    // Cells out first, so the parent's own label can go back without meeting
+    // a copy of itself.
+    for (const num of created) await col().deleteOne({ showId: config.showId, boothNumber: num, status: 'available' });
+    await putBack(boothNum, b, ['geometry', 'sqm', 'listPrice', 'displayNumber', 'displayNumberKey',
+                                'splitSnapshot', 'splitAxis'], actor);
+    const failed = cells[created.length + 1] || {};
+    return /shown_number/.test(String(e && e.message))
+      ? { ok: false, reason: 'duplicate', number: failed.displayNumber || null, clashWith: null }
+      : { ok: false, reason: 'suffix_exists' };
   }
   return { ok: true, created };
 }
 
+/**
+ * Would putting these boxes on the plan stand them on a stand already there?
+ *
+ * The last line of defence for the one thing every merge, split and reset has
+ * to keep true: the hall's floor is counted once. A merge record written by
+ * the old code could describe the hall from before a split, and undoing it
+ * re-inserted a stand on top of a cell that was still on the plan — the hall
+ * grew by a stand and nothing could take it back out. Records written now
+ * cannot do that, but ones already stored can, so the reset checks before it
+ * writes anything.
+ *
+ * Judged on footprints (see footprintOf). Plans store small overlaps between
+ * neighbouring stands, so only a box covering more than half of another counts.
+ */
+async function floorTaken(exceptNum, boxes) {
+  const rects = await artworkRects();
+  const others = (await col().find({ showId: config.showId, removed: { $ne: true } }).toArray())
+    .filter(d => d.boothNumber !== exceptNum && d.geometry);
+  for (const { boothNumber, geometry } of boxes) {
+    const a = footprintOf(geometry, rects);
+    if (!a) continue;
+    for (const o of others) {
+      const b = footprintOf(o.geometry, rects);
+      const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+      const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+      if (ox > 0 && oy > 0 && ox * oy > 0.5 * Math.min(a.w * a.h, b.w * b.h)) {
+        return { part: boothNumber, with: o.boothNumber };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Undo whatever composite operation shaped this stand.
+ *
+ *   - merged stand  → split back into the originals (restore self + re-insert
+ *                     every absorbed stand from the snapshot)
+ *   - split parent  → delete the created cells and restore the parent footprint
+ *   - split cell    → undo the split it belongs to; only a true leftover — a
+ *                     cell its parent no longer records, sitting on floor the
+ *                     parent already covers — is removed
+ *
+ * Only touches available stands, so it can never disturb a booking; and it
+ * checks before writing that nothing it puts back lands on floor another
+ * stand already holds, so it can never make floor either.
+ */
 async function reset(boothNumber, { actor = null } = {}) {
-  const booth = await get(boothNumber);
+  const booth = detach(await get(boothNumber));
   if (!booth) return { ok: false, reason: 'missing_booth' };
   if (booth.status !== 'available') return { ok: false, reason: 'not_available' };
 
@@ -1241,108 +1462,202 @@ async function reset(boothNumber, { actor = null } = {}) {
   // would restore the pre-merge stands on top of cells that still exist, and
   // undoing a split under a merge would restore a footprint that the merge has
   // since grown past. Reset again to unwind the step before it.
-  //
-  // Un-merge. Restore the parent FIRST, conditional on it still being available
-  // — if it was booked between the read and now, abort without re-inserting the
-  // parts, so we never leave a booked merged stand overlapping restored parts.
-  if (booth.mergeSnapshot && !splitIsLatest(booth)) {
-    const snap = booth.mergeSnapshot;
-    const upd = await col().updateOne(
-      { showId: config.showId, boothNumber, status: 'available' },
-      { $set: { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() },
-        $unset: { mergeSnapshot: '', mergedFrom: '' } }
-    );
-    if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
-    const restored = [];
-    for (const part of snap.parts || []) {
-      if (part && part.boothNumber && !(await get(part.boothNumber))) {
-        await col().insertOne(part);            // the stored doc keeps its original geometry/sqm/price
-        restored.push(part.boothNumber);
-      }
-    }
-    return { ok: true, type: 'unmerge', restored };
-  }
-
-  // Un-split (acting on the parent).
-  if (booth.splitSnapshot) {
-    const snap = booth.splitSnapshot;
-    // Refuse if any child can't be cleanly removed: a booked child would be
-    // destroyed and its area would double under the restored parent; a
-    // further-split child would orphan its own grandchildren. The admin resets
-    // those first.
-    for (const num of snap.created || []) {
-      const child = await get(num);
-      if (!child) {
-        // Gone — but gone WHERE? A cell absorbed by a merge still occupies its
-        // floor space, inside whatever swallowed it. Restoring the parent over
-        // the top would draw the original stand across a block that is still
-        // being sold, and double-count the area. Undo that merge first.
-        const into = await col().findOne({ showId: config.showId, mergedFrom: num });
-        if (into) return { ok: false, reason: 'child_absorbed', child: num, into: into.boothNumber };
-        continue;
-      }
-      if (child.removed === true)       return { ok: false, reason: 'child_removed', child: num };
-      if (child.status !== 'available') return { ok: false, reason: 'child_booked' };
-      if (child.splitSnapshot)          return { ok: false, reason: 'child_split' };
-      // A cell that has since SWALLOWED something is not this split's cell any
-      // more — it is a block, and the stands inside it live only in its
-      // snapshot. Deleting it to restore the parent would destroy them and take
-      // their floor space out of the hall with them. Undo that merge first.
-      if (child.mergeSnapshot)          return { ok: false, reason: 'child_merged', child: num };
-    }
-    // Restore the parent first (conditional), then remove the cells — each
-    // delete conditional on the cell still being available so a booking landing
-    // mid-reset is preserved rather than deleted.
-    // Restore the LABEL state too, not just the footprint. splitCustom writes
-    // displayNumber + splitAxis onto the parent, so undoing only the geometry
-    // left the stand permanently reading the carved-up part's number ("500a")
-    // with a stale split axis.
-    const $set = { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice, updatedAt: new Date() };
-    const $unset = { splitSnapshot: '' };
-    // Only a CUSTOM split rewrote the parent's label, so only its reset restores
-    // one. An equal split leaves displayNumber/splitAxis untouched — clearing
-    // them here would wipe a Shown Number the admin set after splitting, which
-    // has nothing to do with the split being undone.
-    //
-    // `snap.custom` is absent on snapshots written before it was recorded; those
-    // are identified by the marker splitCustom leaves behind, since it is the
-    // only operation that puts splitAxis on a PARENT (an equal split sets it on
-    // the child cells alone).
-    const wasCustom = snap.custom === true || (snap.custom === undefined && !!booth.splitAxis);
-    if (wasCustom) {
-      for (const field of ['displayNumber', 'splitAxis']) {
-        const prior = (snap.self || {})[field];
-        if (prior == null) $unset[field] = ''; else $set[field] = prior;
-      }
-      // The comparison key travels with the label it belongs to, or the stand
-      // keeps blocking a shown number it no longer shows.
-      const priorLabel = (snap.self || {}).displayNumber;
-      if (priorLabel == null) $unset.displayNumberKey = '';
-      else $set.displayNumberKey = displayKey(priorLabel);
-    }
-
-    const upd = await col().updateOne(
-      { showId: config.showId, boothNumber, status: 'available' },
-      { $set, $unset }
-    );
-    if (!upd.matchedCount) return { ok: false, reason: 'not_available' };
-    const removed = [];
-    for (const num of snap.created || []) {
-      const res = await col().deleteOne({ showId: config.showId, boothNumber: num, status: 'available' });
-      if (res.deletedCount) removed.push(num);
-    }
-    return { ok: true, type: 'unsplit', removed };
-  }
-
-  // Legacy split cell with no snapshot to restore from — remove the stray cell
-  // (conditional on availability so it can't delete a booking).
-  if (booth.splitFrom) {
-    const res = await col().deleteOne({ showId: config.showId, boothNumber, status: 'available' });
-    if (!res.deletedCount) return { ok: false, reason: 'not_available' };
-    return { ok: true, type: 'remove-cell', removed: [boothNumber] };
-  }
-
+  if (booth.mergeSnapshot && !splitIsLatest(booth)) return unmerge(booth, actor);
+  if (booth.splitSnapshot) return unsplit(booth, actor);
+  if (booth.splitFrom) return resetCell(booth, actor);
   return { ok: false, reason: 'not_composite' };
+}
+
+/**
+ * Un-merge. Restore the block FIRST, conditional on it still being available
+ * and unchanged — if it was booked or reshaped between the read and now, abort
+ * without re-inserting the parts, so we never leave a booked merged stand
+ * overlapping restored parts.
+ */
+async function unmerge(booth, actor) {
+  const { boothNumber } = booth;
+  const snap = booth.mergeSnapshot;
+  const parts = (snap.parts || []).filter(p => p && p.boothNumber);
+
+  // Every stand the block absorbed comes back under its own number, so each
+  // number has to be free. It used to be skipped silently when it was not —
+  // and the floor that stand stood on went with it.
+  for (const part of parts) {
+    if (await get(part.boothNumber)) return { ok: false, reason: 'part_exists', part: part.boothNumber };
+  }
+  const blocked = await floorTaken(boothNumber, parts.map(p => ({ boothNumber: p.boothNumber, geometry: p.geometry })));
+  if (blocked) return { ok: false, reason: 'overlap', part: blocked.part, with: blocked.with };
+
+  // A merge laid over a split carries the merge before it underneath (see
+  // nextMergeSnapshot); undoing this one puts that one back.
+  const under = snap.self && snap.self.under;
+  const $set = { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice,
+                 updatedAt: new Date(), updatedBy: actor };
+  const update = { $set, $inc: BUMP };
+  if (under) { $set.mergeSnapshot = under.mergeSnapshot; $set.mergedFrom = under.mergedFrom || []; }
+  else update.$unset = { mergeSnapshot: '', mergedFrom: '' };
+
+  const upd = await col().updateOne(
+    { showId: config.showId, boothNumber, status: 'available', ...revFilter(booth) }, update);
+  if (!upd.matchedCount) return { ok: false, reason: await whyMissed(boothNumber) };
+
+  const restored = [];
+  try {
+    for (const part of parts) {
+      // The stored record keeps its original geometry/sqm/price. Its old id and
+      // any marker a recovery copy left on it do not come back.
+      const { _id, sponsorLogoOmitted, ...doc } = part;
+      await col().insertOne({ ...doc, shapeRev: (doc.shapeRev || 0) + 1 });
+      restored.push(part.boothNumber);
+    }
+  } catch (e) {
+    // A number claimed in the gap since the check above. Put the block back
+    // as it was rather than leave half of it restored.
+    for (const n of restored) await col().deleteOne({ showId: config.showId, boothNumber: n, status: 'available' });
+    await putBack(boothNumber, booth, ['geometry', 'sqm', 'listPrice', 'mergeSnapshot', 'mergedFrom'], actor);
+    return { ok: false, reason: 'part_exists' };
+  }
+  return { ok: true, type: 'unmerge', restored };
+}
+
+/** Un-split, acting on the parent. */
+async function unsplit(booth, actor) {
+  const { boothNumber } = booth;
+  const snap = booth.splitSnapshot;
+  // Refuse if any child can't be cleanly removed: a booked child would be
+  // destroyed and its area would double under the restored parent; a
+  // further-split child would orphan its own grandchildren. The admin resets
+  // those first.
+  const cells = [];
+  for (const num of snap.created || []) {
+    const child = detach(await get(num));
+    if (!child) {
+      // Gone — but gone WHERE? A cell absorbed by a merge still occupies its
+      // floor space, inside whatever swallowed it. Restoring the parent over
+      // the top would draw the original stand across a block that is still
+      // being sold, and double-count the area. Undo that merge first.
+      const into = await col().findOne({ showId: config.showId, mergedFrom: num });
+      if (into) return { ok: false, reason: 'child_absorbed', child: num, into: into.boothNumber };
+      continue;
+    }
+    if (child.removed === true)       return { ok: false, reason: 'child_removed', child: num };
+    if (child.status !== 'available') return { ok: false, reason: 'child_booked' };
+    if (child.splitSnapshot)          return { ok: false, reason: 'child_split' };
+    // A cell that has since SWALLOWED something is not this split's cell any
+    // more — it is a block, and the stands inside it live only in its
+    // snapshot. Deleting it to restore the parent would destroy them and take
+    // their floor space out of the hall with them. Undo that merge first.
+    if (child.mergeSnapshot)          return { ok: false, reason: 'child_merged', child: num };
+    cells.push(child);
+  }
+  // Restore the parent first (conditional), then remove the cells — each
+  // delete conditional on the cell still being available and unchanged, and
+  // any one failing puts everything back, so a booking landing mid-reset is
+  // preserved and the parent never ends up restored over a cell still there.
+  // Restore the LABEL state too, not just the footprint. splitCustom writes
+  // displayNumber + splitAxis onto the parent, so undoing only the geometry
+  // left the stand permanently reading the carved-up part's number ("500a")
+  // with a stale split axis.
+  const $set = { geometry: snap.self.geometry, sqm: snap.self.sqm, listPrice: snap.self.listPrice,
+                 updatedAt: new Date(), updatedBy: actor };
+  const $unset = { splitSnapshot: '' };
+  // Only a CUSTOM split rewrote the parent's label, so only its reset restores
+  // one. An equal split leaves displayNumber/splitAxis untouched — clearing
+  // them here would wipe a Shown Number the admin set after splitting, which
+  // has nothing to do with the split being undone.
+  //
+  // `snap.custom` is absent on snapshots written before it was recorded; those
+  // are identified by the marker splitCustom leaves behind, since it is the
+  // only operation that puts splitAxis on a PARENT (an equal split sets it on
+  // the child cells alone).
+  const wasCustom = snap.custom === true || (snap.custom === undefined && !!booth.splitAxis);
+  let label = null;
+  if (wasCustom) {
+    for (const field of ['displayNumber', 'splitAxis']) {
+      const prior = (snap.self || {})[field];
+      if (prior == null) $unset[field] = ''; else $set[field] = prior;
+    }
+    // The comparison key travels with the label it belongs to, or the stand
+    // keeps blocking a shown number it no longer shows. It is written LAST,
+    // once the cells are gone: a cell may have taken the very number the
+    // parent showed before the split, and on the real database the unique
+    // index on shown numbers refused the parent's key while that cell still
+    // held it — so the reset of such a split could never succeed.
+    $unset.displayNumberKey = '';
+    label = (snap.self || {}).displayNumber ?? null;
+  }
+
+  const upd = await col().updateOne(
+    { showId: config.showId, boothNumber, status: 'available', ...revFilter(booth) },
+    { $set, $unset, $inc: BUMP }
+  );
+  if (!upd.matchedCount) return { ok: false, reason: await whyMissed(boothNumber) };
+
+  const removed = [], gone = [];
+  for (const c of cells) {
+    const res = await col().deleteOne({ showId: config.showId, boothNumber: c.boothNumber,
+                                        status: 'available', ...revFilter(c) });
+    if (!res.deletedCount) {
+      // Cells back first, then the parent's own label and footprint.
+      for (const g of gone) await col().insertOne(g);
+      await putBack(boothNumber, booth, ['geometry', 'sqm', 'listPrice', 'splitSnapshot',
+                                         'displayNumber', 'displayNumberKey', 'splitAxis'], actor);
+      const why = await whyMissed(c.boothNumber);
+      return { ok: false, reason: why === 'not_available' ? 'child_booked' : 'changed', child: c.boothNumber };
+    }
+    gone.push(c);
+    removed.push(c.boothNumber);
+  }
+  if (label != null) {
+    try {
+      await col().updateOne({ showId: config.showId, boothNumber },
+        { $set: { displayNumberKey: displayKey(label) } });
+    } catch (e) {
+      // Only the uniqueness guard on the label is missing; the stand is whole.
+      console.error(`Reset ${boothNumber}: shown number "${label}" not re-reserved —`, e.message);
+    }
+  }
+  return { ok: true, type: 'unsplit', removed };
+}
+
+/**
+ * Reset asked of a split CELL.
+ *
+ * Every cell used to be treated as a leftover from before splits kept a record
+ * of their cells, and deleted — so resetting "500-2" of a live split threw away
+ * half of stand 500, the hall lost its floor, and the log said "removed
+ * leftover cell". A cell its parent still lists is half of that split, and
+ * resetting it is resetting the split. Only a cell the parent no longer lists
+ * AND whose floor the parent already covers is a true leftover, counted twice;
+ * anything else is real floor and is left alone.
+ */
+async function resetCell(cell, actor) {
+  const parentNum = cell.splitFrom;
+  const parent = detach(await get(parentNum));
+  const listed = !!(parent && parent.splitSnapshot &&
+                    (parent.splitSnapshot.created || []).includes(cell.boothNumber));
+  if (listed) {
+    // The split is undone only when it is the latest thing done to the parent;
+    // a merge laid over it comes off first, and that is a reset of the parent
+    // the admin should ask for by name.
+    if (!splitIsLatest(parent)) return { ok: false, reason: 'cell_of', parent: parentNum };
+    return { ...(await reset(parentNum, { actor })), parent: parentNum };
+  }
+
+  if (parent && parent.removed !== true && parent.geometry && cell.geometry) {
+    const [pf, cf] = await footprints([parent, cell]);
+    const ox = Math.min(pf.x + pf.w, cf.x + cf.w) - Math.max(pf.x, cf.x);
+    const oy = Math.min(pf.y + pf.h, cf.y + cf.h) - Math.max(pf.y, cf.y);
+    if (ox > 0 && oy > 0 && ox * oy > 0.5 * cf.w * cf.h) {
+      // Conditional on availability and the revision read, so it can't delete
+      // a booking or a cell that has since become something else.
+      const res = await col().deleteOne({ showId: config.showId, boothNumber: cell.boothNumber,
+                                          status: 'available', ...revFilter(cell) });
+      if (!res.deletedCount) return { ok: false, reason: await whyMissed(cell.boothNumber) };
+      return { ok: true, type: 'remove-cell', removed: [cell.boothNumber] };
+    }
+  }
+  return { ok: false, reason: 'orphan_cell', parent: parentNum };
 }
 
 /**
@@ -1680,8 +1995,9 @@ function tracked(op, fn) {
     // guaranteed to be detached from what the change is about to write — and
     // when they are not, the "before" picture quietly becomes the "after" one,
     // so the point recorded restores the very change it was meant to undo.
-    // structuredClone keeps the Dates as Dates, which JSON would not.
-    const before = structuredClone(await col().find({ showId: config.showId }).toArray());
+    // detach keeps the Dates as Dates, which JSON would not, and the ids as
+    // ids, which structuredClone would not.
+    const before = detach(await col().find({ showId: config.showId }).toArray());
     const r = await fn(...args);
     if (r && r.ok !== false) {
       // The actor travels in the options object every one of these takes last.

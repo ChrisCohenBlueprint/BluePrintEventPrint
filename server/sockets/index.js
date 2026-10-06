@@ -688,6 +688,8 @@ function register(io) {
         const why = r.reason === 'not_adjacent' ? 'the stands are not next to each other'
                   : r.reason === 'not_available' ? 'both stands must be available'
                   : r.reason === 'reset_first'   ? 'one of them is a merged block, and a block cannot be absorbed into another — reset it first'
+                  : r.reason === 'missing_booth' ? 'one of the stands no longer exists — refresh and try again'
+                  : r.reason === 'changed'       ? 'one of the stands changed while merging — nothing was merged, please try again'
                   : r.reason;
         return { ok: false, error: `Could not merge — ${why}.` };
       }
@@ -716,6 +718,7 @@ function register(io) {
                   : r.reason === 'need_two'      ? 'select at least two stands'
                   : r.reason === 'missing_booth' ? 'one of the stands no longer exists — refresh and try again'
                   : r.reason === 'no_geometry'   ? 'one of the stands has no shape to merge'
+                  : r.reason === 'changed'       ? 'one of the stands changed while merging — nothing was merged, please try again'
                   : r.reason;
         return { ok: false, error: `Could not merge — ${why}.` };
       }
@@ -752,6 +755,10 @@ function register(io) {
                   : r.reason === 'too_small' ? 'the stand is too small to divide that many ways'
                   : r.reason === 'bad_ratio' ? 'each side must keep at least 1 m²'
                   : r.reason === 'uneven_needs_two' ? 'an uneven split makes exactly two stands'
+                  : r.reason === 'suffix_exists' ? 'a generated cell id already exists — reset the stand first'
+                  : r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'no_geometry' ? 'the stand has no geometry to divide'
+                  : r.reason === 'changed' ? 'the stand changed while splitting — nothing was split, please try again'
                   : r.reason;
         return { ok: false, error: `Could not split — ${why}.` };
       }
@@ -777,6 +784,8 @@ function register(io) {
                   : r.reason === 'bad_value' ? `"${r.number}" isn't a valid number — use only letters, numbers, spaces, . / or -`
                   : r.reason === 'suffix_exists' ? 'a generated cell id already exists — reset the stand first'
                   : r.reason === 'no_geometry' ? 'the stand has no geometry to divide'
+                  : r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'changed' ? 'the stand changed while splitting — nothing was split, please try again'
                   : r.reason;
         return { ok: false, error: `Could not split — ${why}.` };
       }
@@ -786,7 +795,9 @@ function register(io) {
       return { ok: true, created: r.created };
     }));
 
-    // Undo a merge or split (or clear a stray leftover cell).
+    // Undo a merge or split. Asked of a split cell, it undoes the split that cell
+    // belongs to; only a true leftover cell, whose floor its parent already
+    // covers, is cleared away.
     socket.on('booth:reset', requireAdmin(socket, 'booth:reset', async ({ boothNumber }) => {
       const n = stand(boothNumber);
       // The actor travels so the plan's history can say who undid what; reset
@@ -804,15 +815,28 @@ function register(io) {
                   : r.reason === 'child_merged'  ? `its cell ${r.child} has been merged with another stand — reset ${r.child} first`
                   : r.reason === 'child_absorbed' ? `its cell ${r.child} was absorbed into stand ${r.into} — reset ${r.into} first`
                   : r.reason === 'child_removed' ? `its cell ${r.child} was taken off the plan — put it back first`
+                  // A split cell is half of its parent's split; resetting it
+                  // undoes that split, unless a merge has been laid over it.
+                  : r.reason === 'cell_of'       ? `it is a cell of stand ${r.parent}, which has been merged since it was split — reset ${r.parent} first`
+                  : r.reason === 'orphan_cell'   ? `it is the only record of its floor (stand ${r.parent} no longer lists it), so there is nothing to undo`
+                  // Never put a stand back over one that is already there.
+                  : r.reason === 'part_exists'   ? `stand ${r.part || 'it absorbed'} is already on the plan, so it cannot be put back`
+                  : r.reason === 'overlap'       ? `putting ${r.part} back would stand it on top of ${r.with} — go back to an earlier point in Plan History instead`
+                  : r.reason === 'missing_booth' ? 'that stand does not exist'
+                  : r.reason === 'changed'       ? 'a stand changed while resetting — nothing was changed, please try again'
                   : r.reason;
         return { ok: false, error: `Could not reset ${n} — ${why}.` };
       }
-      track({ type: 'booth.reset', boothNumber: n, socket, meta: { type: r.type, changed: r.restored || r.removed } });
+      track({ type: 'booth.reset', boothNumber: n, socket, meta: { type: r.type, changed: r.restored || r.removed,
+                                                                   parent: r.parent || null } });
       await refresh(); broadcastState(io);
       const detail = r.type === 'unmerge' ? `restored ${(r.restored || []).join(', ') || 'originals'}`
                    : r.type === 'unsplit' ? `removed ${(r.removed || []).join(', ')}`
                    : 'removed leftover cell';
-      log(io, `↩️ Stand ${escapeHtml(n)} reset — ${escapeHtml(detail)}`, 'admin');
+      // A cell's reset undoes its parent's split, and the log names the stand
+      // that actually changed.
+      const which = r.parent && r.type === 'unsplit' ? `${escapeHtml(r.parent)} (asked of ${escapeHtml(n)})` : escapeHtml(n);
+      log(io, `↩️ Stand ${which} reset — ${escapeHtml(detail)}`, 'admin');
       return { ok: true, ...r };
     }));
 
