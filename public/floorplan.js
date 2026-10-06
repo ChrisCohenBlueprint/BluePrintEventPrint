@@ -53,7 +53,12 @@ function sessionId() {
   if (consent !== 'granted') return null;
   let s = store.get(SESSION_KEY);
   if (!s) {
-    s = (crypto.randomUUID?.() || Math.random().toString(16).slice(2).repeat(2)).replace(/-/g, '').slice(0, 32);
+    // 32 hex characters, which is what the server accepts. randomUUID only
+    // exists on https, and the old fallback — a Math.random string doubled —
+    // came to 26, so on plain http every session was refused.
+    // getRandomValues is available either way.
+    s = crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '')
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
     store.set(SESSION_KEY, s);
   }
   return s;
