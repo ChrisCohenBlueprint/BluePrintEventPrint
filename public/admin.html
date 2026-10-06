@@ -322,6 +322,9 @@
             <label style="font-size:11px; color:var(--muted); display:block; margin-bottom:4px;">Notes</label>
             <textarea id="aba-notes" class="admin-input" rows="3" placeholder="e.g. 10% discount agreed, invoice due Sept…" style="width:100%; font-size:13px; resize:vertical;"></textarea>
           </div>
+          <!-- Shown only when the stand changes hands while something is being
+               typed here: what was typed was meant for the booking before. -->
+          <p class="aba-deal-note" id="aba-deal-note" role="status" hidden></p>
           <button class="admin-btn success" id="aba-save-deal" style="width:100%;">💾 Save Deal Details</button>
         </div>
         <button class="admin-btn" id="aba-export" style="width:100%; margin-top:8px;">⬇️ Export to CSV</button>

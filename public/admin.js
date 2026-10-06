@@ -751,7 +751,14 @@ async function resetFromPanel(n) {
   if (!await confirmDialog(`This will ${resetDescription(r)}.`,
       { title: `Reset stand ${shownN(r.target)}`, confirmLabel: 'Reset it' })) return;
   socket.emit('booth:reset', { boothNumber: r.target }, (res) => {
-    if (res && res.ok) { adminToast(resetToastFor(r.target, res), 'ok'); if (booths[r.target]) selectAdminBooth(r.target); }
+    if (res && res.ok) {
+      adminToast(resetToastFor(r.target, res), 'ok');
+      // A leftover cell is gone once reset, so its panel closes here, under
+      // the toast that says why — not a moment later when the broadcast finds
+      // the stand missing and has to explain it all over again.
+      if (r.kind === 'remove-cell') closeStandPanel();
+      else if (booths[r.target]) selectAdminBooth(r.target);
+    }
     else adminToast((res && res.error) || 'Reset failed.', 'error');
   });
 }
@@ -1169,20 +1176,26 @@ function contrastText(hex) {
   return L > 0.4 ? '#111827' : '#ffffff';
 }
 
+/**
+ * The stand panel, drawn for the stand just selected.
+ *
+ * It used to be drawn ONLY here, at the click, while the broadcasts that
+ * followed repainted its tags and buttons and nothing else. Production
+ * acknowledges an action ~80 ms before the state that reflects it arrives, so
+ * the panel went on showing the stand as it was at the click: Mark Sold and it
+ * still read "Available", a merge showed one stand's size for the whole block,
+ * a split the whole stand's size for one cell. Now every broadcast redraws the
+ * open panel from the live stand — see refreshStandPanel — except whatever is
+ * being typed into it, which belongs to the person typing.
+ */
 function renderAdminBoothAction(n) {
   const b = booths[n];
   if (!b) return;
-  const d = dealOf(b);
   const panel = document.getElementById('admin-booth-action');
   panel.classList.remove('hidden');
 
-  renderPanelNumber(b);
-  document.getElementById('aba-status').textContent  = cap(b.status);
-  document.getElementById('aba-sqm').textContent     = `${b.sqm} ${UNIT}`;
-  document.getElementById('aba-price').textContent   = `${CUR}${(b.listPrice || 0).toLocaleString()}`;
-  document.getElementById('aba-company').textContent = d.company || '—';
-  document.getElementById('aba-viewers').textContent = b.viewers || 0;
-  document.getElementById('aba-clicks').textContent  = b.clicks || 0;
+  paintStandPanel(b, { fresh: true });
+  fillDealFields(b);          // a fresh selection starts from what is stored
 
   // Click history is no longer a 20-entry array on the booth; it comes from the
   // activity stream, so it survives restarts and is not capped.
@@ -1190,6 +1203,7 @@ function renderAdminBoothAction(n) {
   clickList.textContent = 'Loading…';
   api(`/api/booths/${encodeURIComponent(n)}/activity?limit=20`)
     .then(rows => {
+      if (selectedAdminId !== n) return;      // another stand was opened meanwhile
       clickList.replaceChildren();
       if (!rows.length) { clickList.textContent = 'No activity yet.'; return; }
       rows.forEach(r => {
@@ -1199,40 +1213,190 @@ function renderAdminBoothAction(n) {
         clickList.appendChild(div);
       });
     })
-    .catch(() => { clickList.textContent = 'Could not load activity.'; });
+    .catch(() => { if (selectedAdminId === n) clickList.textContent = 'Could not load activity.'; });
+
+  document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
+}
+
+/** Everything on the panel that is READ off the stand rather than typed into it. */
+function paintStandPanel(b, { fresh = false } = {}) {
+  const n = b.boothNumber;
+  const d = dealOf(b);
+  // The title follows a rename from anywhere (this panel, Tools, another
+  // admin) — unless the number is being typed here right now, in which case
+  // the admin's keystrokes are not thrown away for a broadcast.
+  const numberInput = document.getElementById('aba-id-input');
+  if (fresh || !numberInput || numberInput.hidden) renderPanelNumber(b);
+  document.getElementById('aba-status').textContent  = cap(b.status);
+  document.getElementById('aba-sqm').textContent     = `${b.sqm} ${UNIT}`;
+  document.getElementById('aba-price').textContent   = `${CUR}${(b.listPrice || 0).toLocaleString()}`;
+  document.getElementById('aba-company').textContent = d.company || '—';
+  document.getElementById('aba-viewers').textContent = b.viewers || 0;
+  document.getElementById('aba-clicks').textContent  = b.clicks || 0;
 
   renderStandActions(n);
   renderBoothSponsor(n);
   renderHoldPanel(n);   // the clock on a held stand, and the way to extend it
-  document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
-
   renderBoothTags(n);
+}
 
-  document.getElementById('aba-actual-price').value = d.actualPrice ?? '';
-  document.getElementById('aba-notes').value        = d.notes ?? '';
-  document.getElementById('aba-save-deal').onclick  = () => {
-    // Sent as typed (blank → clear). `parseFloat(v) || null` turned a legitimate
-    // zero into null, so a stand genuinely given away free could not be recorded
-    // as free — and it disagreed with the inline path in the bookings table,
-    // which has always preserved "0". The server parses and validates.
-    const raw = document.getElementById('aba-actual-price').value;
-    const actualPrice = String(raw).trim() === '' ? null : raw;
-    const notes = document.getElementById('aba-notes').value.trim();
-    const btn = document.getElementById('aba-save-deal');
-    btn.disabled = true; btn.textContent = 'Saving…';
-    // Confirm from the server rather than claiming success on emit. Previously
-    // this showed "✅ Saved!" even when the write failed.
-    socket.emit('booth:update-deal', { boothNumber: n, actualPrice, notes }, (res) => {
-      btn.disabled = false;
-      if (res && res.ok) {
-        btn.textContent = '✅ Saved!';
-        setTimeout(() => { btn.textContent = '💾 Save Deal Details'; }, 2000);
-      } else {
-        btn.textContent = '💾 Save Deal Details';
-        adminToast((res && res.error) || 'Could not save deal details.', 'error');
+/** On a broadcast: the open panel, brought in line with the stand as it now is. */
+function refreshStandPanel() {
+  const b = booths[selectedAdminId];
+  if (!b || document.getElementById('admin-booth-action')?.classList.contains('hidden')) return;
+  paintStandPanel(b);
+  syncDealFields(b);
+}
+
+// ── The deal fields: what is typed is the person's, the rest is the stand's ──
+//
+// They were filled once, when the stand was clicked, and Save sent BOTH every
+// time. So a note saved after a colleague had changed the price put the old
+// price back; and with the panel left open across a release and a fresh
+// booking, the new exhibitor's booking was written with the old one's price.
+//
+// The form now remembers what it was filled with. A field nobody has typed in
+// follows every broadcast; one that has been typed in is left alone. Save
+// sends only the fields that were typed in, and names the exhibitor the form
+// was filled for — the server refuses it if the stand has changed hands since.
+const dealForm = { booth: null, price: '', notes: '', company: null };
+
+const dealEls = () => ({
+  price: document.getElementById('aba-actual-price'),
+  notes: document.getElementById('aba-notes'),
+  save:  document.getElementById('aba-save-deal'),
+  note:  document.getElementById('aba-deal-note'),
+});
+const priceText = (v) => (v == null ? '' : String(v));
+const notesText = (v) => (v == null ? '' : String(v));
+
+function fillDealFields(b) {
+  const d = dealOf(b);
+  const f = dealEls();
+  dealForm.booth = b.boothNumber;
+  dealForm.price = priceText(d.actualPrice);
+  dealForm.notes = notesText(d.notes);
+  dealForm.company = d.company || null;
+  f.price.value = dealForm.price;
+  f.notes.value = dealForm.notes;
+  paintDealState(b);
+}
+
+/** Which fields now hold something other than what they were filled with. */
+function dealTyped() {
+  const f = dealEls();
+  return { price: f.price.value !== dealForm.price, notes: f.notes.value !== dealForm.notes };
+}
+
+const changedHands = (b) => (dealOf(b).company || null) !== dealForm.company;
+
+function syncDealFields(b) {
+  if (dealForm.booth !== b.boothNumber) return fillDealFields(b);
+  const typed = dealTyped();
+  if (!typed.price && !typed.notes) return fillDealFields(b);
+  // Something has been typed. While the stand is still the same exhibitor's,
+  // the field nobody touched follows the stand; once it has changed hands,
+  // what was typed was meant for someone else, so nothing moves and the form
+  // says so.
+  if (!changedHands(b)) {
+    const d = dealOf(b), f = dealEls();
+    if (!typed.price) { dealForm.price = priceText(d.actualPrice); f.price.value = dealForm.price; }
+    if (!typed.notes) { dealForm.notes = notesText(d.notes); f.notes.value = dealForm.notes; }
+  }
+  paintDealState(b);
+}
+
+/** Usable only where the server accepts a deal, and a stale form said plainly. */
+function paintDealState(b) {
+  const f = dealEls();
+  const editable = dealEditable(b);
+  const typed = dealTyped();
+  // A field already typed in stays usable even if the stand was released
+  // under it, so what was typed is not locked away mid-word.
+  f.price.disabled = !editable && !typed.price;
+  f.notes.disabled = !editable && !typed.notes;
+  const why = editable ? '' : 'Only a sold or held stand can carry a deal price or notes.';
+  f.price.title = why; f.notes.title = why;
+  if (f.note) {
+    const moved = changedHands(b) && (typed.price || typed.notes);
+    f.note.hidden = !moved;
+    f.note.textContent = moved
+      ? `Stand ${shownB(b)} has changed hands since this form was filled` +
+        `${dealForm.company ? ` for ${dealForm.company}` : ''}. What is typed here has not been saved — ` +
+        'click the stand again to start from its current booking.'
+      : '';
+  }
+}
+
+async function saveDealDetails() {
+  const n = dealForm.booth;
+  const b = booths[n];
+  const f = dealEls();
+  if (!b || n !== selectedAdminId) return;
+  // The server checks this too. Saying it here as well costs nothing, and
+  // does not depend on which side of the race the broadcast landed.
+  if (changedHands(b)) return adminToast('This stand has changed hands since you opened it — reopen it before saving.', 'error');
+  if (!dealEditable(b)) return adminToast('Only a sold or held stand can carry a deal price or notes.', 'error');
+  const typed = dealTyped();
+  if (!typed.price && !typed.notes) return adminToast('Nothing has been changed, so there is nothing to save.', 'ok');
+
+  const payload = { boothNumber: n };
+  // The price is sent as typed (blank → clear). `parseFloat(v) || null` turned
+  // a legitimate zero into null, so a stand genuinely given away free could
+  // not be recorded as free — and it disagreed with the inline path in the
+  // bookings table, which has always preserved "0". The server parses and
+  // validates. A field nobody typed in is not sent at all, so it cannot put
+  // back a value somebody else has since changed.
+  const sentPrice = f.price.value;
+  const sentNotes = f.notes.value.trim();
+  if (typed.price) payload.actualPrice = String(sentPrice).trim() === '' ? null : sentPrice;
+  if (typed.notes) payload.notes = sentNotes;
+  if (dealForm.company) payload.expectCompany = dealForm.company;
+
+  f.save.disabled = true; f.save.textContent = 'Saving…';
+  // Confirmed from the server rather than claimed on emit. This showed
+  // "✅ Saved!" even when the write failed.
+  const res = await emitAck(socket, 'booth:update-deal', payload);
+  f.save.disabled = false;
+  if (res && res.ok) {
+    // What was sent is now what is stored, so those fields are no longer
+    // "typed" — unless the person carried on typing while it saved.
+    if (dealForm.booth === n) {
+      if (typed.price) dealForm.price = sentPrice;
+      if (typed.notes) {
+        dealForm.notes = sentNotes;
+        if (f.notes.value.trim() === sentNotes) f.notes.value = sentNotes;
       }
-    });
-  };
+      if (booths[n]) paintDealState(booths[n]);
+    }
+    f.save.textContent = '✅ Saved!';
+    setTimeout(() => { f.save.textContent = '💾 Save Deal Details'; }, 2000);
+  } else {
+    f.save.textContent = '💾 Save Deal Details';
+    adminToast((res && res.error) || 'Could not save deal details.', 'error');
+  }
+}
+document.getElementById('aba-save-deal')?.addEventListener('click', saveDealDetails);
+['aba-actual-price', 'aba-notes'].forEach(id => document.getElementById(id)?.addEventListener('input', () => {
+  if (booths[dealForm.booth]) paintDealState(booths[dealForm.booth]);
+}));
+
+/**
+ * The stand on the open panel no longer exists: merged into a neighbour,
+ * taken off the plan, or a cell whose split was undone.
+ *
+ * The panel stayed open and live — "Stand 116 · Available", offering Mark Sold
+ * on a stand a colleague had just merged into 115, which answered "Stand 116
+ * not found." It closes now, and says why, so a stand vanishing from under the
+ * cursor is not a mystery.
+ */
+function closeVanishedStand(n, label = n, into = null) {
+  closeStandPanel();
+  const merged = into || (Object.values(booths).find(b => (b.mergedFrom || []).includes(n)) || {}).boothNumber;
+  const why = removedBooths[n] ? 'has been taken off the plan'
+            : merged ? `has been merged into stand ${shownN(merged)}`
+            : 'no longer exists — the merge or split that made it was undone';
+  adminToast(`Stand ${label} ${why}, so its panel has been closed.`, 'ok');
 }
 
 function cell(parent, tag = 'td') {
@@ -1698,6 +1862,9 @@ async function removeStandFromPlan(boothNumber) {
     { title: `Remove stand ${shownN(boothNumber)}`, confirmLabel: 'Remove it', danger: true })) return;
   const res = await emitAck(socket, 'booth:remove', { boothNumber });
   if (!res || !res.ok) return adminToast((res && res.error) || 'Could not remove that stand.', 'error');
+  // The stand is off the plan, so its panel goes with it — here, where the
+  // toast below already says what happened.
+  if (selectedAdminId === boothNumber) closeStandPanel();
   // Undo where the change was made, the way releasing a booking offers it (see
   // offerUndoRelease). Tools → Removed Stands is the permanent way back, but it
   // is one of eleven cards on a long page, and nothing about a stand quietly
@@ -2521,11 +2688,18 @@ socket.on('state:full', (allBooths) => {
   Object.keys(removedBooths).forEach(n => { if (!stillGone.has(n)) delete removedBooths[n]; });
 
   const incoming = new Set(serverBooths.map(b => b.boothNumber));
+  // Named before the reconcile below can take the stand away with its name.
+  const openLabel = selectedAdminId ? shownN(selectedAdminId) : null;
   serverBooths.forEach(b => { booths[b.boothNumber] = b; });
   // Reconcile: drop booths the server no longer has (merged secondary, reset
   // cell) so the tools, tables and overview counts don't show ghosts.
   Object.keys(booths).forEach(n => { if (!incoming.has(n)) delete booths[n]; });
-  if (selectedAdminId && !booths[selectedAdminId]) selectedAdminId = null;
+  if (selectedAdminId && !booths[selectedAdminId]) safely('stand panel', () => closeVanishedStand(selectedAdminId, openLabel));
+  // Likewise a shift-selection: a stand that has gone cannot be merged.
+  if ([...multiSel].some(n => !booths[n])) {
+    [...multiSel].forEach(n => { if (!booths[n]) multiSel.delete(n); });
+    if (svgDoc) safely('multi-select', renderMultiSelect);
+  }
   // Someone else booked or reshaped the stand under the divider: the split the
   // admin is lining up can no longer happen, so take the divider away rather
   // than let it be submitted and refused.
@@ -2542,19 +2716,9 @@ socket.on('state:full', (allBooths) => {
   // A broadcast is a state CHANGE, which is the only thing that can start or
   // end a hold — so it is exactly when the countdowns need re-reading.
   safely('hold clocks', loadHolds);
-  if (selectedAdminId) {
-    safely('stand panel', () => {
-      renderBoothTags(selectedAdminId);
-      renderStandActions(selectedAdminId);
-      renderBoothSponsor(selectedAdminId);
-      renderHoldPanel(selectedAdminId);
-      // The title follows a rename from anywhere (this panel, Tools, another
-      // admin) — unless the number is being typed here right now, in which case
-      // the admin's keystrokes are not thrown away for a broadcast.
-      const numberInput = document.getElementById('aba-id-input');
-      if (numberInput && numberInput.hidden) renderPanelNumber(booths[selectedAdminId]);
-    });
-  }
+  // The whole panel, not just its tags and buttons — status, company, size and
+  // the deal fields too. See renderAdminBoothAction.
+  if (selectedAdminId) safely('stand panel', refreshStandPanel);
 
   safely('floorplan', () => {
     // Tag on the first state if the floorplan tab is already open; otherwise
@@ -2739,15 +2903,20 @@ socket.on('stats:updated', (stats) => {
   updateOverviewFromStats(stats);
 });
 
-socket.on('booth:consolidated', ({ secondary, absorbed }) => {
+socket.on('booth:consolidated', ({ primary, secondary, absorbed }) => {
   // Two shapes: a single merge sends one `secondary`, an N-way merge sends
   // `absorbed` as an ARRAY. This did `delete booths[secondary]` in both cases,
   // so after a multi-stand merge `secondary` was undefined, nothing was
   // removed, and every absorbed stand stayed in the table and the dropdowns as
   // a ghost until the next reload.
   const gone = Array.isArray(absorbed) ? absorbed : (secondary ? [secondary] : []);
+  const open = selectedAdminId && gone.includes(selectedAdminId)
+    ? { n: selectedAdminId, label: shownN(selectedAdminId) } : null;
   gone.forEach(n => { delete booths[n]; });
-  if (selectedAdminId && gone.includes(selectedAdminId)) selectedAdminId = null;
+  // The open panel was on a stand that has just been merged away. This only
+  // cleared the selection, and left the panel up and live over a stand that
+  // no longer existed.
+  if (open) safely('stand panel', () => closeVanishedStand(open.n, open.label, primary || null));
   // The state:full that follows re-tags the map cleanly (removing each overlay,
   // split box, number and size node together), so no ghost outline is left
   // behind on the plan either.
