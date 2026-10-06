@@ -2468,20 +2468,20 @@ if (csplitRows) {
 document.getElementById('reset-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
   return withPending(e.target.querySelector('button[type=submit]'), async () => {
-  const boothNumber = document.getElementById('reset-stand').value;
-  if (!boothNumber) return adminToast('Select a stand to reset.', 'error');
-  if (!await confirmDialog(
-    `Undo the merge or split on stand ${shownN(boothNumber)}?\n\nThe stands it was made from come back, and this stand's own number may disappear.`,
-    { title: `Reset stand ${shownN(boothNumber)}`, confirmLabel: 'Reset it' })) return;
-  const res = await emitAck(socket, 'booth:reset', { boothNumber });
-  {
-    if (res && res.ok) {
-      const msg = res.type === 'unmerge' ? `Stand ${boothNumber} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
-                : res.type === 'unsplit' ? `Stand ${boothNumber} un-split — removed ${(res.removed || []).join(', ')}.`
-                : `Removed leftover cell ${boothNumber}.`;
-      adminToast(msg, 'ok');
-    } else adminToast((res && res.error) || 'Reset failed.', 'error');
-  }
+    const boothNumber = document.getElementById('reset-stand').value;
+    if (!boothNumber) return adminToast('Select a stand to reset.', 'error');
+    // Resolved exactly as the stand panel resolves it (resetTargetOf). This sent
+    // the chosen number as it was, so a split CELL picked here reached the
+    // server as a stray cell and was deleted on its own — its floor space gone
+    // from the hall, the split still in place — instead of the split being
+    // undone. And the dialog could not say which of the two was about to happen.
+    const r = resetTargetOf(booths[boothNumber]);
+    if (!r) return adminToast(`Stand ${shownN(boothNumber)} was not merged or split, so there is nothing to reset.`, 'error');
+    if (!await confirmDialog(`This will ${resetDescription(r)}.`,
+        { title: `Reset stand ${shownN(r.target)}`, confirmLabel: 'Reset it' })) return;
+    const res = await emitAck(socket, 'booth:reset', { boothNumber: r.target });
+    if (res && res.ok) adminToast(resetToastFor(r.target, res), 'ok');
+    else adminToast((res && res.error) || 'Reset failed.', 'error');
   });
 });
 

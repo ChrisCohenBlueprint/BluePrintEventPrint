@@ -15,6 +15,9 @@
  *   - A stand merged away by a colleague stayed open, live, offering actions
  *     on a stand that no longer existed.
  *
+ * And Tools → Reset, given a split cell, has to undo the split the way the
+ * panel's own Reset does, not delete the cell.
+ *
  * The socket answers in production's order — ack first, state ~80 ms later —
  * because the other order hides every one of these. See admin-console-harness.
  */
@@ -26,6 +29,11 @@ const { check, finish } = checker();
 const stands = seedStands(40);
 book(stands[1], { company: 'Acme Ltd', actualPrice: 5000, notes: '' });             // 101
 book(stands[2], { company: 'Oldco', actualPrice: 3000, notes: '' });                // 102
+// 120 split once: its parent keeps the number, the cell is 120B.
+stands[20].splitSnapshot = { created: ['120B'], at: '2026-10-01T10:00:00Z', self: { sqm: stands[20].sqm } };
+// No shape of its own here: only the Tools list needs it, and a second stand
+// on 121's rectangle would only muddle the binding of the plan.
+stands.push({ ...stands[21], boothNumber: '120B', splitFrom: '120', geometry: null });
 
 (async () => {
   const { server, base } = await startConsole({ stands });
@@ -186,6 +194,19 @@ book(stands[2], { company: 'Oldco', actualPrice: 3000, notes: '' });            
     await settle(page);
     p = await panel(page);
     check('likewise a stand a colleague takes off the plan', !p.open && /109/.test(await toasts(page)), `${JSON.stringify(p)} ${await toasts(page)}`);
+
+    console.log('\nTools → Reset on a split cell');
+    await page.click('[data-section="tools"]');
+    await page.waitForTimeout(300);
+    await page.selectOption('#reset-stand', '120B');
+    await page.click('#reset-form button[type=submit]');
+    await page.waitForSelector('dialog.bp-dialog[open]');
+    const d = await dialog(page);
+    check('says it undoes the split of 120', d && /Reset stand 120$/.test(d.title) && /undo the split of stand 120/.test(d.text), JSON.stringify(d));
+    await press(page, 'Reset it');
+    await settle(page);
+    sent = (await emits(page, 'booth:reset')).pop();
+    check('and resets the parent, 120, as the panel always did', sent && sent.payload.boothNumber === '120', JSON.stringify(sent && sent.payload));
 
     check('the page raised no errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   } finally {
