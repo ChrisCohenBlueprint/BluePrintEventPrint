@@ -9,6 +9,8 @@
  *     untagged, and no stand on the plan answered a click until a reload.
  *   - A stand linked from the Activity Log, clicked before the plan had ever
  *     been opened, threw on the missing drawing.
+ *   - The Team, Sponsors and partner tables, loaded twice at once, drew every
+ *     row twice.
  *   - Tools → Shown Number put the stored number back on every keystroke.
  *   - A tag being renamed was rebuilt out from under the typing by any
  *     broadcast, and the rename never saved.
@@ -136,6 +138,20 @@ stands[4].displayNumber = 'A4';                                                 
     const renamed = (await emits(page, 'tags:update')).pop();
     check('and the rename is sent when it is finished', renamed && renamed.payload.key === 'oil' && renamed.payload.label === 'Base oils',
           JSON.stringify(renamed && renamed.payload));
+
+    console.log('\nTables loaded twice at once');
+    await page.dblclick('[data-section="team"]');
+    await page.waitForTimeout(900);
+    const team = await page.$$eval('#team-tbody tr', rows => rows.length);
+    check('Team: each account once', team === 3, `${team} rows for 3 accounts`);
+    await page.dblclick('[data-section="sponsors"]');
+    await page.waitForTimeout(900);
+    const sp = await page.evaluate(() => ({
+      sponsors: document.querySelectorAll('#sponsors-admin-tbody tr').length,
+      partners: document.querySelectorAll('#partners-tbody tr').length,
+    }));
+    check('Sponsors: each package once', sp.sponsors === 3, `${sp.sponsors} rows for 3 packages`);
+    check('and each partner logo once', sp.partners === 2, `${sp.partners} rows for 2 logos`);
 
     check('the page raised no errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   } finally {

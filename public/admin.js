@@ -3742,14 +3742,31 @@ async function loadNavPartners() {
 }
 loadNavPartners();
 
+/**
+ * Only the latest of overlapping loads may draw.
+ *
+ * The partner, sponsor and team tables each cleared themselves, waited for the
+ * server, and then appended a row per answer. Two loads in flight — a
+ * double-click on the nav item is enough — both cleared first and both
+ * appended after, so every row came out twice. `latestLoad('team')` returns a
+ * check that is true only while no newer load of the same table has started.
+ */
+const loadSeq = {};
+function latestLoad(name) {
+  const n = (loadSeq[name] = (loadSeq[name] || 0) + 1);
+  return () => loadSeq[name] === n;
+}
+
 // ─── Partner logos (public "In partnership with" strip) ──────────────────────
 async function loadPartners() {
   const tbody = document.getElementById('partners-tbody');
   if (!tbody) return;
-  tbody.replaceChildren();
+  const current = latestLoad('partners');
   let list = [];
   let failed = null;
   try { list = await api('/api/partners') || []; } catch (e) { failed = e.message; }
+  if (!current()) return;                    // a newer load is drawing this table
+  tbody.replaceChildren();
 
   if (failed) {
     const tr = document.createElement('tr');
@@ -3994,17 +4011,23 @@ document.getElementById('partner-add-form')?.addEventListener('submit', (e) => {
 async function loadSponsorsAdmin() {
   loadPartners();
   const tbody = document.getElementById('sponsors-admin-tbody');
-  tbody.replaceChildren();
+  const current = latestLoad('sponsors');      // see latestLoad
+  let rows;
   try {
-    sponsorAdminCache = await api('/api/sponsors') || [];
+    rows = await api('/api/sponsors') || [];
   } catch (e) {
+    if (!current()) return;
     sponsorAdminCache = [];
+    tbody.replaceChildren();
     const tr = document.createElement('tr');
     const td = document.createElement('td'); td.colSpan = 8; td.className = 'partners-empty';
     td.textContent = `Could not load the sponsorship catalogue — ${e.message}`;
     tr.appendChild(td); tbody.appendChild(tr);
     return;
   }
+  if (!current()) return;                    // a newer load is drawing this table
+  sponsorAdminCache = rows;
+  tbody.replaceChildren();
 
   const TIER_RANK = { platinum: 0, gold: 1, silver: 2 };
   sponsorAdminCache.sort((a, b) => (TIER_RANK[a.tier] ?? 9) - (TIER_RANK[b.tier] ?? 9) || (b.price || 0) - (a.price || 0));
@@ -4176,7 +4199,7 @@ async function saveSponsor(key, fields) {
 // ─── Team (admin accounts) ────────────────────────────────────────────────────
 async function loadTeam() {
   const tbody = document.getElementById('team-tbody');
-  tbody.replaceChildren();
+  const current = latestLoad('team');          // see latestLoad
   const isOwner = currentRole === 'owner';
 
   // Team management (add form + per-member actions) is owner-only. Hide the
@@ -4188,6 +4211,8 @@ async function loadTeam() {
   try {
     admins = await api('/api/admins') || [];
   } catch (e) {
+    if (!current()) return;
+    tbody.replaceChildren();
     // An empty team table is indistinguishable from a company with no staff.
     const tr = document.createElement('tr');
     const td = document.createElement('td'); td.colSpan = 5; td.className = 'partners-empty';
@@ -4195,6 +4220,8 @@ async function loadTeam() {
     tr.appendChild(td); tbody.appendChild(tr);
     return;
   }
+  if (!current()) return;                    // a newer load is drawing this table
+  tbody.replaceChildren();
 
   admins.forEach(a => {
     const tr = document.createElement('tr');
