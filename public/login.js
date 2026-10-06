@@ -36,10 +36,18 @@
     setTimeout(() => $(focusEl)?.focus(), 30);
   }
 
+  // A request that never reaches the server rejects rather than answering.
+  // Uncaught, that left the button disabled on "Checking…" for good, so it is
+  // turned into an answer like any other failure.
   async function post(url, body) {
-    const res = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch {
+      return { ok: false, status: 0, data: { error: 'Could not reach the server. Check your connection and try again.' } };
+    }
     let data = {};
     try { data = await res.json(); } catch {}
     return { ok: res.ok, status: res.status, data };
@@ -135,8 +143,9 @@
 
     // 440 is the server saying the pending token is gone. Leaving the enrolment
     // form on screen under that message was the trap — there is nothing on it
-    // that can still work.
-    if (status === 440) return enrolExpired();
+    // that can still work. It is gone either because the window closed or
+    // because five wrong codes spent it; the server says which.
+    if (status === 440) return enrolExpired(data.reason === 'too_many_codes' ? data.error : undefined);
     if (!ok) return showError(data.error || 'That code did not match.');
     stopEnrolCountdown();
     location.href = data.next || '/admin';
@@ -168,7 +177,9 @@
       $('verify-code').value = '';
       $('password').value = '';
       showStep('password');
-      return showError('That sign-in took too long and timed out. Enter your password again.');
+      return showError(data.reason === 'too_many_codes' && data.error
+        ? data.error
+        : 'That sign-in took too long and timed out. Enter your password again.');
     }
     if (!ok) return showError(data.error || 'Incorrect code.');
     location.href = data.next || '/admin';

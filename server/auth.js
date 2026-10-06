@@ -130,6 +130,34 @@ function clearSessionCookie(res) {
 }
 
 /**
+ * The database half of every session check: is the session behind these
+ * claims still good? Returns the live account (username, role, tokenVersion),
+ * null if the session is dead, and THROWS if the database could not be asked —
+ * callers decide what an outage means for them.
+ *
+ * The HTTP guard, the socket handshake and every admin socket event all go
+ * through this one function, so the three can never disagree about what ends a
+ * session. They used to carry a copy each, and the socket layer only ever
+ * asked once.
+ *
+ * @param {{ user: string, jti?: string, v?: number }} claims  from the signed token
+ * @param {string[]} roles  the roles this surface admits
+ */
+async function liveAccount(claims, roles) {
+  // A session that has been signed out is dead even though its signature and
+  // expiry are still good.
+  if (await isRevoked(claims.jti)) return null;
+  const account = await users.findAuth(claims.user);
+  // Account gone (deleted) or its token version moved on (password/2FA reset) →
+  // the cookie is stale. Existing pre-upgrade tokens/accounts both read as 0.
+  // The role is re-checked against the DB, not just the token, so demoting an
+  // admin to sales takes effect on their next request rather than in 12h.
+  if (!account || !roles.includes(account.role)) return null;
+  if ((account.tokenVersion || 0) !== (claims.v || 0)) return null;
+  return account;
+}
+
+/**
  * Resolve the signed session to a live account, or null.
  *
  * The cryptographic checks (valid HMAC, not expired, not a pending token, admin
@@ -145,19 +173,9 @@ async function sessionUser(req, roles = ADMIN_ROLES) {
   if (!payload || payload.pending || payload.purpose || !roles.includes(payload.role)) return null;
 
   let account;
-  try {
-    // A session that has been signed out is dead even though its signature and
-    // expiry are still good.
-    if (await isRevoked(payload.jti)) return null;
-    account = await users.findAuth(payload.user);
-  }
+  try { account = await liveAccount(payload, roles); }
   catch { return null; }                           // DB unavailable → fail closed
-  // Account gone (deleted) or its token version moved on (password/2FA reset) →
-  // the cookie is stale. Existing pre-upgrade tokens/accounts both read as 0.
-  // The role is re-checked against the DB, not just the token, so demoting an
-  // admin to sales takes effect on their next request rather than in 12h.
-  if (!account || !roles.includes(account.role)) return null;
-  if ((account.tokenVersion || 0) !== (payload.v || 0)) return null;
+  if (!account) return null;
   // Return the CURRENT role from the DB, not the token's — an account promoted
   // to owner gains that authority without having to log in again.
   return { ...payload, role: account.role };
@@ -258,68 +276,172 @@ async function salesAuth(req, res, next) {
 // ─── Socket.IO: identify admins at handshake ──────────────────────────────────
 // Without this the socket layer accepted admin:* events from any anonymous
 // visitor, which made the HTTP auth above decorative.
+//
+// The handshake is only the first check. What it learns about the session —
+// whose it is, its id, its version stamp and when it runs out — is kept on the
+// socket, so that every admin event can ask the same question again (see
+// requireAdmin below).
 async function socketAuth(socket, next) {
   const cookies = parseCookies(socket.handshake.headers.cookie || '');
   const payload = verifyToken(cookies[COOKIE]);
 
-  let isAdmin = false, role = null;
+  let account = null;
   if (payload && ADMIN_ROLES.includes(payload.role) && !payload.pending && !payload.purpose) {
-    try {
-      const account = (await isRevoked(payload.jti)) ? null : await users.findAuth(payload.user);
-      // Same revocation checks as the HTTP path: a signed-out session, a deleted
-      // account or a bumped token version means the socket must not be treated
-      // as an admin.
-      if (account && ADMIN_ROLES.includes(account.role) &&
-          (account.tokenVersion || 0) === (payload.v || 0)) {
-        isAdmin = true; role = account.role;
-      }
-    } catch { isAdmin = false; }               // DB unavailable → not admin
+    // Same revocation checks as the HTTP path: a signed-out session, a deleted
+    // account or a bumped token version means the socket must not be treated
+    // as an admin.
+    try { account = await liveAccount(payload, ADMIN_ROLES); }
+    catch { account = null; }                 // DB unavailable → not admin
   }
-  socket.data.isAdmin = isAdmin;
-  socket.data.role    = role;
-  socket.data.user    = isAdmin ? payload.user : null;
+  setSocketSession(socket, account ? { ...payload, role: account.role } : null);
   next();
+}
+
+/** Record what the socket knows about its session; null makes it anonymous. */
+function setSocketSession(socket, s) {
+  socket.data.isAdmin = !!s;
+  socket.data.role    = s ? s.role : null;
+  socket.data.user    = s ? s.user : null;
+  socket.data.session = s ? { user: s.user, jti: s.jti || null, v: s.v || 0, exp: s.exp } : null;
+}
+
+/**
+ * Is the session this socket was opened with still good, right now?
+ *
+ * A socket outlives the page load that opened it by hours. Deciding once, at
+ * the handshake, meant an admin who signed out, was demoted to sales, was
+ * deleted or had their password or 2FA reset — or whose twelve hours simply ran
+ * out — kept every admin power on the console they already had open, for as
+ * long as the tab stayed connected. So every admin event asks again, with the
+ * same checks an HTTP request gets.
+ *
+ * @returns {Promise<'ok'|'ended'|'unknown'>}  'unknown' when the database
+ *   could not be asked.
+ */
+async function recheckSocket(socket) {
+  const s = socket.data.session;
+  if (!s || !s.exp || s.exp <= Date.now()) return 'ended';
+  let account;
+  try { account = await liveAccount(s, ADMIN_ROLES); }
+  catch { return 'unknown'; }
+  if (!account) return 'ended';
+  // The CURRENT role, as on the HTTP path: an admin promoted to owner gains
+  // that authority without reconnecting.
+  socket.data.role = account.role;
+  return 'ok';
+}
+
+/**
+ * Drop the connection under a socket whose session has ended.
+ *
+ * At the transport, not with socket.disconnect(): a disconnect sent by the
+ * server is final to the browser, which does not retry it, and the console
+ * would sit there dead. A dropped transport is retried at once; the new
+ * handshake runs socketAuth again — without admin this time — and admin.js
+ * re-checks the session on that reconnect and sends the user to sign in.
+ * Engine.IO flushes what is already queued before it closes, so the refusal
+ * sent just before this still arrives.
+ */
+function dropConnection(socket) {
+  if (socket.conn && typeof socket.conn.close === 'function') socket.conn.close();
+  else socket.disconnect(true);
+}
+
+/**
+ * Re-check every admin socket now, and drop the ones whose session has ended.
+ *
+ * requireAdmin only re-checks a socket when it SENDS an admin event. A console
+ * left open and idle still sits in its show's admin room, receiving the
+ * prices, deal notes and activity log broadcast there, until it next does
+ * something. Run on a timer, this bounds that to one interval.
+ *
+ * @param {import('socket.io').Server} io
+ * @returns {Promise<number>} how many sockets were dropped
+ */
+async function sweepAdminSockets(io) {
+  let dropped = 0;
+  for (const socket of io.of('/').sockets.values()) {
+    if (!socket.data.isAdmin) continue;
+    if (await recheckSocket(socket) !== 'ended') continue;   // an outage drops nobody
+    setSocketSession(socket, null);
+    socket.emit('error:auth', { event: null, message: 'Administrator access required.' });
+    dropConnection(socket);
+    dropped++;
+  }
+  return dropped;
 }
 
 // Wraps a handler so it only runs for authenticated admins. Rejected attempts
 // are recorded — an attacker probing admin events is worth knowing about.
 function requireAdmin(socket, type, handler) {
+  const showContext = require('./show-context');
+  const inFlight = require('./lib/in-flight');
+  // Everything below runs inside this socket's show, so the ~120
+  // `config.showId` reads beneath it resolve to the event the admin actually
+  // has open. Every admin socket event goes through here, which is why it is
+  // done once rather than in each handler. The denial is recorded inside it
+  // too: outside it, every refusal was filed under the default event, whatever
+  // event it was aimed at.
+  const runShow = (fn) => socket.data.showId ? showContext.runAs(socket.data.showId, fn) : fn();
+
+  const deny = (who) => {
+    console.warn(`⚠  Denied ${type} from ${who} socket ${socket.id}`);
+    socket.emit('error:auth', { event: type, message: 'Administrator access required.' });
+    const { track } = require('./services/tracking');
+    track({ type: 'security.denied', meta: { event: type }, socket });
+  };
+
   // Socket.IO passes a callback as the final argument when the client uses
   // socket.emit(event, payload, cb). Surfacing it lets a handler confirm success
   // or failure back to the specific caller, so the admin UI can stop reporting
   // "saved" before the write has actually happened.
-  return async (payload = {}, ack) => {
+  //
+  // Counted as in flight from the moment the event arrives, not from when the
+  // handler starts, so a deploy cannot close the database between the session
+  // check and the write it allowed.
+  return (payload = {}, ack) => inFlight.run(() => runShow(async () => {
     if (typeof payload === 'function') { ack = payload; payload = {}; }
+    const reply = (r) => { if (typeof ack === 'function') ack(r); };
 
     if (!socket.data.isAdmin) {
-      console.warn(`⚠  Denied ${type} from unauthenticated socket ${socket.id}`);
-      socket.emit('error:auth', { event: type, message: 'Administrator access required.' });
-      const { track } = require('./services/tracking');
-      track({ type: 'security.denied', meta: { event: type }, socket });
-      if (typeof ack === 'function') ack({ ok: false, error: 'Administrator access required.' });
-      return;
+      deny('unauthenticated');
+      return reply({ ok: false, error: 'Administrator access required.' });
     }
+
+    const state = await recheckSocket(socket);
+    if (state === 'ended') {
+      // Refused exactly as an anonymous socket is, and made anonymous: the
+      // denied-event limiter in sockets/index.js applies from here on, and the
+      // dropped connection takes it out of the admin rooms.
+      const who = socket.data.user;
+      setSocketSession(socket, null);
+      deny(`ended session (${who})`);
+      reply({ ok: false, error: 'Administrator access required.' });
+      return dropConnection(socket);
+    }
+    if (state === 'unknown') {
+      // Nothing says the session is over — the database simply could not be
+      // asked. Refuse this action, as any write would fail now anyway, but
+      // keep the admin connected for when it is back.
+      console.error(`✗ ${type} refused: the session could not be checked`);
+      socket.emit('error:action', { event: type, message: 'That action could not be completed.' });
+      return reply({ ok: false, error: 'That action could not be completed.' });
+    }
+
     // Async handler rejections would otherwise surface as an unhandled promise
     // rejection with no link back to the event that caused it.
-    //
-    // The handler runs inside this socket's show, so the ~120 `config.showId`
-    // reads beneath it resolve to the event the admin actually has open. Every
-    // admin socket event goes through here, which is why it is done once rather
-    // than in each handler.
-    const showContext = require('./show-context');
-    const runShow = (fn) => socket.data.showId ? showContext.runAs(socket.data.showId, fn) : fn();
     try {
       // The handler's return value is its acknowledgement. Returning
       // { ok: false, error } reports a business-rule failure; returning nothing
       // is treated as success. Either way the caller always gets a response.
-      const result = await runShow(() => handler(payload));
-      if (typeof ack === 'function') ack({ ok: true, ...(result || {}) });
+      const result = await handler(payload);
+      reply({ ok: true, ...(result || {}) });
     } catch (e) {
       console.error(`✗ ${type} failed:`, e.stack || e.message);
       socket.emit('error:action', { event: type, message: 'That action could not be completed.' });
-      if (typeof ack === 'function') ack({ ok: false, error: 'That action could not be completed.' });
+      reply({ ok: false, error: 'That action could not be completed.' });
     }
-  };
+  }));
 }
 
 // ─── Pending-login token ──────────────────────────────────────────────────────
@@ -352,6 +474,33 @@ function consumePending(token) {
   if (!p || !p.jti) return;
   prunePending(Date.now());
   spentPending.set(p.jti, p.exp || Date.now() + 5 * 60 * 1000);
+}
+
+// Wrong codes burn a pending token too. Only someone who has just given the
+// right password holds one, but a single token used to allow as many guesses
+// at the six-digit code as could be sent in its five minutes. After five wrong
+// codes it is spent, and the next try starts again at the password step, which
+// is limited per IP.
+const PENDING_MAX_MISSES = 5;
+const pendingMisses = new Map();   // jti -> { count, exp }
+
+/**
+ * Record a wrong code against a pending token.
+ * @returns {boolean} true when that was its last allowed miss and the token is
+ *   now spent.
+ */
+function missPending(token) {
+  const p = verifyToken(token);
+  if (!p || !p.jti) return false;
+  const now = Date.now();
+  for (const [j, r] of pendingMisses) if (r.exp < now) pendingMisses.delete(j);
+  const rec = pendingMisses.get(p.jti) || { count: 0, exp: p.exp || now + 5 * 60 * 1000 };
+  rec.count += 1;
+  pendingMisses.set(p.jti, rec);
+  if (rec.count < PENDING_MAX_MISSES) return false;
+  pendingMisses.delete(p.jti);
+  consumePending(token);
+  return true;
 }
 
 // ─── Re-confirmation throttle (recovery key / own password) ───────────────────
@@ -415,10 +564,10 @@ function registerSecretFailure(user, meta = {}) {
 function clearSecretFailures(user) { secretFailures.delete(secretKey(user)); }
 
 module.exports = {
-  adminAuth, salesAuth, socketAuth, requireAdmin, signToken, verifyToken, COOKIE,
+  adminAuth, salesAuth, socketAuth, requireAdmin, sweepAdminSockets, signToken, verifyToken, COOKIE,
   setSessionCookie, clearSessionCookie, sessionUser,
   revokeToken, revokeSession, isRevoked,
   checkSecretThrottle, registerSecretFailure, clearSecretFailures,
-  signPending, verifyPending, consumePending,
+  signPending, verifyPending, consumePending, missPending, PENDING_MAX_MISSES,
   ADMIN_ROLES, SALES_ROLES, ALL_ROLES, homeFor,
 };
