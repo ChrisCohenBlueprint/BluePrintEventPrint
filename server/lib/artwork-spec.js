@@ -14,7 +14,9 @@ const { extractStands } = require('./extract-stands');
  * is telling a designer precisely what to correct, in clause numbers they can
  * act on.
  */
-const SPEC = 'BEC-FP-01 issue 1.1';
+// The issue the checks below are written against — kept in step with the
+// document's own masthead, because it is printed at the top of every report.
+const SPEC = 'BEC-FP-01 issue 1.4';
 
 function validate(svg, { scheduleText = null } = {}) {
 const results = [];

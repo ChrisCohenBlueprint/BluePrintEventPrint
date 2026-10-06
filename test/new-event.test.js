@@ -10,7 +10,9 @@
  *
  *   configuration moves — rate, currency, units, colours, activities, packages.
  *   trading does not    — no stands, bookings, leads, plan, or floorplan
- *                         sponsor; last year's sold-out badges are cleared.
+ *                         sponsor; last year's sold-out packages come across
+ *                         on offer again, while one an admin deliberately
+ *                         took off sale stays off.
  *   nothing half-made   — an event to start from that does not exist refuses
  *                         the whole request, before anything is created.
  *   the owner decides   — and anyone else is told what was refused, not that
@@ -30,8 +32,13 @@ const db = fakeDb({
                floorplanSponsor: { name: 'Last Year Oil Co', color: '#7c1315' } }],
   tags: [{ showId: FROM, key: 'base-oils', label: 'Base Oils', color: '#6366f1', order: 0 },
          { showId: FROM, key: 'additives', label: 'Additives', color: '#10b981', order: 1 }],
-  sponsors: [{ showId: FROM, key: 'lanyards', name: 'Lanyards', tier: 'gold', price: 8000, soldOut: true, active: true },
-             { showId: FROM, key: 'wifi', name: 'Wi-Fi', tier: 'silver', price: 5000, soldOut: false, active: true }],
+  // Stored the way every sponsor write path stores them: a sold-out package is
+  // ALSO inactive (sponsors.js sets active = !soldOut), which is the state the
+  // copy has to undo. A package an admin switched off by hand is inactive and
+  // NOT sold out, and that choice is theirs to keep.
+  sponsors: [{ showId: FROM, key: 'lanyards', name: 'Lanyards', tier: 'gold', price: 8000, soldOut: true, active: false },
+             { showId: FROM, key: 'wifi', name: 'Wi-Fi', tier: 'silver', price: 5000, soldOut: false, active: true },
+             { showId: FROM, key: 'banners', name: 'Banners', tier: 'bronze', price: 2000, soldOut: false, active: false }],
   booths: [{ showId: FROM, boothNumber: '101', status: 'sold', assignment: { company: 'Real Exhibitor Ltd' } }],
   inquiries: [{ showId: FROM, company: 'A Lead Ltd' }],
   floorplans: [{ showId: FROM, svg: '<svg/>', filename: 'LEX27.svg', revisionId: 'r1', label: 'LEX27' }],
@@ -79,10 +86,18 @@ const rowsFor = (name, id) => (db.store[name] || []).filter(r => (r.showId ?? r.
     check('every business activity, under the same keys', tags.length === 2 &&
           tags.map(t => t.key).sort().join(',') === 'additives,base-oils', tags.map(t => t.key).join(','));
     const pk = rowsFor('sponsors', 'LEX28');
-    check('every sponsorship package', pk.length === 2 && pk.some(p => p.key === 'lanyards' && p.price === 8000));
+    const pkg = (k) => pk.find(p => p.key === k) || {};
+    check('every sponsorship package', pk.length === 3 && pkg('lanyards').price === 8000);
     check('none of them sold out — that was last year', pk.every(p => p.soldOut === false));
-    check('the originals untouched', rowsFor('sponsors', FROM).find(p => p.key === 'lanyards').soldOut === true &&
-          rowsFor('tags', FROM).length === 2);
+    // Sold out last year usually means the headline package. Arriving hidden,
+    // it was missing from the reps' catalogue and the public plan.
+    check('last year\'s sold-out package is on offer again', pkg('lanyards').active === true,
+          JSON.stringify(pkg('lanyards')));
+    check('one an admin took off sale stays off sale', pkg('banners').active === false, JSON.stringify(pkg('banners')));
+    check('and one on offer stays on offer', pkg('wifi').active === true);
+    const src = (k) => rowsFor('sponsors', FROM).find(p => p.key === k);
+    check('the originals untouched', src('lanyards').soldOut === true && src('lanyards').active === false &&
+          src('banners').active === false && rowsFor('tags', FROM).length === 2);
 
     check('no stands', rowsFor('booths', 'LEX28').length === 0);
     check('no leads', rowsFor('inquiries', 'LEX28').length === 0);

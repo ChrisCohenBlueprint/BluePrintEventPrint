@@ -159,20 +159,53 @@ function ownPaint(attrs) {
  */
 function readPalette(svg) {
   const map = {};
+  // Each declaration remembers where in the stylesheet it came from, because
+  // when two classes on one element both set a fill, CSS gives it to the rule
+  // written LATER — not to whichever class the element happens to list last.
+  let order = 0;
   for (const style of svg.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) {
-    for (const block of style[1].matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-      const fill = /fill:\s*([^;]+)/.exec(block[2]);
-      const stroke = /stroke:\s*([^;]+)/.exec(block[2]);
+    // A stylesheet may arrive wrapped in CDATA (Illustrator and Inkscape both
+    // do it) and may carry comments. Left in, the CDATA marker became part of
+    // the first selector — "<![CDATA[ .st0" — and that rule was lost, and a
+    // brace inside a comment broke the rule after it.
+    const css = style[1]
+      .replace(/<!\[CDATA\[|\]\]>/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const block of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const at = ++order;
+      const fill = /(?:^|[;\s])fill\s*:\s*([^;]+)/.exec(block[2]);
+      const stroke = /(?:^|[;\s])stroke\s*:\s*([^;]+)/.exec(block[2]);
       for (const sel of block[1].split(',')) {
         const name = sel.trim().replace(/^\./, '');
         if (!name) continue;
         map[name] = map[name] || {};
-        if (fill) map[name].fill = fill[1].trim().toLowerCase();
-        if (stroke) map[name].stroke = stroke[1].trim().toLowerCase();
+        if (fill) Object.assign(map[name], { fill: fill[1].trim().toLowerCase(), fillAt: at });
+        if (stroke) Object.assign(map[name], { stroke: stroke[1].trim().toLowerCase(), strokeAt: at });
       }
     }
   }
   return map;
+}
+
+/**
+ * What the stylesheet paints an element with the given class attribute.
+ *
+ * Looked up class by class. The whole attribute used to be the key, so
+ * CorelDRAW's `class="fil1 str0"` — one class for the fill, another for the
+ * stroke — found nothing at all, and every stand drawn that way read as
+ * having no colour. Where two of the classes set the same property, the rule
+ * later in the stylesheet wins, as it does in a browser.
+ */
+function classPaint(palette, cls) {
+  const out = {};
+  let fillAt = 0, strokeAt = 0;
+  for (const name of String(cls || '').split(/\s+/)) {
+    const p = name && palette[name];
+    if (!p) continue;
+    if (p.fill !== undefined && p.fillAt > fillAt) { out.fill = p.fill; fillAt = p.fillAt; }
+    if (p.stroke !== undefined && p.strokeAt > strokeAt) { out.stroke = p.stroke; strokeAt = p.strokeAt; }
+  }
+  return out;
 }
 
 // A handful of colour keywords a plan realistically uses for empty space. Only
@@ -304,12 +337,17 @@ function readShapes(svg) {
 
     if (m[0].startsWith('<rect')) {
       const a = m[3];
-      const x = numAttr(a, 'x'), y = numAttr(a, 'y');
+      // x and y default to 0, as they do in SVG: a rectangle placed entirely
+      // by transform="translate(…)" is a whole shape, and dropping it left its
+      // stand number sitting in no shape at all — though R17 and the brief say
+      // transforms are resolved.
+      const x = numAttr(a, 'x') ?? 0, y = numAttr(a, 'y') ?? 0;
       const w = numAttr(a, 'width'), h = numAttr(a, 'height');
-      if (x == null || y == null || !w || !h) continue;
+      if (!w || !h) continue;
       // As authored. This is what the page reports for the element when it
       // binds a stand to its shape — it reads the x/y/width/height attributes
-      // and does NOT apply the element's own transform — so it is what must be
+      // (or, with none, the element's own box, which is the same thing) and
+      // does NOT apply the element's own transform — so it is what must be
       // stored.
       pushShape(a, { x, y, w, h }, 'rect');
       continue;
@@ -430,7 +468,18 @@ const labelRuns = (texts) => texts.filter(t => !(/scale\(/.test(t.transform) && 
 /** Text runs, flattened across tspans and placed however the plan placed them. */
 const readTexts = (svg) => labelRuns(readShapes(svg).texts);
 
-const NUMBER = /^[A-Z]{0,2}\d{2,5}[A-Z]?$/;          // 142, 1249, P014, A12
+/**
+ * A stand number: 142, 1249, P014, A12 — and a cell of a split stand, under
+ * the number the app gave it, 105-2 (a cell split again is 105-2-2).
+ *
+ * The cell form is not a nicety. It is what the stand schedule sent to the
+ * designer lists, and R23 asks for cells to be drawn under exactly those
+ * numbers; read as an exhibitor's name instead, every cell on a re-issue came
+ * back as a stand the drawing had dropped. A letter after the number is read
+ * in either case and stored as a capital, so 105a and 105A are one stand.
+ */
+const NUMBER = /^[A-Z]{0,2}\d{2,5}[A-Za-z]?(?:-\d){0,3}$/;
+const numberOf = (text) => text.replace(/^([A-Z]{0,2}\d{2,5})([a-z])/, (_, n, s) => n + s.toUpperCase());
 /**
  * A printed area.
  *
@@ -443,6 +492,24 @@ const NUMBER = /^[A-Z]{0,2}\d{2,5}[A-Z]?$/;          // 142, 1249, P014, A12
  * from the drawing instead of read from the label beside it.
  */
 const AREA   = /^([\d,]+(?:\.\d+)?)\s*(sqm|sqft|m|ft)\s*[²2]?$/i;
+
+/**
+ * The figure an area label prints, as a number.
+ *
+ * A comma is read the way the label means it. Before one or two final digits
+ * it is a decimal comma — "30,5 m²", the ordinary spelling in German and most
+ * of Europe. Stripping every comma read that as 305 m², and because a printed
+ * area outranks the drawing, the stand was priced at ten times its size. Before
+ * three digits it separates thousands, as in "1,250 m²".
+ */
+function areaFigure(text) {
+  const figure = AREA.exec(text)[1];
+  const decimalComma = /,(\d{1,2})$/.exec(figure);
+  const n = decimalComma
+    ? parseFloat(`${figure.slice(0, decimalComma.index).replace(/,/g, '')}.${decimalComma[1]}`)
+    : parseFloat(figure.replace(/,/g, ''));
+  return Math.round(n * 100) / 100;
+}
 
 /**
  * Pull the stands out of a floorplan.
@@ -473,7 +540,8 @@ function extractStands(svg) {
       : `${allTexts.length} text runs were found, but none of them reads as a stand number ` +
         `(expected something like 142, 1249 or P014).`;
     return { stands: [], unit: null, unitsPerArea: null, fills: [], printedNames: [],
-             issues: { collisions: [], repeated: [], orphans: [], implausible: [], noArea: [], sizeDisagrees: [] },
+             issues: { collisions: [], repeated: [], orphans: [], implausible: [], noArea: [], sizeDisagrees: [],
+                       sharedShape: [] },
              rects: rects.length, texts: allTexts.length, warnings: [why] };
   }
 
@@ -595,9 +663,9 @@ function extractStands(svg) {
   // says about itself is then preferred to what its layers say, which is the
   // order SVG itself inherits in.
   const paintOf = (r) => {
-    const cls = palette[r.cls] || {};
+    const cls = classPaint(palette, r.cls);
     const up = r.inherit || {};
-    const upCls = palette[up.cls] || {};
+    const upCls = classPaint(palette, up.cls);
     return {
       fill: colour(r.paint.styleFill || cls.fill || r.paint.attrFill ||
                    up.styleFill || upCls.fill || up.attrFill || null),
@@ -614,8 +682,8 @@ function extractStands(svg) {
     const name = nameFor.get(r);
     const paint = paintOf(r);
     stands.push({
-      number: n.text,
-      printedArea: a ? Math.round(parseFloat(AREA.exec(a.text)[1].replace(/,/g, '')) * 100) / 100 : null,
+      number: numberOf(n.text),
+      printedArea: a ? areaFigure(a.text) : null,
       geometry: { x: +r.raw.x.toFixed(2), y: +r.raw.y.toFixed(2),
                   w: +r.raw.w.toFixed(2), h: +r.raw.h.toFixed(2) },
       visual: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), w: +r.w.toFixed(2), h: +r.h.toFixed(2) },
@@ -647,12 +715,6 @@ function extractStands(svg) {
     byNumber.set(st.number, st);
     stands.push(st);
   }
-  if (dropped.length) {
-    // Their names are still printed on the plan. If they are not taken out
-    // they stay there for good, because no stand of ours will ever draw over
-    // them — "Barentz" sat on the plan exactly this way.
-    for (const d of dropped) if (d.exhibitor) printedNames.push(d.exhibitor);
-  }
   if (repeated.length) {
     warnings.push(`${repeated.length} stand numbers are printed on two different shapes — ${repeated.join(', ')}. Only the first is kept; the artwork needs correcting before these stands can be sold.`);
   }
@@ -660,6 +722,37 @@ function extractStands(svg) {
   const orphans = numbers.filter(n => !claimed.has(n));
   if (orphans.length) {
     warnings.push(`${orphans.length} stand numbers sit outside any shape: ${orphans.slice(0, 6).map(o => o.text).join(', ')}.`);
+  }
+
+  /**
+   * Stands the plan page cannot tell apart.
+   *
+   * The page binds a stand to its shape by the rectangle's own coordinates —
+   * the `geometry` stored here, before any group's transform — because that is
+   * what it can read off an element. Two stands drawn as copies of one
+   * rectangle, moved apart only by the groups they sit in, have the same
+   * coordinates, and both bind to whichever comes first: 201 is clicked by
+   * clicking 101. Storing where they APPEAR instead would change how every
+   * plan with a transformed group binds, so this is not fixed here; it is
+   * found, and said by number, so it is seen before the plan goes live.
+   * Within the page's own matching tolerance.
+   */
+  const BIND_TOL = 2;
+  const sameBox = (p, q) => Math.abs(p.x - q.x) < BIND_TOL && Math.abs(p.y - q.y) < BIND_TOL &&
+                            Math.abs(p.w - q.w) < BIND_TOL && Math.abs(p.h - q.h) < BIND_TOL;
+  const sharedShape = [];
+  for (let i = 0; i < stands.length; i++) {
+    for (let j = i + 1; j < stands.length; j++) {
+      const a = stands[i], b = stands[j];
+      if (sameBox(a.geometry, b.geometry) && !sameBox(a.visual, b.visual)) sharedShape.push(`${a.number}/${b.number}`);
+    }
+  }
+  if (sharedShape.length) {
+    warnings.push(`${sharedShape.length} pairs of stands are drawn as the same rectangle, placed apart only by the ` +
+      `groups they sit in (${sharedShape.slice(0, 8).join(', ')}). They are read correctly here, but the interactive ` +
+      `plan matches a stand to its shape by the rectangle's own coordinates and cannot yet tell these apart: the ` +
+      `second of each pair would answer clicks on the first. Ask for these stands to be drawn at their own ` +
+      `coordinates (copies expanded or ungrouped) before the plan goes live.`);
   }
 
   // Calibrate drawing units against the printed areas. The median is used so
@@ -700,7 +793,23 @@ function extractStands(svg) {
   if (noArea) warnings.push(`${noArea} stands print no area; theirs is derived from the drawing.`);
 
   const fills = statusFromColour(stands, warnings);
-  for (const st of stands) if (st.exhibitor) printedNames.push(st.exhibitor);
+
+  // The names to take out of the copy we show, because we draw them
+  // ourselves: EXHIBITOR names, on stands. An area's name — VIP Lounge,
+  // Conference Track 1 — is the area's label and its identity (R24), and
+  // nothing redraws it: the page letters stands, not areas. Taking those out
+  // too left North America's six areas as blank dark boxes.
+  const isArea = (s) => s.sponsored === true;
+  for (const st of stands) if (st.exhibitor && !isArea(st)) printedNames.push(st.exhibitor);
+  // A shape dropped as a repeated number still has its name printed on the
+  // plan, and no stand of ours will ever draw over it, so if it is not taken
+  // out it stays there for good — "Barentz" sat on the plan exactly this way.
+  // It was dropped before the colours were read, so whether it is an area is
+  // judged by the colour group it would have joined.
+  const areaPaint = new Set(fills.filter(f => f.sponsored).map(f => `${f.fill || '?'}|${f.stroke || '?'}`));
+  for (const d of dropped) {
+    if (d.exhibitor && !areaPaint.has(`${d.fill || '?'}|${d.stroke || '?'}`)) printedNames.push(d.exhibitor);
+  }
 
   // The same findings as the warnings above, as data rather than prose, so the
   // artwork check can score a live-text plan on what was actually read instead
@@ -712,6 +821,7 @@ function extractStands(svg) {
     implausible,                                 // a number inside a shape no stand could be
     noArea: stands.filter(s => s.printedArea == null).map(s => s.number),
     sizeDisagrees: disagree.slice(),
+    sharedShape,                                 // "101/201": one rectangle, two placed groups
   };
 
   return { stands, unit, unitsPerArea, fills, printedNames, issues,
@@ -730,14 +840,25 @@ function extractStands(svg) {
  *               read at all. A plan draws empty space pale; it is the one
  *               convention that holds across every floorplan seen so far, and
  *               it is what Europe uses too.
- *   held      — a stand outlined differently to every other stand. A designer
- *               changes a stroke and adds a glow to make something stand out,
- *               and a reserved stand is the thing worth standing out.
  *   sponsored — a dark fill used by only a handful of shapes. The ordinary
  *               sold colour is used dozens of times; a colour used three times
  *               is marking something particular, which on these plans is the
  *               lounges and conference tracks.
+ *   held      — exactly what BEC-FP-01 R12 and the brief (section 5) say a
+ *               reserved stand is: the TAKEN fill, outlined in a different
+ *               stroke colour to the taken stands. Not "outlined differently
+ *               to most stands": on a plan whose available stands are the
+ *               majority and outlined in grey, that made every taken stand
+ *               a hold, and a dark lounge drawn with no outline became a
+ *               held stand instead of an area.
  *   sold      — everything else.
+ *
+ * The taken fill is the one most of the non-available stands share, leaving
+ * out the handful-of-shapes dark fills that mark areas. The stroke the taken
+ * stands share is, of the strokes drawn on that fill, the one the rest of the
+ * plan is outlined in most — so an early issue with more holds than sales
+ * still reads its holds as the odd ones out, and an outline only the
+ * available stands use can never make a taken stand look marked.
  *
  * An unreadable colour defaults to AVAILABLE, not sold. The two failures are
  * not symmetrical: a stand wrongly available is offered to a buyer and
@@ -763,25 +884,36 @@ function statusFromColour(stands, warnings) {
   const all = [...groups.values()];
   if (!all.length) return [];
 
-  // The stroke nearly every stand shares. A stand that departs from it has
-  // been marked deliberately.
-  const strokeTally = new Map();
-  for (const g of all) strokeTally.set(g.stroke, (strokeTally.get(g.stroke) || 0) + g.count);
-  const commonStroke = [...strokeTally.entries()].sort((a, b) => b[1] - a[1])[0][0];
-
   const biggest = all.reduce((a, b) => (b.count > a.count ? b : a));
-
+  const few = Math.max(6, stands.length * 0.1);
   for (const g of all) {
     const light = lightness(g.fill);
-    if (!g.fill) g.status = 'available';                        // unreadable — see the header
-    else if (light !== null && light > 0.9) g.status = 'available';
-    else if (g.stroke !== commonStroke) g.status = 'held';
-    else g.status = 'sold';
-
+    // Unreadable is available — see the header.
+    g.available = !g.fill || (light !== null && light > 0.9);
     // A dark fill used by only a few shapes is marking something particular.
-    g.sponsored = g.status === 'sold' && g !== biggest &&
-                  g.count <= Math.max(6, stands.length * 0.1) &&
-                  light !== null && light < 0.5;
+    g.fewDark = !g.available && g !== biggest && g.count <= few && light !== null && light < 0.5;
+  }
+
+  const tallyBy = (key, groups) => {
+    const t = new Map();
+    for (const g of groups) t.set(g[key], (t.get(g[key]) || 0) + g.count);
+    return t;
+  };
+  const takenFills = tallyBy('fill', all.filter(g => !g.available && !g.fewDark));
+  const takenFill = takenFills.size ? [...takenFills.entries()].sort((a, b) => b[1] - a[1])[0][0] : null;
+
+  const planStrokes = tallyBy('stroke', all);
+  const onTaken = tallyBy('stroke', all.filter(g => takenFill !== null && g.fill === takenFill));
+  const takenStroke = onTaken.size
+    ? [...onTaken.keys()].sort((a, b) => (planStrokes.get(b) - planStrokes.get(a)) || (onTaken.get(b) - onTaken.get(a)))[0]
+    : null;
+
+  for (const g of all) {
+    if (g.available) g.status = 'available';
+    else if (g.fill === takenFill && g.stroke !== takenStroke) g.status = 'held';
+    else g.status = 'sold';
+    // The taken fill itself is never an area, however few stands are sold.
+    g.sponsored = g.status === 'sold' && g.fewDark && g.fill !== takenFill;
   }
 
   for (const g of all) {
@@ -816,7 +948,9 @@ function statusFromColour(stands, warnings) {
  *
  * `names` is the text runs the extractor attributed to stands, so nothing is
  * matched by guesswork — a room label like "ENTRANCE" or "Dining Area" that
- * sits outside every stand is never touched.
+ * sits outside every stand is never touched, and neither is the name printed
+ * in a lounge or a conference track, which the extractor leaves out of
+ * `printedNames` because nothing else would draw it.
  */
 function stripExhibitorNames(svg, names) {
   const wanted = new Set(names.filter(Boolean).map(n => n.trim()));

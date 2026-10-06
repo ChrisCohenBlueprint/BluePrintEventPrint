@@ -209,38 +209,71 @@ router.post('/floorplan/revisions/:id/discard', async (req, res, next) => {
  * If the stands cannot be read — the event has bookings and no mode that
  * keeps them was asked for, the fills are unreadable — the plan that was live
  * goes straight back, so visitors are never shown a drawing the stands were
- * not moved onto. The hall as it stood is stored as a history point naming
- * the plan it sat on, so "go back to here" restores the drawing as well.
+ * not moved onto. If they were read and a later step failed, they are put
+ * back first, and then the plan. The hall as it stood is stored as a history
+ * point naming the plan it sat on, so "go back to here" restores the drawing
+ * as well.
+ *
+ * The whole of it holds the event's plan lock: two plans made live at once
+ * could otherwise each read the OTHER's drawing, and the one refused could put
+ * the old plan back over the one that succeeded.
  */
 router.post('/floorplan/revisions/:id/publish', async (req, res, next) => {
   try {
     if (!await confirmPassword(req, res, 'the plan was not made live')) return;
     const actor = req.admin?.user || null;
-    const before = structuredClone(await booths.col().find({ showId: config.showId }).toArray());
-    const wasLive = await floorplans.liveRevisionId();
+    await floorplans.withPlanLock(config.showId, async () => {
+      const before = structuredClone(await booths.col().find({ showId: config.showId }).toArray());
+      const wasLive = await floorplans.liveRevisionId();
 
-    const made = await floorplans.makeLive(req.params.id, { actor });
-    if (!made.ok) return res.status(404).json({ error: 'No such revision.' });
-    if (made.unchanged) return res.status(409).json({ error: `${made.revision.label} is already the live plan.` });
+      const made = await floorplans.makeLive(req.params.id, { actor });
+      if (!made.ok) return res.status(404).json({ error: 'No such revision.' });
+      if (made.unchanged) return res.status(409).json({ error: `${made.revision.label} is already the live plan.` });
 
-    let r;
-    try { r = await readStandsFromLive(req); }
-    catch (e) { r = { status: 500, body: { error: 'The stands could not be read from the new plan.' } }; console.error('Publish:', e); }
-    if (r.status !== 200) {
-      await floorplans.restoreLive(req.params.id, made.previous);
-      return res.status(r.status).json({ ...r.body,
-        error: `${made.revision.label} was not made live — ${r.body.error || 'the stands could not be read from it.'}` });
-    }
+      // The hall as it stood, as a point to come back to, naming the plan it
+      // sat on.
+      const pointBefore = async () => {
+        try {
+          await booths.writeHistoryPoint('publish', before, {
+            actor, revisionId: wasLive, detail: made.revision.label, boothNumbers: [],
+          });
+        } catch (e) { console.error('Publish: history point not written —', e.message); }
+      };
 
-    try {
-      await booths.writeHistoryPoint('publish', before, {
-        actor, revisionId: wasLive, detail: made.revision.label, boothNumbers: [],
-      });
-    } catch (e) { console.error('Publish: history point not written —', e.message); }
+      let r;
+      // Anything thrown out of readStandsFromLive happened before it wrote a
+      // stand: from the import on it catches its own failures and reports them.
+      try { r = await readStandsFromLive(req); }
+      catch (e) { r = { status: 500, body: { error: 'The stands could not be read from the new plan.' } }; console.error('Publish:', e); }
 
-    track({ type: 'floorplan.publish', boothNumber: null, actor: actor || 'unknown',
-            meta: { revision: made.revision.label, mode: r.body.mode, imported: r.body.imported } });
-    res.json({ ...r.body, revision: made.revision });
+      if (r.status !== 200 && r.stranded) {
+        // The stands are on this drawing and could not be put back. Taking the
+        // drawing down now would leave them sitting on shapes that are not
+        // there, so it stays live with them — and the hall as it was is kept
+        // as a point to go back to, which is the way out.
+        await pointBefore();
+        try { sockets.notifyArtwork(made.version); }
+        catch (e) { console.error('Publish: artwork change not broadcast —', e.message); }
+        return res.status(r.status).json({ ...r.body, revision: made.revision,
+          error: `${made.revision.label} is live, but ${r.body.error}` });
+      }
+      if (r.status !== 200) {
+        await floorplans.restoreLive(req.params.id, made.previous);
+        if (r.wrote) {
+          // Pages may have fetched the drawing while it was up; they fetch the
+          // one that is back. The stands were already re-sent.
+          try { sockets.notifyArtwork(made.previous && made.previous.live && made.previous.live.version); }
+          catch (e) { console.error('Publish: artwork change not broadcast —', e.message); }
+        }
+        return res.status(r.status).json({ ...r.body,
+          error: `${made.revision.label} was not made live — ${r.body.error || 'the stands could not be read from it.'}` });
+      }
+
+      await pointBefore();
+      track({ type: 'floorplan.publish', boothNumber: null, actor: actor || 'unknown',
+              meta: { revision: made.revision.label, mode: r.body.mode, imported: r.body.imported } });
+      res.json({ ...r.body, revision: made.revision });
+    });
   } catch (e) { next(e); }
 });
 
@@ -426,6 +459,13 @@ router.get('/stands/schedule.csv', async (_req, res, next) => {
  * drawn from our data over the artwork's own — visibly wrong, and fixable by
  * re-running — whereas the reverse leaves stands with no names at all and no
  * indication why.
+ *
+ * Once the import has written, everything after it is part of the same step.
+ * If any of it fails, the stands are put back as they stood — from the
+ * snapshot the import took, through the model's own restore — and open pages
+ * are told, rather than the stands being left on a drawing the caller is
+ * about to take back down. The result then says `wrote`, and `stranded` if
+ * they could not be put back.
  */
 async function readStandsFromLive(req) {
   const f = await floorplans.get();
@@ -454,12 +494,28 @@ async function readStandsFromLive(req) {
   // is already selling, keeping every booking where it is. See
   // importFromArtwork's `keep` for exactly what that promises.
   const update = req.query.mode === 'update';
-  const out = await booths.importFromArtwork(sellable, {
-    actor: req.admin?.user || null,
-    force: req.query.force === '1',
-    replace: replace && !update,
-    keep: update,
-  });
+  const actor = req.admin?.user || null;
+  const hadStands = (await booths.col().countDocuments({ showId: config.showId })) > 0;
+  const started = new Date();
+  let out;
+  try {
+    out = await booths.importFromArtwork(sellable, {
+      actor,
+      force: req.query.force === '1',
+      replace: replace && !update,
+      keep: update,
+    });
+  } catch (e) {
+    console.error('Stand import: failed —', e.message);
+    // With stands to lose, it snapshots them before its first write and will
+    // not write without one — so no snapshot means nothing was written. A
+    // snapshot means it failed part-way, and that is the hall to go back to.
+    const snapshotId = await importSnapshotSince(started);
+    if (hadStands && !snapshotId) {
+      return { status: 500, body: { reason: 'import_failed', error: 'The stands could not be imported; nothing was changed.' } };
+    }
+    return failedAfterImport({ snapshotId, hadStands, actor });
+  }
   if (!out.ok) {
     // Each refusal says what is in the way and what to do about it. All three
     // used to collapse into "The stands could not be imported", which tells
@@ -492,58 +548,66 @@ async function readStandsFromLive(req) {
     return { status: 400, body: { reason: out.reason || 'unknown', error: 'The stands could not be imported.' } };
   }
 
-  /**
-   * The plan's own sponsorable areas.
-   *
-   * The extractor has always found these — lounges, theatres, conference
-   * tracks — and every caller then dropped them on the floor, which is why
-   * every event was drawing EUROPE's lounge and theatre geometry over its own
-   * hall. This is the last place that discarded them. Best-effort: the stands
-   * are already in, and a failure here means the areas are stale, not wrong.
-   */
-  let areasImported = 0;
+  let areasImported = 0, paletteKept = false, namesRemoved = 0;
   try {
-    const fromPlan = r.stands.filter(st => st.sponsored);
-    const ar = await planAreas.replaceFromArtwork(fromPlan, { actor: req.admin?.user || null });
-    areasImported = (ar && (ar.imported ?? ar.count)) ?? fromPlan.length;
-    try { await sockets.notifyAreas(); }
-    catch (e) { console.error('Stand import: areas not broadcast —', e.message); }
-  } catch (e) {
-    console.error('Stand import: sponsorable areas not stored —', e.message);
-  }
+    // The unit follows the plan: it printed ft² or m², and that is the truth
+    // for this event. It is a display label, so this changes no number — but
+    // it is the one step here with no fallback, so it goes first, before
+    // anything else has been written that would need taking back. It used to
+    // sit outside any guard: a failure left the stands on the new drawing,
+    // the caller put the old drawing back, and open pages were never told.
+    if (r.unit) await settings.setUnit(r.unit === 'sqft' ? 'ft' : 'm');
 
-  // The unit follows the plan: it printed ft² or m², and that is the truth
-  // for this event. It is a display label, so this changes no number.
-  if (r.unit) await settings.setUnit(r.unit === 'sqft' ? 'ft' : 'm');
+    /**
+     * The plan's own sponsorable areas.
+     *
+     * The extractor has always found these — lounges, theatres, conference
+     * tracks — and every caller then dropped them on the floor, which is why
+     * every event was drawing EUROPE's lounge and theatre geometry over its own
+     * hall. This is the last place that discarded them. Best-effort: the stands
+     * are already in, and a failure here means the areas are stale, not wrong.
+     */
+    try {
+      const fromPlan = r.stands.filter(st => st.sponsored);
+      const ar = await planAreas.replaceFromArtwork(fromPlan, { actor });
+      areasImported = (ar && (ar.imported ?? ar.count)) ?? fromPlan.length;
+      try { await sockets.notifyAreas(); }
+      catch (e) { console.error('Stand import: areas not broadcast —', e.message); }
+    } catch (e) {
+      console.error('Stand import: sponsorable areas not stored —', e.message);
+    }
 
-  // Paint the app in the colours this plan is drawn in, so a stand keeps the
-  // colour the designer chose for it instead of the hall being repainted in
-  // another event's palette — unless an admin has chosen this event's
-  // colours, in which case their choice stands.
-  let paletteKept = false;
-  try {
-    const pr = await settings.setPaletteFromArtwork(paletteOf(r.fills));
-    paletteKept = !!(pr && pr.kept);
-  } catch (e) { console.error('Stand import: palette not stored —', e.message); }
+    // Paint the app in the colours this plan is drawn in, so a stand keeps the
+    // colour the designer chose for it instead of the hall being repainted in
+    // another event's palette — unless an admin has chosen this event's
+    // colours, in which case their choice stands.
+    try {
+      const pr = await settings.setPaletteFromArtwork(paletteOf(r.fills));
+      paletteKept = !!(pr && pr.kept);
+    } catch (e) { console.error('Stand import: palette not stored —', e.message); }
 
-  // Now the artwork's own names come out of the copy we SHOW, so ours are the
-  // only ones drawn. The uploaded original keeps its names: overwriting it
-  // destroyed the only place they existed, and the next import then produced
-  // 99 stands with no exhibitors and no way back.
-  let namesRemoved = 0;
-  try {
-    // Every name the plan prints inside a shape, including any on shapes
-    // dropped as duplicates — those have no stand of ours to draw over them,
-    // so if they are left they stay printed for good.
-    const stripped = stripExhibitorNames(f.svg, r.printedNames);
-    if (stripped.removed) {
-      const saved = await floorplans.setDisplaySvg(stripped.svg);
-      if (saved.ok) namesRemoved = stripped.removed;
+    // Now the artwork's own names come out of the copy we SHOW, so ours are the
+    // only ones drawn. The uploaded original keeps its names: overwriting it
+    // destroyed the only place they existed, and the next import then produced
+    // 99 stands with no exhibitors and no way back.
+    try {
+      // Every exhibitor name the plan prints inside a stand, including any on
+      // shapes dropped as duplicates — those have no stand of ours to draw over
+      // them, so if they are left they stay printed for good. Area names stay:
+      // nothing else draws them.
+      const stripped = stripExhibitorNames(f.svg, r.printedNames);
+      if (stripped.removed) {
+        const saved = await floorplans.setDisplaySvg(stripped.svg);
+        if (saved.ok) namesRemoved = stripped.removed;
+      }
+    } catch (e) {
+      // Not fatal: the stands are in, and the only symptom is the artwork's
+      // old names showing under ours until this is run again.
+      console.error('Stand import: could not strip printed names —', e.message);
     }
   } catch (e) {
-    // Not fatal: the stands are in, and the only symptom is the artwork's
-    // old names showing under ours until this is run again.
-    console.error('Stand import: could not strip printed names —', e.message);
+    console.error('Stand import: could not be finished —', e.message);
+    return failedAfterImport({ snapshotId: out.snapshotId, hadStands: out.replaced > 0, actor });
   }
 
   // The stands are in the database; now make the running server aware of
@@ -563,7 +627,7 @@ async function readStandsFromLive(req) {
 
   // Which mode ran is part of the record: "imported 96 stands" means two very
   // different things depending on whether the previous inventory survived.
-  track({ type: 'stands.import', boothNumber: null, actor: req.admin?.user || 'unknown',
+  track({ type: 'stands.import', boothNumber: null, actor: actor || 'unknown',
           meta: { imported: out.imported, sold: out.sold, replaced: out.replaced,
                   mode: out.mode || (replace ? 'replace' : 'upsert'),
                   forced: req.query.force === '1', areasImported,
@@ -572,10 +636,57 @@ async function readStandsFromLive(req) {
              areasSkipped: r.stands.length - sellable.length, warnings: r.warnings } };
 }
 
+/** The snapshot an import took before its first write, if it took one after `since`. */
+async function importSnapshotSince(since) {
+  try {
+    const rows = await booths.listSnapshots({ limit: 5 });
+    const hit = rows.find(h => /^import/.test(String(h.reason || '')) && h.at >= since);
+    return hit ? hit.snapshotId : null;
+  } catch (e) { console.error('Stand import: snapshot not found —', e.message); return null; }
+}
+
+/**
+ * Put the stands back after an import that wrote and then could not finish,
+ * and say so. From the import's own snapshot when it took one; a hall that
+ * was empty before has no snapshot, and going back means taking away what
+ * the import made.
+ */
+async function failedAfterImport({ snapshotId, hadStands, actor }) {
+  let restored = false;
+  try {
+    if (snapshotId) {
+      const back = await booths.restoreSnapshot(snapshotId, { apply: true, actor });
+      restored = !!(back && back.ok);
+    } else if (!hadStands) {
+      await booths.col().deleteMany({ showId: config.showId });
+      restored = true;
+    }
+    if (restored) {
+      // The import's own holds on stands that are, once more, not held. The
+      // restore puts the stands back, not the hold documents, and one left
+      // behind lists a reservation on a stand plainly for sale and blocks the
+      // next real hold on it.
+      const held = await booths.col().distinct('boothNumber', { showId: config.showId, status: 'held' });
+      await getDb().collection('holds').deleteMany({ showId: config.showId, source: booths.IMPORT_SOURCE,
+                                                     boothNumber: { $nin: held } });
+    }
+  } catch (e) {
+    console.error('Stand import: stands not put back —', e.message);
+    restored = false;
+  }
+  try { await sockets.notifyStands(); }
+  catch (e) { console.error('Stand import: viewers not refreshed —', e.message); }
+  return { status: 500, wrote: true, stranded: !restored, body: { reason: 'not_finished', error: restored
+    ? 'the stands were read from it, but the import could not be finished, so they have been put back exactly as they were. Nothing has changed; try again.'
+    : 'the import could not be finished, and the stands it had already moved could not be put back automatically. Go back to the point before this in the plan\'s history.' } };
+}
+
 router.post('/stands/import', async (req, res, next) => {
   try {
     if (!await confirmPassword(req, res, 'no stands were imported')) return;
-    const r = await readStandsFromLive(req);
+    // One plan change at a time on an event — see floorplans.withPlanLock.
+    const r = await floorplans.withPlanLock(config.showId, () => readStandsFromLive(req));
+    if (r.wrote) r.body.error = cap(r.body.error);
     res.status(r.status).json(r.body);
   } catch (e) { next(e); }
 });

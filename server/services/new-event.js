@@ -14,8 +14,8 @@ const { getDb } = require('../db');
  * its colours say which stands are sold — reading last year's drawing into a
  * new event would sell its stands to last year's exhibitors.
  *
- * Packages arrive un-sold-out: last year's sold-out badge is not true of this
- * year. The floorplan sponsor is left behind for the same reason.
+ * Packages arrive un-sold-out and on offer: last year's sold-out badge is not
+ * true of this year. The floorplan sponsor is left behind for the same reason.
  */
 const SETTINGS_FIELDS = ['ratePerSqm', 'unit', 'currency', 'palette'];
 
@@ -42,10 +42,17 @@ async function copyConfiguration(fromId, toId) {
     copied.activities = tags.length;
   }
 
+  // A package sold out last year comes across ON OFFER. Every sponsor write
+  // path stores sold out as inactive too (sponsors.js: active = !soldOut), so
+  // clearing the badge alone left last year's sell-outs — the headline
+  // packages, as a rule — hidden from the reps' catalogue and the public plan
+  // of the new event. A package an admin took off sale by hand (inactive, not
+  // sold out) was a decision about the package, not about last year's sales,
+  // and it stays off sale.
   const packages = await db.collection('sponsors').find({ showId: fromId }).toArray();
   if (packages.length) {
     await db.collection('sponsors').insertMany(packages.map(({ _id, ...p }) => ({
-      ...p, showId: toId, soldOut: false, copiedFrom: fromId,
+      ...p, showId: toId, soldOut: false, ...(p.soldOut === true ? { active: true } : {}), copiedFrom: fromId,
     })));
     copied.packages = packages.length;
   }
