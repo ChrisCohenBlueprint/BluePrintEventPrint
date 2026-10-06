@@ -13,7 +13,7 @@ const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
 const { track, socketIp } = require('../services/tracking');
 const inFlight  = require('../lib/in-flight');
-const { socketAuth, requireAdmin: requireAdminAuth,
+const { socketAuth, requireAdmin: requireAdminAuth, sweepAdminSockets,
         checkSecretThrottle, registerSecretFailure, clearSecretFailures } = require('../auth');
 
 const ADMIN_ROOM = 'admins';
@@ -346,6 +346,15 @@ function register(io) {
   // no request context, so without naming each show explicitly the other events
   // would start empty and stay empty until someone edited them.
   refreshAll().catch(e => console.error('Show caches not warmed:', e.message));
+
+  // An admin socket is re-checked whenever it SENDS an admin event, but one
+  // left open and idle keeps sitting in its event's admin room — receiving the
+  // prices, deal notes and activity broadcast there — after its session has
+  // been signed out, demoted or deleted. The sweep bounds that to a minute.
+  const sweep = setInterval(() => {
+    sweepAdminSockets(io).catch(e => console.error('Admin socket sweep failed:', e.message));
+  }, 60_000);
+  if (sweep.unref) sweep.unref();
 
   // slug → show, for resolving a socket's event from its handshake. The same
   // rules the REST side applies to X-Show — see show-middleware.js.
