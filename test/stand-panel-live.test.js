@@ -16,7 +16,9 @@
  *     on a stand that no longer existed.
  *
  * And Tools → Reset, given a split cell, has to undo the split the way the
- * panel's own Reset does, not delete the cell.
+ * panel's own Reset does, not delete the cell; when the server answers a
+ * cell's reset by undoing its parent's split, it is the parent that is named
+ * and opened.
  *
  * The socket answers in production's order — ack first, state ~80 ms later —
  * because the other order hides every one of these. See admin-console-harness.
@@ -34,6 +36,10 @@ stands[20].splitSnapshot = { created: ['120B'], at: '2026-10-01T10:00:00Z', self
 // No shape of its own here: only the Tools list needs it, and a second stand
 // on 121's rectangle would only muddle the binding of the plan.
 stands.push({ ...stands[21], boothNumber: '120B', splitFrom: '120', geometry: null });
+// 130B is a cell of 130 that this console's copy of 130 does not list — so the
+// console asks the server about the cell, and the server answers for 130.
+stands[30].splitSnapshot = { created: [], at: '2026-10-01T10:00:00Z', self: { sqm: stands[30].sqm } };
+stands.push({ ...stands[31], boothNumber: '130B', splitFrom: '130', geometry: null });
 
 (async () => {
   const { server, base } = await startConsole({ stands });
@@ -207,6 +213,30 @@ stands.push({ ...stands[21], boothNumber: '120B', splitFrom: '120', geometry: nu
     await settle(page);
     sent = (await emits(page, 'booth:reset')).pop();
     check('and resets the parent, 120, as the panel always did', sent && sent.payload.boothNumber === '120', JSON.stringify(sent && sent.payload));
+
+    console.log('\nA reset the server answers for the stand it actually changed');
+    await page.click('[data-section="floorplan"]');
+    await page.waitForTimeout(200);
+    await page.evaluate(() => {
+      window.__server['booth:reset'] = function (p) {
+        if (p.boothNumber !== '130B') return { ok: false, error: 'Not this one.' };
+        window.__state = window.__state.filter(function (x) { return x.boothNumber !== '130B'; });
+        delete window.__stand('130').splitSnapshot;
+        window.__broadcast();
+        return { ok: true, type: 'unsplit', parent: '130', removed: ['130B'] };
+      };
+      selectAdminBooth('130B');
+    });
+    await settle(page);
+    await page.click('#aba-reset');
+    await page.waitForSelector('dialog.bp-dialog[open]');
+    await press(page, 'Reset it');
+    await settle(page);
+    p = await panel(page);
+    check('the toast names the stand whose split was undone, not the cell asked about',
+          /Stand 130 un-split — removed 130B/.test(await toasts(page)), await toasts(page));
+    check('and the panel moves to that stand rather than closing on a stand that is gone',
+          p.open && p.selected === '130' && /^Stand 130$/.test(p.id), JSON.stringify(p));
 
     check('the page raised no errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   } finally {

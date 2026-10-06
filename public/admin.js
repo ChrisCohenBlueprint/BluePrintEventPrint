@@ -771,10 +771,19 @@ function resetDescription(r) {
   return `remove the leftover cell ${shownN(r.target)}`;
 }
 
+/**
+ * The stand a successful reset actually changed. Asked of a split cell, the
+ * server undoes its parent's split and says which parent (`parent`) — so
+ * that, not the cell that was asked about and is now gone, is the stand to
+ * name and to open.
+ */
+const resetLanded = (asked, res) => (res && res.type === 'unsplit' && res.parent) || asked;
+
 function resetToastFor(boothNumber, res) {
-  return res.type === 'unmerge' ? `Stand ${shownN(boothNumber)} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
-       : res.type === 'unsplit' ? `Stand ${shownN(boothNumber)} un-split — removed ${(res.removed || []).join(', ')}.`
-       : `Removed leftover cell ${shownN(boothNumber)}.`;
+  const n = resetLanded(boothNumber, res);
+  return res.type === 'unmerge' ? `Stand ${shownN(n)} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
+       : res.type === 'unsplit' ? `Stand ${shownN(n)} un-split — removed ${(res.removed || []).join(', ')}.`
+       : `Removed leftover cell ${shownN(n)}.`;
 }
 
 async function resetFromPanel(n) {
@@ -792,9 +801,12 @@ async function resetFromPanel(n) {
       adminToast(resetToastFor(r.target, res), 'ok');
       // A leftover cell is gone once reset, so its panel closes here, under
       // the toast that says why — not a moment later when the broadcast finds
-      // the stand missing and has to explain it all over again.
-      if (r.kind === 'remove-cell') closeStandPanel();
-      else if (booths[r.target]) selectAdminBooth(r.target);
+      // the stand missing and has to explain it all over again. Otherwise the
+      // panel moves to the stand the server says it changed.
+      const landed = resetLanded(r.target, res);
+      if (res.type === 'remove-cell') closeStandPanel();
+      else if (booths[landed]) selectAdminBooth(landed);
+      else closeStandPanel();
     }
     else adminToast((res && res.error) || 'Reset failed.', 'error');
   });
@@ -834,7 +846,7 @@ async function restoreMultiSelect() {
     }
     const r = targets[i];
     socket.emit('booth:reset', { boothNumber: r.target }, (res) => {
-      if (res && res.ok) done.push(r.target);
+      if (res && res.ok) done.push(resetLanded(r.target, res));
       else failed.push((res && res.error) || `Could not reset ${shownN(r.target)}.`);
       next(i + 1);
     });
