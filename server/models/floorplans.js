@@ -391,13 +391,19 @@ async function makeLive(revisionId, { actor = null, showId = config.showId } = {
   return withPlanLock(showId, async () => {
     const rev = await getRevision(revisionId, { showId });
     if (!rev) return { ok: false, reason: 'no_such_revision' };
-    if (rev.status === 'live') return { ok: true, revision: summary(rev), previous: null, unchanged: true };
-
     // Detached copies: what a driver hands back is not guaranteed to be
     // separate from what the writes below change, and these are what
     // restoreLive puts back if the step after this fails.
     const before = structuredClone(await adopt(showId));
-    const revStatus = rev.status;
+    // Already live means already in the live slot. A revision merely MARKED
+    // live is one the old seed left behind, and refusing to make it live was
+    // the "Make live again" that answered 409 for a plan nobody could see.
+    if (rev.status === 'live' && before && before.revisionId === rev.revisionId) {
+      return { ok: true, revision: summary(rev), previous: null, unchanged: true };
+    }
+    // What it goes back to if this is undone. A stray marked live was never
+    // the live plan, so it goes back to being superseded, not to a second live.
+    const revStatus = rev.status === 'live' ? 'superseded' : rev.status;
     const now = new Date();
     const doc = {
       showId, svg: rev.svg, filename: rev.filename, bytes: rev.bytes,
@@ -410,11 +416,10 @@ async function makeLive(revisionId, { actor = null, showId = config.showId } = {
     await col().updateOne({ showId }, set, { upsert: true });
 
     // Superseded BEFORE the new one is marked live, so there is never a moment
-    // with two — which the database now refuses.
-    if (before && before.revisionId) {
-      await revisions().updateOne({ showId, revisionId: before.revisionId },
-        { $set: { status: 'superseded', supersededAt: now } });
-    }
+    // with two — which the database now refuses. Every other revision marked
+    // live goes too, which is what clears one the old seed left behind.
+    await revisions().updateMany({ showId, status: 'live', revisionId: { $ne: rev.revisionId } },
+      { $set: { status: 'superseded', supersededAt: now } });
     await revisions().updateOne({ showId, revisionId: rev.revisionId },
       { $set: { status: 'live', publishedAt: now, publishedBy: actor } });
     return { ok: true, revision: summary({ ...rev, status: 'live', publishedAt: now, publishedBy: actor }),

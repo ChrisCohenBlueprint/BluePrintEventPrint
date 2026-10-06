@@ -126,6 +126,29 @@ const hall = (show) => (db.store.booths || []).filter(b => b.showId === show)
           f.label === 'LNA27.3' && unique(labels('LNA')), labels('LNA').join(','));
   });
 
+  // The same wreckage after an adoption has already happened: the slot names
+  // one revision and another is still marked live. "Make live again" on that
+  // one answered 409, as if it were showing.
+  db = fakeDb({
+    floorplans: [{ showId: 'LNA', svg: issue(2), filename: 'LNA27.svg', bytes: 1, version: 'v2', revisionId: 'c', label: 'LNA27.2' }],
+    floorplan_revisions: [
+      { showId: 'LNA', revisionId: 'a', seq: 1, edition: 'LNA27', point: 0, label: 'LNA27', status: 'live', svg: issue(0) },
+      { showId: 'LNA', revisionId: 'c', seq: 3, edition: 'LNA27', point: 2, label: 'LNA27.2', status: 'live', svg: issue(2) },
+    ],
+  });
+  await showContext.runAs('LNA', async () => {
+    const m = await floorplans.makeLive('a');
+    check('a revision only marked live can be made live', m.ok && !m.unchanged && isIssue(slot('LNA').svg, 0));
+    check('leaving exactly one live', liveRevs('LNA').length === 1 && liveRevs('LNA')[0].revisionId === 'a');
+    await floorplans.restoreLive('a', m.previous);
+    check('and undone, it goes back to superseded rather than to a second live one',
+          liveRevs('LNA').length === 1 && liveRevs('LNA')[0].revisionId === 'c' &&
+          revs('LNA').find(v => v.revisionId === 'a').status === 'superseded',
+          revs('LNA').map(v => `${v.label}:${v.status}`).join(' '));
+    const again = await floorplans.makeLive('c');
+    check('while the plan actually in the slot is still "already live"', again.unchanged === true);
+  });
+
   console.log('\nOne at a time');
   db = fakeDb({ floorplans: [{ showId: 'LNA', svg: issue(0), filename: 'LNA27.svg', bytes: 1, version: 'v0' }] });
   await showContext.runAs('LNA', async () => {
