@@ -211,6 +211,23 @@ const SHIM = `
     });
   };
   window.__fire = function (e, p) { (window.__h[e] || []).forEach(function (f) { f(p); }); };
+  // The live REST routes that change stands — going back in history, above
+  // all — end by broadcasting the new hall to every open console. There is no
+  // server push here, so a change made through /api re-reads the hall when it
+  // answers, exactly as the broadcast would have delivered it. Without this,
+  // "Put it back" did the work and the plan on screen went on showing the hall
+  // from before it.
+  (function () {
+    var plain = window.fetch.bind(window);
+    window.fetch = function (url, opts) {
+      var method = String((opts && opts.method) || 'GET').toUpperCase();
+      var p = plain(url, opts);
+      if (method !== 'GET' && /^\\/api\\//.test(String(url))) {
+        p.then(function (r) { if (r.ok) window.__pull(); }, function () {});
+      }
+      return p;
+    };
+  })();
   window.io = function () {
     var sock = {
       on: function (e, f) { (window.__h[e] = window.__h[e] || []).push(f); return sock; },
