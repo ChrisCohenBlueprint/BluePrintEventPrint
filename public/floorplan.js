@@ -1393,16 +1393,21 @@ function submitWaitlist(n) {
   // rather than an enquiry, so sales can tell "wants this stand" from "wants to
   // hear if it frees up". Until that existed this sent the email's local part
   // as a first name, which put invented names on real leads.
-  emitWithTimeout('inquiry:submit', {
+  const payload = {
     kind: 'waitlist',
     email,
     boothNumbers: [n],
     message: `Waiting list: tell me if Stand ${shownN(n)} becomes available. `
            + 'Submitted from the public floorplan with an email address only.',
-  }, (res) => {
+  };
+  // The same deadline as an enquiry, so the same protection against a resend
+  // becoming a second lead — see requestIdFor.
+  payload.requestId = requestIdFor('waitlist', payload);
+  emitWithTimeout('inquiry:submit', payload, (res) => {
     btn.disabled = false;
     btn.textContent = 'Notify me';
     if (res && res.ok) {
+      forgetRequestId('waitlist');
       waitlisted.push(n);
       renderPanel(n, { force: true });
       return;
@@ -1435,6 +1440,39 @@ function emitWithTimeout(event, payload, cb, ms = 12000) {
   if (!socket.connected) return finish({ ok: false, errors: ['You appear to be offline. Reconnect and try again.'] });
   socket.emit(event, payload, finish);
 }
+
+/**
+ * The id that makes a resend the same enquiry.
+ *
+ * The deadline above tells the visitor "We did not hear back" when it may only
+ * be the ACK that was lost — the enquiry itself saved — and the visitor, told
+ * to try again, does: a second lead for the same person and stands. Each
+ * enquiry now carries a requestId (32 lowercase hex) that the server
+ * de-duplicates on. It is minted once and sent unchanged on every retry, and
+ * forgotten after a successful send (forgetRequestId), so the next enquiry is
+ * a new one.
+ *
+ * A retry of the SAME content, that is. A visitor who adds a stand or fixes
+ * their email before trying again is sending something different, and gets a
+ * new id: de-duplicated against the first attempt, the change would be thrown
+ * away while the page reported it sent. A second lead is the lesser harm than
+ * an enquiry the visitor was told went and did not.
+ *
+ * One slot per kind, so a waiting-list request and the enquiry never share an
+ * id.
+ */
+const pendingRequest = {};
+function requestIdFor(kind, payload) {
+  const key = JSON.stringify(payload);
+  const cur = pendingRequest[kind];
+  if (cur && cur.key === key) return cur.id;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const id = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  pendingRequest[kind] = { key, id };
+  return id;
+}
+function forgetRequestId(kind) { delete pendingRequest[kind]; }
 
 function initForm() {
   const form    = document.getElementById('enquiry-form');
@@ -1490,6 +1528,7 @@ function initForm() {
       sponsorKeys: sponsorShortlist.slice(),
       areaKeys: areaShortlist.slice(),
     };
+    payload.requestId = requestIdFor('enquiry', payload);
 
     submit.disabled = true;
     submit.textContent = 'Sending…';
@@ -1504,6 +1543,7 @@ function initForm() {
 
       if (res && res.ok) {
         submitted = true;
+        forgetRequestId('enquiry');
         clearEnquiryNotes();     // what it said was true of the enquiry just sent
         form.classList.add('hidden');
         document.getElementById('eq-footer').hidden = true;   // hide the Send bar
