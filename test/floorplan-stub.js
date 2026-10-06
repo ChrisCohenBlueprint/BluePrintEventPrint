@@ -24,6 +24,7 @@ const path = require('path');
 const fs   = require('fs');
 const { launch, listen } = require('./harness');
 const { sendPage } = require('../server/lib/send-page');
+const { rects } = require('../scripts/svg-paths');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const LEX27 = fs.readFileSync(path.join(PUBLIC, 'LEX27_Floorplan_Consolidated.svg'), 'utf8');
@@ -108,13 +109,23 @@ async function start(opts = {}) {
 }
 
 /** A page with the error collector every suite wants. */
-async function openPage(browser, url, { viewport = { width: 1280, height: 900 }, init } = {}) {
+async function openPage(browser, url, { viewport = { width: 1280, height: 900 }, init, waitUntil = 'networkidle' } = {}) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   page.on('pageerror', e => errors.push(String(e).slice(0, 200)));
   if (init) await page.addInitScript(init);
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(url, { waitUntil, timeout: 30000 });
   return { page, errors };
+}
+
+/**
+ * The same stand rectangles, read from the FILE rather than the page — for a
+ * suite that needs real geometry before the page has (or while it cannot get)
+ * the artwork.
+ */
+function fileRects(n = 60) {
+  return rects(LEX27).filter(r => r.cls === 'cls-10').slice(0, n)
+    .map(({ x, y, w, h }) => ({ x, y, w, h }));
 }
 
 /** The first `n` stand rectangles the artwork really draws, as geometry. */
@@ -149,4 +160,4 @@ function reporter() {
 
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-module.exports = { start, openPage, artworkRects, stand, reporter, wait, LEX27 };
+module.exports = { start, openPage, artworkRects, fileRects, stand, reporter, wait, LEX27 };

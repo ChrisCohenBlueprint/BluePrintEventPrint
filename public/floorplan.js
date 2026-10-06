@@ -701,16 +701,24 @@ function moveTooltip(e) {
 function hideTooltip() { tooltip.classList.add('hidden'); }
 
 // ─── Selection ────────────────────────────────────────────────────────────────
+//
+// The panel is built from the stand's DATA; the plan only carries the ring.
+// So a stand opens whether or not the artwork is there — it may have failed to
+// load, or still be downloading (2 MB, and usually after the stands arrive).
+// That matters most for the routes that exist for when the map is no use: the
+// A–Z directory and the search's Enter. Both end here, and this used to reach
+// into svgDoc unguarded — null in exactly those moments — so it threw and the
+// panel was never drawn. tagBooths() puts the ring on once the plan exists.
 function selectBooth(n) {
   if (selectedArea) {
     svgDoc?.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
     selectedArea = null;
   }
   if (selectedId) {
-    svgDoc.querySelector(`[data-booth="${CSS.escape(selectedId)}"]`)?.classList.remove('booth-selected');
+    svgDoc?.querySelector(`[data-booth="${CSS.escape(selectedId)}"]`)?.classList.remove('booth-selected');
   }
   selectedId = n;
-  svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`)?.classList.add('booth-selected');
+  svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`)?.classList.add('booth-selected');
 
   // Location is no longer derived from the browser timezone — the server
   // resolves it from the request, which is both accurate and unspoofable.
@@ -1872,9 +1880,9 @@ let selectedArea = null;
 
 function selectArea(key) {
   if (selectedId) { hideSelection(); selectedId = null; }
-  svgDoc.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
+  svgDoc?.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
   selectedArea = key;
-  svgDoc.querySelector(`[data-area="${CSS.escape(key)}"]`)?.classList.add('booth-selected');
+  svgDoc?.querySelector(`[data-area="${CSS.escape(key)}"]`)?.classList.add('booth-selected');
   renderAreaPanel(key);
 }
 
