@@ -156,19 +156,36 @@ asked.
 | `npm test` | The full suite below. No database needed. |
 | `npm run check` | `check:security` + `check:browser` against a **running local** server. They book stands and submit an enquiry, so both refuse unless the server they drive is on this machine and `MONGO_URI` — from the shell, or this checkout's `.env` as a server started here would read it — is a local database. Start the server and run the check with the same local `MONGO_URI`. |
 | `npm run validate:artwork <file.svg>` | Scores a floorplan against the artwork spec and names the failed clauses. |
-| `node scripts/admin-account.js` | Break-glass account tool: `list`, `create`, `role`, `reset-2fa`, `delete`, `seed-sales`. Needs the database, not a login. |
+| `node scripts/admin-account.js` | Break-glass account tool: `list`, `create`, `role`, `reset-2fa`, `delete`. Needs the database, not a login. |
 | `node scripts/preview-stands.js` | Prints what the extractor reads from an SVG. Writes nothing. |
 
 **Migrations are scripts, not boot steps.** Anything that rewrites or deletes
 inventory — `scripts/reset-blank-layout.js`, `scripts/seed-north-america.js`,
-`scripts/repair-halved-stands.js` — is run by hand and is a dry run until you
-pass `--apply`. The server used to run these on boot behind a database flag,
-which meant restoring a backup or cloning to staging could wipe live bookings on
-the next deploy. It never does anything destructive on its own now.
+`scripts/repair-halved-stands.js`, `scripts/migrate.js`, `scripts/reseed.js`,
+`scripts/seed-sponsors.js` — is run by hand and is a dry run until you pass
+`--apply`. Name the event with `--show <slug>` (or `--show=<slug>`); without
+it, the default event. The server used to run these on boot behind a database
+flag, which meant restoring a backup or cloning to staging could wipe live
+bookings on the next deploy. It never does anything destructive on its own now,
+and a dry run writes nothing at all — not even an index.
+
+**Restart the service after any `--apply`.** The running server holds each
+event's stands, areas and tags in memory and only re-reads them when the app
+itself changes them, so nobody sees what a script wrote until it restarts. The
+scripts say so when they finish.
+
+* `scripts/reseed.js` — a fresh extraction that renumbered the stands: matches
+  old to new by position and carries every stand across whole. Refuses merged or
+  split stands and any booking it cannot place; needs `--force` on an event that
+  has sold.
+* `scripts/seed-sponsors.js` — the original sponsorship catalogue, for an event
+  that has none. On an event that has one it changes nothing unless given
+  `--add-missing` (packages the event lacks) or `--overwrite` (reset wording;
+  never price, availability or sold-out).
 
 ### Tests
 
-`npm test` runs ten suites and needs **no database**. Several drive your
+`npm test` runs every suite in `test/` and needs **no database**. Several drive your
 installed Chrome through the real pages (`playwright-core`, `channel: 'chrome'`)
 because SVG layout and `getBBox` are only true in a browser:
 
@@ -178,6 +195,9 @@ because SVG layout and `getBBox` are only true in a browser:
 * `booth-binding.test.js` / `booth-palette.test.js` — stands bind to the right artwork shapes, in that plan's own palette.
 * `artwork-spec.test.js` / `artwork-preserved.test.js` — the spec reports but never gates; name-stripping never damages the stored original.
 * `extract-stands.test.js` / `import-stands.test.js` / `seed-artwork.test.js` — extraction is derived from the file, and an import refuses an event that has started selling.
+* `proposal-print.test.js` — a rep's printed proposal opens for every event, and prices only what is priced.
+* `sponsor-catalogue.test.js` — the sponsorship CSV round trip, and package changes reaching the plan's areas.
+* `operator-scripts.test.js` — the scripts above, run as an operator runs them against a stand-in database: dry runs write nothing, refusals hold.
 
 ---
 

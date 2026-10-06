@@ -26,14 +26,7 @@ name from the roster dropdown (sourced from `server/data/sales-team.js`)
 prefills the username, display name and email. The display name and email sign
 that rep's proposals.
 
-**From the CLI** — one login per roster name, in one go:
-
-```bash
-node scripts/admin-account.js seed-sales
-```
-
-It prints a username, temporary password and one-time invite code per rep. It is
-idempotent: existing accounts are skipped, not reset. Other commands:
+**From the CLI** — one rep at a time:
 
 ```bash
 node scripts/admin-account.js create <user> <pass> sales   # single rep
@@ -41,8 +34,8 @@ node scripts/admin-account.js role <user> admin|sales      # move between tiers
 node scripts/admin-account.js list
 ```
 
-The temporary password and the invite code must be shared **out of band and
-separately** — the invite code is what stops an intercepted password alone from
+The temporary password and the invite code the console issues must be shared
+**out of band and separately** — the invite code is what stops an intercepted password alone from
 claiming the account. Both are entered on the rep's first sign-in only, before
 they set up their authenticator app. Changing an account's role or password
 revokes any live session for it immediately (`tokenVersion` is bumped).
