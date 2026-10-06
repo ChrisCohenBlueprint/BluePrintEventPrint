@@ -13,9 +13,13 @@
  *   one at a time — two adoptions, two uploads or two plans made live at the
  *                  same moment cannot make two live revisions or two drafts
  *                  with one name; the database refuses it as well.
+ *   all or nothing — a plan made live, or stands re-read, whose last steps
+ *                  fail leaves the stands where they were, not on a drawing
+ *                  that has been taken back down.
  */
 const fs = require('fs');
 const path = require('path');
+const express = require('express');
 const { fakeDb } = require('./fake-mongo');
 
 const out = [];
@@ -34,6 +38,10 @@ require.cache[usersPath] = { id: usersPath, filename: usersPath, loaded: true, e
 
 const showContext = require('../server/show-context');
 const floorplans = require('../server/models/floorplans');
+const booths = require('../server/models/booths');
+const settings = require('../server/models/settings');
+const sockets = require('../server/sockets');
+const api = require('../server/routes/api');
 
 const PLAN = fs.readFileSync(path.join(__dirname, 'fixtures', 'plan-to-spec.svg'), 'utf8');
 const issue = (n) => PLAN.replace(/<svg\b/, `<!-- issue ${n} --><svg`)
@@ -175,6 +183,142 @@ const hall = (show) => (db.store.booths || []).filter(b => b.showId === show)
   delete process.env.__BREAK_INDEX;
   check('an index the data will not allow is reported, never thrown', !threw);
   db.collection = plain;
+
+  console.log('\nAll or nothing, after the stands have moved');
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => { req.admin = { user: 'chris' }; showContext.runAs('LEX', next); });
+  app.use('/api', api);
+  const server = app.listen(0);
+  await new Promise(r => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  const call = async (p, opts = {}) => {
+    const res = await fetch(base + p, opts);
+    let body = null; try { body = await res.json(); } catch { /* none */ }
+    return { status: res.status, body };
+  };
+  const publish = (id, q = '') => call(`/floorplan/revisions/${id}/publish${q}`,
+    { method: 'POST', headers: { 'X-Confirm-Password': 'pw' } });
+  const reread = (q = '') => call(`/stands/import${q}`, { method: 'POST', headers: { 'X-Confirm-Password': 'pw' } });
+
+  const realSetUnit = settings.setUnit;
+  const realNotify = sockets.notifyStands;
+  let notified = 0;
+  sockets.notifyStands = async () => { notified++; };
+  const failUnit = () => { settings.setUnit = async () => { throw new Error('write refused'); }; };
+  const okUnit = () => { settings.setUnit = realSetUnit; };
+
+  const fresh = () => {
+    db = fakeDb({
+      floorplans: [{ showId: 'LEX', svg: issue(0), filename: 'LEX27.svg', bytes: 1, version: 'v0' }],
+      booths: [stand('LEX', '101', { status: 'sold', updatedBy: 'chris',
+                 assignment: { company: 'Real Exhibitor Ltd', contactId: 'c1', actualPrice: 5000, notes: '', tags: [], country: 'DE' } }),
+               stand('LEX', '102')],
+      settings: [{ _id: 'LEX', unit: 'm', ratePerSqm: 600 }],
+    });
+  };
+
+  try {
+    fresh();
+    const draft = await showContext.runAs('LEX', () => floorplans.createDraft(held(1), { filename: 'LEX27.svg' }));
+    const before = hall('LEX');
+    failUnit(); notified = 0;
+    let r = await publish(draft.revision.revisionId, '?mode=update');
+    okUnit();
+    check('a publish whose last steps fail is refused', r.status === 500 && /was not made live/.test(r.body.error),
+          `${r.status} ${r.body && r.body.error}`);
+    check('the stands are back where they were', hall('LEX') === before, hall('LEX'));
+    check('the sale on them untouched', (db.store.booths.find(b => b.boothNumber === '101') || {}).status === 'sold');
+    check('the plan before it is live again', isIssue(slot('LEX').svg, 0) &&
+          revs('LEX').find(x => x.revisionId === draft.revision.revisionId).status === 'draft');
+    check('and open pages were told the stands changed back', notified > 0);
+    check('no import hold is left on a stand that is not held',
+          (db.store.holds || []).every(h => (db.store.booths.find(b => b.boothNumber === h.boothNumber) || {}).status === 'held'),
+          JSON.stringify((db.store.holds || []).map(h => h.boothNumber)));
+
+    r = await publish(draft.revision.revisionId, '?mode=update');
+    check('with the step fixed, the same publish goes through', r.status === 200 && isIssue(slot('LEX').svg, 1),
+          JSON.stringify(r.body && (r.body.error || r.body.mode)));
+    check('and the reserved stand it draws is held, with its hold',
+          (db.store.booths.find(b => b.boothNumber === '103') || {}).status === 'held' &&
+          (db.store.holds || []).some(h => h.boothNumber === '103'));
+
+    const settled = hall('LEX');
+    failUnit(); notified = 0;
+    r = await reread('?mode=update');
+    okUnit();
+    check('re-reading the stands, failing at the end, says so', r.status === 500, `${r.status} ${r.body && r.body.error}`);
+    check('and leaves them as they were', hall('LEX') === settled);
+    check('with open pages told', notified > 0);
+
+    // A hall with nothing in it before the import has no snapshot to go back
+    // to: going back means the stands the import made are taken away again.
+    db = fakeDb({ floorplans: [{ showId: 'LEX', svg: issue(0), filename: 'LEX27.svg', bytes: 1, version: 'v0' }],
+                  settings: [{ _id: 'LEX', unit: 'm', ratePerSqm: 600 }] });
+    failUnit();
+    r = await reread();
+    okUnit();
+    check('an empty hall whose first read fails is left empty', r.status === 500 && hall('LEX') === '', hall('LEX'));
+
+    // And when the stands cannot be put back, the drawing they are now on
+    // stays live with them, and the hall before is kept as a point to go back to.
+    fresh();
+    const d2 = await showContext.runAs('LEX', () => floorplans.createDraft(issue(3), { filename: 'LEX27.svg' }));
+    const realRestore = booths.restoreSnapshot;
+    booths.restoreSnapshot = async () => ({ ok: false, reason: 'snapshot_failed' });
+    failUnit();
+    r = await publish(d2.revision.revisionId, '?mode=update');
+    okUnit(); booths.restoreSnapshot = realRestore;
+    check('stands that cannot be put back keep the plan they are on', r.status === 500 && isIssue(slot('LEX').svg, 3),
+          `${r.status} ${r.body && r.body.error}`);
+    const points = (db.store.booths_snapshots || []).filter(s => s.header && s.history && s.op === 'publish');
+    check('and the hall before it is a point in the history', points.length === 1, String(points.length));
+
+    // An import that fails before it has written anything: nothing to put
+    // back, so the plan before goes back and nothing is stranded.
+    fresh();
+    const d3 = await showContext.runAs('LEX', () => floorplans.createDraft(issue(6), { filename: 'LEX27.svg' }));
+    const untouched = hall('LEX');
+    const realImport0 = booths.importFromArtwork;
+    booths.importFromArtwork = async () => { throw new Error('connection reset'); };
+    r = await publish(d3.revision.revisionId, '?mode=update');
+    booths.importFromArtwork = realImport0;
+    check('an import that fails before writing puts the plan back and changes nothing',
+          r.status === 500 && /was not made live/.test(r.body.error) && isIssue(slot('LEX').svg, 0) &&
+          hall('LEX') === untouched, `${r.status} ${r.body && r.body.error}`);
+
+    console.log('\nTwo plans made live from the console at the same moment');
+    fresh();
+    const x = await showContext.runAs('LEX', () => floorplans.createDraft(issue(4), { filename: 'LEX27.svg' }));
+    const y = await showContext.runAs('LEX', () => floorplans.createDraft(issue(5), { filename: 'LEX27.svg' }));
+    // The first import is slow, as a real one on a full hall is, so the second
+    // request arrives while the first is still reading its stands.
+    const realImport = booths.importFromArtwork;
+    let slowOnce = true;
+    booths.importFromArtwork = async (...a) => {
+      if (slowOnce) { slowOnce = false; await new Promise(r => setTimeout(r, 40)); }
+      return realImport(...a);
+    };
+    const first = publish(x.revision.revisionId, '?mode=update');
+    await new Promise(r => setTimeout(r, 15));
+    const [rx, ry] = await Promise.all([first, publish(y.revision.revisionId, '?mode=update')])
+      .finally(() => { booths.importFromArtwork = realImport; });
+    check('both are answered', rx.status === 200 && ry.status === 200, `${rx.status} ${ry.status}`);
+    check('one revision is live, and it is the one in the live slot', liveRevs('LEX').length === 1 &&
+          slot('LEX').revisionId === liveRevs('LEX')[0].revisionId,
+          revs('LEX').map(v => `${v.label}:${v.status}`).join(' '));
+    // In turn: the first finishes — its stands read, its display copy written —
+    // before the second goes into the live slot at all.
+    const slotWrites = db.calls.filter(c => c[0] === 'updateOne' && c[1] === 'floorplans')
+      .map(c => (c[3].$set && c[3].$set.svg ? 'live' : c[3].$set && c[3].$set.displaySvg ? 'display' : 'other'));
+    const firstLive = slotWrites.indexOf('live'), secondLive = slotWrites.indexOf('live', firstLive + 1);
+    check('each made live in turn, the first finished before the second began',
+          secondLive > firstLive && slotWrites.slice(firstLive, secondLive).includes('display'), slotWrites.join(' '));
+  } finally {
+    settings.setUnit = realSetUnit;
+    sockets.notifyStands = realNotify;
+    server.close();
+  }
 
   console.log('\nThe North America seed, refused, leaves the plan it found');
   // The script, run for real against stand-ins for the runner (which would
