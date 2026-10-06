@@ -35,7 +35,18 @@ const store = {
 // Behavioural events are not sent until the visitor accepts. Stand views still
 // work; they simply are not recorded.
 const CONSENT_KEY = 'bp_consent';
-let consent = store.get(CONSENT_KEY);                     // 'granted' | 'denied' | null
+// Embedded in the marketing site (?embed=1), where the host's cookie banner is
+// the one the visitor actually answers — ours is hidden. See initConsent().
+const EMBEDDED = new URLSearchParams(location.search).has('embed');
+// What is in force NOW: 'granted' | 'denied' | null. Embedded, an answer
+// stored on an earlier visit is NOT used on its own: the host answers on every
+// load (that is the protocol), and until it has, this visit has no consent.
+// Using the stored one at once put the visitor's old session id in the
+// handshake and adopted it on connect before the host had said a word about
+// this visit — including for a visitor who had since withdrawn on the host's
+// banner. Opened directly, the stored answer was given on this page's own bar
+// and stands.
+let consent = EMBEDDED ? null : store.get(CONSENT_KEY);
 
 const SESSION_KEY = 'bp_session';
 function sessionId() {
@@ -77,6 +88,23 @@ function emitTracked(event, payload) {
 }
 
 /**
+ * Tell THIS connection whose session it is — once.
+ *
+ * The server mints a fresh id for every connection, so consent has to be
+ * re-asserted on each one; but only once per connection, and only on a live
+ * one. Accepting while the socket was down used to emit an adopt that
+ * socket.io buffered, and the reconnect then sent its own: two adopts, and two
+ * consent records, for one decision. Now a decision taken offline waits for
+ * the connect handler, which is the one place a new connection adopts.
+ */
+let adoptedHere = false;
+function adoptSession() {
+  if (consent !== 'granted' || adoptedHere || !socket.connected) return;
+  adoptedHere = true;
+  socket.emit('session:adopt', { sessionId: sessionId() });
+}
+
+/**
  * Consent, including the case this page is actually deployed in.
  *
  * ── Host-page protocol (for whoever maintains the marketing site) ────────────
@@ -95,23 +123,47 @@ function emitTracked(event, payload) {
  *        iframe.contentWindow.postMessage(
  *          { type: 'bp-consent', value: 'granted' }, 'https://<our-origin>');
  *      Send it again with 'declined' if the visitor withdraws consent; we stop
- *      sending behavioural events immediately and drop the stored session id.
- *      Safe to send before we have finished loading — post it on the iframe's
- *      load event, or simply post it on every banner change.
+ *      sending behavioural events immediately, drop the stored session id and
+ *      tell the server to stop tracking this connection.
+ *      Post it on the iframe's load event — EVERY load: an answer stored on an
+ *      earlier visit is not used until the host has given this one — or
+ *      simply post it on every banner change as well.
  *
- * Nothing else is accepted from the host: the message is ignored unless it is
- * that exact shape, so an unrelated postMessage on the page cannot turn
- * tracking on.
+ * Nothing else is accepted, and from nobody else: the message must be that
+ * exact shape AND come from the page this one is embedded in (window.parent).
+ * Any window can postMessage into an iframe, so a check on the shape alone let
+ * another frame on the host page — an ad, a chat widget — run
+ *   parent.frames[0].postMessage({ type: 'bp-consent', value: 'granted' }, '*')
+ * and switch tracking on. Which page may BE the parent is the server's call:
+ * the Content-Security-Policy frame-ancestors on this page names only this
+ * site and the origins in EMBED_ORIGINS, so a message from the parent is a
+ * message from one of those. (The page is not told that list, so it does not
+ * check e.origin against it as well.)
+ *
+ * Embedded, an answer stored on an earlier visit waits for the host's (see
+ * `consent` at the top of the file). There is no timer to fall back on:
+ * waiting already IS "not granted" — nothing is tracked and no session is
+ * sent — and if the host never answers, nothing ever is. A late answer is
+ * still honoured whenever it comes, since the host posts on every change.
  */
 function initConsent() {
   const bar = document.getElementById('consent-bar');
 
   const decide = (value) => {
+    const was = consent;
     consent = value;
     store.set(CONSENT_KEY, value);
     bar.classList.add('hidden');
-    if (value === 'granted') socket.emit('session:adopt', { sessionId: sessionId() });
-    else store.remove(SESSION_KEY);
+    if (value === 'granted') { adoptSession(); return; }
+    store.remove(SESSION_KEY);
+    // A withdrawal, not just a refusal: this connection may be carrying the
+    // visitor's session, and clearing local storage told the server nothing —
+    // the open socket went on being tracked under their id. Only when it WAS
+    // granted: a visitor who never agreed is not tracked, and must not be
+    // recorded as having withdrawn either. While disconnected there is no
+    // socket to stop; the next one is opened with no session at all.
+    adoptedHere = false;
+    if (was === 'granted' && socket.connected) socket.emit('consent:withdrawn');
   };
 
   // The host's answer, however it arrived. Normalised because a cookie banner's
@@ -128,6 +180,8 @@ function initConsent() {
   if (!answered) bar.classList.remove('hidden');
 
   window.addEventListener('message', (e) => {
+    // The page we are embedded in, and nothing else — see the header above.
+    if (e.source !== window.parent) return;
     const d = e.data;
     if (!d || typeof d !== 'object' || d.type !== 'bp-consent') return;
     adopt(d.value);
@@ -1602,11 +1656,14 @@ socket.on('connect', () => {
   // consent has to be re-asserted or this visitor's events after a reconnect
   // are filed under a stranger. The handshake `auth` function already carries
   // it; this covers a server that was restarted and has no memory of the id.
-  if (consent === 'granted') socket.emit('session:adopt', { sessionId: sessionId() });
+  // A new connection has not been told yet, whatever the last one was.
+  adoptedHere = false;
+  adoptSession();
   armStateWatchdog();
 });
 
 socket.on('disconnect', (reason) => {
+  adoptedHere = false;
   setConnectionState(false);
   setBanner('Connection lost — the plan may be out of date. Reconnecting…', 'warn');
   if (reason === 'io server disconnect') socket.connect?.();   // not retried automatically
