@@ -135,8 +135,9 @@
 
     // 440 is the server saying the pending token is gone. Leaving the enrolment
     // form on screen under that message was the trap — there is nothing on it
-    // that can still work.
-    if (status === 440) return enrolExpired();
+    // that can still work. It is gone either because the window closed or
+    // because five wrong codes spent it; the server says which.
+    if (status === 440) return enrolExpired(data.reason === 'too_many_codes' ? data.error : undefined);
     if (!ok) return showError(data.error || 'That code did not match.');
     stopEnrolCountdown();
     location.href = data.next || '/admin';
@@ -168,7 +169,9 @@
       $('verify-code').value = '';
       $('password').value = '';
       showStep('password');
-      return showError('That sign-in took too long and timed out. Enter your password again.');
+      return showError(data.reason === 'too_many_codes' && data.error
+        ? data.error
+        : 'That sign-in took too long and timed out. Enter your password again.');
     }
     if (!ok) return showError(data.error || 'Incorrect code.');
     location.href = data.next || '/admin';

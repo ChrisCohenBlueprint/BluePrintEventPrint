@@ -9,9 +9,21 @@ const router = express.Router();
 
 // Attempt limiters. In-memory is enough for a single instance; entries are
 // pruned as they expire so the maps can't grow without bound.
+//
+// Every check that decides whether an attempt may go ahead is made
+// SYNCHRONOUSLY, before the handler's first await. They used to be made on
+// arrival and charged only after the delay, the database read and scrypt had
+// all been awaited — so a burst sent in one go read the budget before any of it
+// was spent, and every request in it was evaluated. Sixty concurrent passwords
+// from one address against a budget of ten were all checked; four hundred
+// concurrent codes on one pending token were all checked, and the right one
+// signed in.
 const WINDOW_MS = 5 * 60 * 1000;
-const ipAttempts   = new Map();   // ip -> { count, reset }
-const acctFailures = new Map();   // username -> { count, nextAt, reset }
+const ipAttempts   = new Map();   // ip -> { count, reset }   failures in the window
+const ipInFlight   = new Map();   // ip -> attempts being evaluated right now
+const acctFailures = new Map();   // username -> { count, nextAt, reset }   wrong passwords
+const codeFailures = new Map();   // username -> { count, nextAt, reset }   wrong codes
+const codeBusy     = new Set();   // usernames with a code being checked right now
 
 function prune(map, now) { for (const [k, v] of map) if (now > v.reset) map.delete(k); }
 
@@ -31,12 +43,35 @@ const uname = (username) => String(username || '').toLowerCase().trim();
 // everyone in it — on a busy morning the eleventh person to log in correctly was
 // told to try again later. Only a failed attempt spends from the bucket now, so
 // people who know their password are never rationed.
+//
+// An attempt still being evaluated holds a place in the bucket until it is
+// answered — it might yet be a failure. That is what stops a burst: once the
+// failures plus the attempts in flight reach the budget, the next one is
+// refused without being looked at. A success hands its place back and spends
+// nothing, so the office above is only ever turned away if ten of its sign-ins
+// are being checked in the same instant.
 const IP_MAX = 10;
-function ipAllowed(ip, max = IP_MAX) {
+
+/**
+ * Claim a place in this IP's budget for one attempt.
+ * @returns {Function|null} a release function, to be called exactly once when
+ *   the attempt has been answered; null if the budget is spent.
+ */
+function reserveIp(ip, max = IP_MAX) {
   const now = Date.now();
   prune(ipAttempts, now);
   const rec = ipAttempts.get(ip);
-  return !rec || now > rec.reset || rec.count < max;
+  const failures = rec && now <= rec.reset ? rec.count : 0;
+  const busy = ipInFlight.get(ip) || 0;
+  if (failures + busy >= max) return null;
+  ipInFlight.set(ip, busy + 1);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    const left = (ipInFlight.get(ip) || 1) - 1;
+    if (left > 0) ipInFlight.set(ip, left); else ipInFlight.delete(ip);
+  };
 }
 function noteIpFailure(ip) { prune(ipAttempts, Date.now()); bump(ipAttempts, ip, Date.now()); }
 
@@ -47,29 +82,38 @@ function noteIpFailure(ip) { prune(ipAttempts, Date.now()); bump(ipAttempts, ip,
 // every five minutes and she could never sign in again, for as long as the
 // attacker cared to keep it up.
 //
-// Now the credential is ALWAYS checked, and the penalty only ever costs a failed
+// So the PASSWORD is always checked, and the penalty only ever costs a failed
 // attempt time: each failure pushes the next attempt out by min(2^failures, 300)
 // seconds, an attempt made inside that window waits (briefly) and is answered
-// with how long is left, and one correct password or code clears the record
-// outright. Whoever knows the secret gets in; whoever doesn't pays a cost that
+// with how long is left, and one correct password clears the record outright.
+// Whoever knows the password gets through; whoever doesn't pays a cost that
 // doubles. The per-IP budget above and scrypt's own cost remain what bound the
-// volume of guessing — a limiter that can be turned against the account it
-// protects is the worse of the two bugs.
+// volume of password guessing — a limiter that can be turned against the
+// account it protects is the worse of the two bugs.
+//
+// The CODE steps are strict instead, because only someone who has just given
+// the right password can reach them, so nothing a stranger does can lock the
+// owner out of them. Wrong codes are counted on their own record (codeFailures)
+// — a stranger's wrong passwords never delay the owner's code — with the same
+// doubling delay, but here it is enforced: while a penalty is owed the code is
+// not looked at, whether or not it is right. One code per account is checked
+// at a time, and five wrong codes burn the pending token (auth.missPending), so
+// a further guess means giving the password again.
 const MAX_DELAY_S = 300;           // the cap: 5 minutes between guesses
 const MAX_HOLD_MS = 2000;          // never park a request for longer than this
 
 /** Seconds still owed on this account's penalty, 0 if it is clear. */
-function accountDelay(username) {
-  const rec = acctFailures.get(uname(username));
+function accountDelay(username, map = acctFailures) {
+  const rec = map.get(uname(username));
   if (!rec) return 0;
   const left = rec.nextAt - Date.now();
   return left > 0 ? Math.ceil(left / 1000) : 0;
 }
 
 /**
- * Pay the part of the penalty that is charged in wall-clock time. Capped, so
- * the process is never full of sockets parked for minutes; the remainder is
- * reported to the caller instead.
+ * Pay the part of the password penalty that is charged in wall-clock time.
+ * Capped, so the process is never full of sockets parked for minutes; the
+ * remainder is reported to the caller instead.
  */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function payDelay(username) {
@@ -79,11 +123,11 @@ async function payDelay(username) {
 }
 
 /** Record a failure and return the seconds before the next attempt is free. */
-function noteFailure(username) {
+function noteFailure(username, map = acctFailures) {
   const key = uname(username);
   const now = Date.now();
-  prune(acctFailures, now);
-  const prev = acctFailures.get(key);
+  prune(map, now);
+  const prev = map.get(key);
   const rec  = prev && now <= prev.reset ? prev : { count: 0, nextAt: 0, reset: 0 };
   rec.count += 1;
   const waitS = Math.min(2 ** rec.count, MAX_DELAY_S);
@@ -91,10 +135,10 @@ function noteFailure(username) {
   // Forgotten entirely once the penalty has run out plus the usual window, so
   // yesterday's typo is not still counted against you tomorrow.
   rec.reset  = rec.nextAt + WINDOW_MS;
-  acctFailures.set(key, rec);
+  map.set(key, rec);
   return waitS;
 }
-function clearFailures(username) { acctFailures.delete(uname(username)); }
+function clearFailures(username, map = acctFailures) { map.delete(uname(username)); }
 
 // The message a throttled failure gets. Deliberately the same wording whether
 // the username exists or not.
@@ -151,12 +195,25 @@ router.post('/logout', async (req, res) => {
 });
 router.get('/logout',  (req, res) => res.redirect('/login'));
 
+/**
+ * Wrap a sign-in step so it holds a place in its IP's budget while it runs.
+ *
+ * The place is claimed here, before the step's first await (see reserveIp), and
+ * handed back however the step ends. A step that fails charges its failure
+ * (noteIpFailure) before handing the place back, so the two are never both
+ * missing from the count.
+ */
+const attempt = (step) => async (req, res) => {
+  const release = reserveIp(req.ip);
+  if (!release) return res.status(429).json({ ok: false, error: 'Too many attempts. Try again in a few minutes.' });
+  try { await step(req, res); }
+  finally { release(); }
+};
+
 // ─── Step 1: password ─────────────────────────────────────────────────────────
 // On success returns either a 2FA challenge (enrol or verify) plus a short-lived
 // pending token. The password alone never sets the session.
-router.post('/login', async (req, res) => {
-  if (!ipAllowed(req.ip)) return res.status(429).json({ ok: false, error: 'Too many attempts. Try again in a few minutes.' });
-
+router.post('/login', attempt(async (req, res) => {
   const { username, password } = req.body || {};
   // Pay any outstanding penalty BEFORE checking, and check regardless of it —
   // the person who knows the password is never turned away (see noteFailure).
@@ -196,62 +253,93 @@ router.post('/login', async (req, res) => {
   }
 
   res.json({ ok: true, step: 'verify', pending: auth.signPending(user.username, 'verify') });
-});
+}));
+
+// ─── Step 2: the code ─────────────────────────────────────────────────────────
+/**
+ * Everything a code step decides BEFORE it looks at the code: is the pending
+ * token good, is another code for this account already being checked, and is a
+ * penalty still owed. All synchronous, so a burst cannot slip past together.
+ *
+ * Answers the request itself and returns null when the attempt may not go
+ * ahead. Otherwise returns the username with the account's code slot held;
+ * the caller gives it back with endCodeStep() when it has answered.
+ */
+function beginCodeStep(req, res, purpose) {
+  const username = auth.verifyPending(req.body?.pending, purpose);
+  if (!username) { res.status(440).json({ ok: false, error: 'Session expired. Please start again.' }); return null; }
+  if (codeBusy.has(uname(username))) {
+    res.status(429).json({ ok: false, error: 'A code for this account is already being checked. Try again in a moment.' });
+    return null;
+  }
+  const owed = accountDelay(username, codeFailures);
+  if (owed) { tooSoon(res, owed); return null; }
+  codeBusy.add(uname(username));
+  return username;
+}
+const endCodeStep = (username) => codeBusy.delete(uname(username));
+
+/**
+ * A wrong code: charge it to the IP and to the account's code record, and
+ * spend the pending token if that was its fifth.
+ */
+function wrongCode(req, res, username, { message, burnt }) {
+  noteIpFailure(req.ip);
+  noteFailure(username, codeFailures);
+  if (auth.missPending(req.body?.pending)) {
+    return res.status(440).json({ ok: false, reason: 'too_many_codes', error: burnt });
+  }
+  return res.status(401).json({ ok: false, error: message });
+}
 
 // ─── Step 2a: confirm enrolment ───────────────────────────────────────────────
-router.post('/login/enrol', async (req, res) => {
-  if (!ipAllowed(req.ip)) return res.status(429).json({ ok: false, error: 'Too many attempts.' });
-  const username = auth.verifyPending(req.body?.pending, 'enrol');
-  if (!username) return res.status(440).json({ ok: false, error: 'Session expired. Please start again.' });
-  const owed = await payDelay(username);
+router.post('/login/enrol', attempt(async (req, res) => {
+  const username = beginCodeStep(req, res, 'enrol');
+  if (!username) return;
+  try {
+    const done = await users.confirmEnrolment(username, req.body?.token);
+    if (!done) {
+      return wrongCode(req, res, username, {
+        message: 'That code did not match. Try the current code from your app.',
+        // Signing in again starts a new enrolment, so the codes on screen go.
+        burnt: 'Too many incorrect codes. Sign in again and you will be given a fresh QR code and a fresh set of recovery codes.',
+      });
+    }
+    clearFailures(username, codeFailures);
 
-  const done = await users.confirmEnrolment(username, req.body?.token);
-  if (!done) {
-    // The growing per-account delay applies to the second factor too — the
-    // per-IP budget alone is defeated by a botnet, letting one pending token
-    // seed unlimited guesses at a six-digit code.
-    noteIpFailure(req.ip);
-    const waitS = noteFailure(username);
-    if (owed) return tooSoon(res, waitS);
-    return res.status(401).json({ ok: false, error: 'That code did not match. Try the current code from your app.' });
-  }
-  clearFailures(username);
-
-  auth.consumePending(req.body?.pending);   // one successful use per pending token
-  const user = await users.findByUsername(username);
-  auth.setSessionCookie(res, user);
-  res.json({ ok: true, next: safeNext(req.body?.next, user.role) });
-});
+    auth.consumePending(req.body?.pending);   // one successful use per pending token
+    const user = await users.findByUsername(username);
+    auth.setSessionCookie(res, user);
+    res.json({ ok: true, next: safeNext(req.body?.next, user.role) });
+  } finally { endCodeStep(username); }
+}));
 
 // ─── Step 2b: verify code (or recovery code) ──────────────────────────────────
-router.post('/login/verify', async (req, res) => {
-  if (!ipAllowed(req.ip)) return res.status(429).json({ ok: false, error: 'Too many attempts.' });
-  const username = auth.verifyPending(req.body?.pending, 'verify');
-  if (!username) return res.status(440).json({ ok: false, error: 'Session expired. Please start again.' });
-  const owed = await payDelay(username);
+router.post('/login/verify', attempt(async (req, res) => {
+  const username = beginCodeStep(req, res, 'verify');
+  if (!username) return;
+  try {
+    const user = await users.findByUsername(username);
+    // The account can be deleted between the password step and here; without this
+    // guard verifyTotp(null, …) threw and the request hung with no response.
+    if (!user) return res.status(401).json({ ok: false, error: 'Please start again.' });
+    const token = String(req.body?.token || '').trim();
 
-  const user = await users.findByUsername(username);
-  // The account can be deleted between the password step and here; without this
-  // guard verifyTotp(null, …) threw and the request hung with no response.
-  if (!user) return res.status(401).json({ ok: false, error: 'Please start again.' });
-  const token = String(req.body?.token || '').trim();
+    const ok = (await users.verifyTotpAndConsume(user, token)) ||
+               (req.body?.recovery && await users.useRecoveryCode(username, token));
+    if (!ok) {
+      return wrongCode(req, res, username, {
+        message: 'Incorrect code.',
+        burnt: 'Too many incorrect codes. Enter your password again.',
+      });
+    }
+    clearFailures(username, codeFailures);
 
-  const ok = (await users.verifyTotpAndConsume(user, token)) ||
-             (req.body?.recovery && await users.useRecoveryCode(username, token));
-  if (!ok) {
-    // The same growing delay on the code step (see /login/enrol) — a leaked
-    // password otherwise buys unlimited 6-digit guesses via one IP botnet.
-    noteIpFailure(req.ip);
-    const waitS = noteFailure(username);
-    if (owed) return tooSoon(res, waitS);
-    return res.status(401).json({ ok: false, error: 'Incorrect code.' });
-  }
-  clearFailures(username);
-
-  auth.consumePending(req.body?.pending);   // one successful use per pending token
-  auth.setSessionCookie(res, user);
-  res.json({ ok: true, next: safeNext(req.body?.next, user.role) });
-});
+    auth.consumePending(req.body?.pending);   // one successful use per pending token
+    auth.setSessionCookie(res, user);
+    res.json({ ok: true, next: safeNext(req.body?.next, user.role) });
+  } finally { endCodeStep(username); }
+}));
 
 // Who am I — lets the admin page show the signed-in user and a logout control.
 router.get('/api/me', async (req, res) => {

@@ -354,6 +354,33 @@ function consumePending(token) {
   spentPending.set(p.jti, p.exp || Date.now() + 5 * 60 * 1000);
 }
 
+// Wrong codes burn a pending token too. Only someone who has just given the
+// right password holds one, but a single token used to allow as many guesses
+// at the six-digit code as could be sent in its five minutes. After five wrong
+// codes it is spent, and the next try starts again at the password step, which
+// is limited per IP.
+const PENDING_MAX_MISSES = 5;
+const pendingMisses = new Map();   // jti -> { count, exp }
+
+/**
+ * Record a wrong code against a pending token.
+ * @returns {boolean} true when that was its last allowed miss and the token is
+ *   now spent.
+ */
+function missPending(token) {
+  const p = verifyToken(token);
+  if (!p || !p.jti) return false;
+  const now = Date.now();
+  for (const [j, r] of pendingMisses) if (r.exp < now) pendingMisses.delete(j);
+  const rec = pendingMisses.get(p.jti) || { count: 0, exp: p.exp || now + 5 * 60 * 1000 };
+  rec.count += 1;
+  pendingMisses.set(p.jti, rec);
+  if (rec.count < PENDING_MAX_MISSES) return false;
+  pendingMisses.delete(p.jti);
+  consumePending(token);
+  return true;
+}
+
 // ─── Re-confirmation throttle (recovery key / own password) ───────────────────
 // The recovery key exists to survive a STOLEN ADMIN SESSION: the thief already
 // holds the cookie, so the key is the only thing between them and releasing a
@@ -419,6 +446,6 @@ module.exports = {
   setSessionCookie, clearSessionCookie, sessionUser,
   revokeToken, revokeSession, isRevoked,
   checkSecretThrottle, registerSecretFailure, clearSecretFailures,
-  signPending, verifyPending, consumePending,
+  signPending, verifyPending, consumePending, missPending, PENDING_MAX_MISSES,
   ADMIN_ROLES, SALES_ROLES, ALL_ROLES, homeFor,
 };
