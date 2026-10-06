@@ -68,8 +68,6 @@ const planOf = (id) => db.store.floorplans.find(f => f.showId === id);
   // A public read: which event did the request end up in?
   app.get('/which', (_req, res) => res.json({ showId: config.showId }));
   app.get('/floorplan/:show', (_req, res) => res.send('page'));
-  // "Who am I" belongs to no event; it must answer even for a stale page.
-  app.get('/api/me', (_req, res) => res.json({ user: 'chris' }));
   app.use((req, _res, next) => { req.admin = { user: 'chris', role: 'owner' }; next(); });
   app.use('/api', api);
   const server = app.listen(0);
@@ -105,9 +103,6 @@ const planOf = (id) => db.store.floorplans.find(f => f.showId === id);
     check('and nothing was written to any event', JSON.stringify(db.store.settings) === before);
     r = await call('/api/floorplan', { show: 'lex24', method: 'DELETE', headers: { 'X-Confirm-Password': 'pw' } });
     check('the plan is not removed either', r.status === 409 && !!planOf('LEX'));
-    r = await call('/api/me', { show: 'lex24' });
-    check('but "who am I" still answers, so the page can tell reload from sign-in',
-          r.status === 200 && r.body && r.body.user === 'chris', `${r.status} ${JSON.stringify(r.body)}`);
 
     console.log('\nWhat a visitor sees is unchanged');
     r = await call('/which', { show: 'lex24' });

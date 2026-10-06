@@ -29,10 +29,7 @@ const GONE = 'This event is no longer at that address. Reload the page.';
 
 // Everything under /api acts as somebody: the console, the sales dashboard,
 // the Settings cards. Those are the calls that must never land on another event.
-// Except "who am I", which belongs to no event: a page whose event has moved
-// still has to be able to ask whether its session is alive, or it cannot tell
-// "reload" from "sign in again".
-const isApi = (req) => /^\/api(\/|$)/.test(req.path || '') && req.path !== '/api/me';
+const isApi = (req) => /^\/api(\/|$)/.test(req.path || '');
 
 /**
  * The show a slug names, whether or not it is still on the air.
