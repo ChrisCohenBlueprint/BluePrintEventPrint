@@ -672,6 +672,8 @@ body {
   0%, 100% { stroke-width: 3px; filter: drop-shadow(0 0 6px  rgba(244,63,94,0.55)) !important; }
   50%      { stroke-width: 9px; filter: drop-shadow(0 0 22px rgba(244,63,94,1))    !important; }
 }
+/* The same ring put back after the plan is re-tagged: held, not pulsed again. */
+.booth-search-hit.booth-search-held { animation: none; }
 
 /* Shift-select highlight (cyan) — distinct from the white selection + rose search. */
 .booth-multi { stroke: #38bdf8 !important; stroke-width: 6px !important;

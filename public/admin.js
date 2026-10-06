@@ -347,15 +347,22 @@ function runAdminBoothSearch() {
   if (!n) { adminToast(`No booth matching "${v}".`, 'error'); return; }
   selectAdminBooth(n);   // clears prior search hit + sets the selection
   focusAdminBooth(n);
+  searchHitId = n;       // remembered, so a re-tag can put the highlight back
   // Flag the found stand with a pulsing highlight so it's obvious which box it
   // is. Remove + reflow + re-add so the pulse restarts even on a repeat search.
   const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   if (el) {
-    el.classList.remove('booth-search-hit');
+    el.classList.remove('booth-search-hit', 'booth-search-held');
     void el.getBoundingClientRect();
     el.classList.add('booth-search-hit');
   }
 }
+
+// The stand the last search found, until another is selected. A re-tag — any
+// split, merge or renumber, by anyone — rebuilds the stands and BoothMap.clear
+// strips the highlight, so the found stand went back to looking like every
+// other one until the admin searched again.
+let searchHitId = null;
 
 // ─── Load Admin SVG ───────────────────────────────────────────────────────────
 let adminSvgReady = false;
@@ -458,6 +465,9 @@ function tagAdminBooths() {
   // shift-selection the admin was midway through building.
   if (selectedAdminId) multiEl(selectedAdminId)?.classList.add('booth-selected');
   if (multiSel.size) renderMultiSelect();
+  // And the stand a search found keeps its highlight — held still, not
+  // pulsing again: the re-tag was somebody's change, not a new search.
+  if (searchHitId) multiEl(searchHitId)?.classList.add('booth-search-hit', 'booth-search-held');
 
   paintAdminAreas();   // a re-tag rebuilds the plan under the area logos
 }
@@ -686,7 +696,8 @@ function selectAdminBooth(id) {
   }
   // Drop any lingering search highlight when the selection changes (e.g. a click
   // elsewhere), so only the current search hit ever pulses.
-  svgDoc.querySelectorAll('.booth-search-hit').forEach((e) => e.classList.remove('booth-search-hit'));
+  svgDoc.querySelectorAll('.booth-search-hit').forEach((e) => e.classList.remove('booth-search-hit', 'booth-search-held'));
+  searchHitId = null;
   selectedAdminId = id;
   svgDoc.querySelector(`[data-booth="${CSS.escape(id)}"]`)?.classList.add('booth-selected');
   renderAdminBoothAction(id);

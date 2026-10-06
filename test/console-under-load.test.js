@@ -17,6 +17,7 @@
  *   - The Undo on a release was wiped by the next toast of any kind.
  *   - A logo larger than the server stores was sent anyway, dropped the
  *     connection on the way, and nothing was said.
+ *   - A stand found by search lost its mark whenever anyone reshaped the plan.
  */
 const fs = require('fs');
 const path = require('path');
@@ -207,6 +208,28 @@ stands[4].displayNumber = 'A4';                                                 
     await page.setInputFiles('#aba-logo-file', { name: 'small.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') });
     await page.waitForTimeout(400);
     check('and the server\'s own refusal is shown when it gives one', /too large/i.test(await toasts(page)), await toasts(page));
+
+    console.log('\nA stand found by search, when the plan is redrawn');
+    await page.click('[data-section="floorplan"]');
+    await page.waitForTimeout(200);
+    // BoothMap.clear now strips the search mark from every stand it rebuilds
+    // (public/booth-map.js on the merged branch); this copy is made to do the
+    // same, so what is tested is the console putting the mark back.
+    await page.evaluate(() => {
+      const clear = BoothMap.clear;
+      BoothMap.clear = function (svg) {
+        clear.apply(this, arguments);
+        svg.querySelectorAll('.booth-search-hit').forEach(e => e.classList.remove('booth-search-hit'));
+      };
+    });
+    await page.fill('#admin-fp-search', '104');
+    await page.press('#admin-fp-search', 'Enter');
+    await page.waitForTimeout(200);
+    const marked = () => page.evaluate(() => !!document.querySelector('#admin-svg-mount svg [data-booth="104"].booth-search-hit'));
+    check('the search marks the stand it found', await marked());
+    await page.evaluate(() => { window.__stand('113').removed = true; window.__stand('113').status = 'removed'; window.__broadcast(); });
+    await settle(page);
+    check('and a colleague reshaping the plan does not take the mark away', await marked());
 
     check('the page raised no errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   } finally {
