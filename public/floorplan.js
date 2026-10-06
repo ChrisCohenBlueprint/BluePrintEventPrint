@@ -152,6 +152,21 @@ let shortlist   = [];      // boothNumbers the visitor wants to enquire about
 // real identity. Identity (n / boothNumber) stays the key for lookups + emits.
 const shownN = (n) => (booths[n] && booths[n].displayNumber) || n;
 
+/**
+ * The company a stand may be published under: a SOLD stand's, and nobody
+ * else's.
+ *
+ * A hold is a provisional deal, and naming the company on one announces a
+ * booking nobody has agreed to. The panel, the directory and the accessible
+ * name always kept to that; the painter and the search did not — "Acme Holdings
+ * Ltd" was drawn on the orange stand, typing "acme" offered it as an exhibitor,
+ * and the PNG download carried it. Every place that shows, searches or exports
+ * a company reads it through here, and state:full drops a held stand's company
+ * before it is ever stored (see there), so neither half depends on the server
+ * withholding it.
+ */
+const publicCompany = (b) => (b && b.status === 'sold' && b.company) || '';
+
 // Area unit label (m²/ft²), pushed from the server. A label only — no price or
 // numeric conversion reaches the public client.
 let UNIT = 'm²';
@@ -1460,7 +1475,12 @@ socket.on('state:full', (allRows) => {
   // Which stands actually changed appearance, worked out BEFORE the merge while
   // the previous values are still readable.
   const dirty = [];
-  rows.forEach(b => {
+  rows.forEach(row => {
+    // Only a sold stand's company is kept — see publicCompany. Set explicitly
+    // rather than left out: each row is MERGED into what the page already
+    // holds, so a stand that was sold and has gone on hold would otherwise keep
+    // the company it had while sold once the server stops sending one.
+    const b = { ...row, company: row.status === 'sold' ? (row.company || null) : null };
     const n = b.boothNumber;
     const sig = visualSig(b);
     if (lastVisual[n] !== sig) { lastVisual[n] = sig; dirty.push(n); }
@@ -1922,8 +1942,9 @@ function deliverPNG(blob, filename) {
 // replacing it.
 //
 // The country and activity a stand carries only reach the public client on a
-// SOLD stand (see booths.toPublic), so a search can never reveal who is behind
-// a provisional hold.
+// SOLD stand (see booths.toPublic), and the company is only ever read through
+// publicCompany(), so a search can never reveal who is behind a provisional
+// hold.
 //
 // Matching stands are lit; everything else fades. Nothing is hidden: a visitor
 // searching for a competitor still has to see the hall around them, and hiding
@@ -1940,7 +1961,7 @@ const filterActive = () => !!(filter.q || filter.country || filter.activity);
 
 /** Every string a stand can be found by, lowercased once per search. */
 function haystack(n, b) {
-  const parts = [n, b.displayNumber || '', b.company || ''];
+  const parts = [n, b.displayNumber || '', publicCompany(b)];
   const c = countryOf(b.country);
   if (c) parts.push(c.name, c.code, ...(c.aliases || []));
   (b.tags || []).forEach(k => { const t = tagByKey(k); if (t) parts.push(t.label); });
@@ -2116,7 +2137,8 @@ function buildSuggestions(q) {
     if (!b) return;
     if (b.country) counts.country.set(b.country, (counts.country.get(b.country) || 0) + 1);
     (b.tags || []).forEach(k => counts.activity.set(k, (counts.activity.get(k) || 0) + 1));
-    if (b.company && b.company.toLowerCase().includes(term)) companies.push({ n, company: b.company });
+    const company = publicCompany(b);
+    if (company && company.toLowerCase().includes(term)) companies.push({ n, company });
   });
 
   counts.country.forEach((n, code) => {
@@ -2150,7 +2172,7 @@ function buildSuggestions(q) {
     if (out.length > 20) return;
     if (String(shownN(n)).toLowerCase() === term || n.toLowerCase() === term) {
       if (!out.some(o => o.kind === 'booth' && o.value === n)) {
-        out.push({ kind: 'booth', value: n, label: `Stand ${shownN(n)}`, meta: booths[n]?.company || STATUS_LABEL[booths[n]?.status] || '' });
+        out.push({ kind: 'booth', value: n, label: `Stand ${shownN(n)}`, meta: publicCompany(booths[n]) || STATUS_LABEL[booths[n]?.status] || '' });
       }
     }
   });
@@ -2226,8 +2248,10 @@ function pickSuggestion(i) {
 
   if (sg.kind === 'booth') {
     // A named exhibitor is a destination, not a filter: open the stand and go
-    // to it, and leave the plan lit so the visitor can see where it sits.
-    filter.q = booths[sg.value]?.company || '';
+    // to it, and leave the plan lit so the visitor can see where it sits. A
+    // stand picked by its number — a held one among them — is lit by its
+    // number, never by a company it may not publish.
+    filter.q = publicCompany(booths[sg.value]) || String(shownN(sg.value));
     if (input) input.value = filter.q;
     hideSuggestions();
     applyFilter();
@@ -2425,12 +2449,15 @@ function applyVisual(n) {
   // innerHTML — the value reaches here from the public enquiry form.
   let textNode = svgDoc.getElementById(`text-booth-${n}`);
   let logoNode = svgDoc.getElementById(`logo-booth-${n}`);
-  const company = booths[n]?.company;
+  // Sold stands only. This used to paint any stand that was not available, so
+  // a held stand carried its prospect's name — and the PNG export, which
+  // clones these nodes, carried it into the download.
+  const company = publicCompany(booths[n]);
   // A sponsor's logo, sent only for a stand flagged as sponsored. It REPLACES
   // the exhibitor name rather than sitting beside it: on a 9 m² stand there is
   // room for one or the other, and a logo already says the name.
   const logo = booths[n]?.sponsorLogo || null;
-  const wantsName = status !== 'available' && company && !logo;
+  const wantsName = !!company && !logo;
 
   // VISUAL box (post-transform): most LEX27 stands are rotated, so the local
   // getBBox would place the name off the stand and fit it to swapped
