@@ -1098,7 +1098,10 @@ router.post('/inquiries/:id/assign', async (req, res, next) => {
 router.post('/inquiries/:id/send', async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
-    const lead = await inquiries.col().findOne({ _id: new ObjectId(req.params.id) });
+    // This event's lead only. It was read by id alone, so another event's lead
+    // was composed and "sent" (ok: true) while the scoped assign and recordSend
+    // below quietly matched nothing.
+    const lead = await inquiries.get(new ObjectId(req.params.id));
     if (!lead) return res.status(404).json({ error: 'Lead not found.' });
 
     const member = (await findMember(req.body?.name)) || lead.assignedTo;
@@ -1113,12 +1116,19 @@ router.post('/inquiries/:id/send', async (req, res, next) => {
 
     const c = lead.contact || {};
     const stands = (lead.boothsOfInterest || []).join(', ') || 'none specified';
-    const areaNames = (lead.areasOfInterest || [])
-      .map(k => (planAreaData.get(k) || {}).label || k);
+    // Names from THIS event's catalogue. A copied event shares its package keys
+    // with the one it was copied from, so looking the keys up across every
+    // event could name the other event's package in the email; areas are read
+    // the same way, so an event whose plan names its own areas is named right.
+    const areaKeys = lead.areasOfInterest || [];
+    const areaRows = areaKeys.length ? await planAreas.all() : [];
+    const areaNames = areaKeys
+      .map(k => (areaRows.find(a => a.key === k) || planAreaData.get(k) || {}).label || k);
     const sponsorKeys = lead.sponsorsOfInterest || [];
     let sponsorNames = sponsorKeys;
     if (sponsorKeys.length) {
-      const rows = await sponsors.col().find({ key: { $in: sponsorKeys } }).project({ key: 1, name: 1 }).toArray();
+      const rows = await sponsors.col().find({ showId: config.showId, key: { $in: sponsorKeys } })
+        .project({ key: 1, name: 1 }).toArray();
       sponsorNames = sponsorKeys.map(k => (rows.find(r => r.key === k) || {}).name || k);
     }
 
@@ -1151,6 +1161,13 @@ router.post('/inquiries/:id/send', async (req, res, next) => {
     const manager = await rosterManager();
     const cc = manager ? manager.email : '';
 
+    // Recorded first, and checked: both writes are scoped to this event, and a
+    // lead deleted since it was read above matches nothing. That is a lead not
+    // found, not a send — so it is said before anything goes out.
+    const assigned = await inquiries.assign(lead._id, member);
+    const recorded = assigned && await inquiries.recordSend(lead._id, { to, cc, by: req.admin?.user });
+    if (!recorded) return res.status(404).json({ error: 'Lead not found.' });
+
     // Fire the webhook if configured — this is where real automation plugs in.
     if (config.notifyWebhook) {
       fetch(config.notifyWebhook, {
@@ -1158,9 +1175,6 @@ router.post('/inquiries/:id/send', async (req, res, next) => {
         body: JSON.stringify({ type: 'enquiry.forward', to, cc, subject, body, lead }),
       }).catch(e => console.error('Forward webhook failed:', e.message));
     }
-
-    await inquiries.assign(new ObjectId(req.params.id), member);
-    await inquiries.recordSend(new ObjectId(req.params.id), { to, cc, by: req.admin?.user });
 
     res.json({ ok: true, to, cc, subject, body, webhook: !!config.notifyWebhook });
   } catch (e) { next(e); }

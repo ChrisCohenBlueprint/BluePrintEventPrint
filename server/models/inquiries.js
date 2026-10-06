@@ -239,16 +239,57 @@ const recent = (limit = 100, { archived = false } = {}) =>
  */
 const scoped = (id) => ({ _id: id, showId: config.showId });
 
-/** An enquiry plus the browsing history that led to it — the sales view. */
+/** One lead, if it belongs to the current show. */
+const get = (id) => col().findOne(scoped(id));
+
+/**
+ * An enquiry plus the browsing history that led to it — the sales view.
+ *
+ * Only the events that belong to THIS contact. Reading the whole session was
+ * wrong whenever a browser was shared — a stand-side tablet, a family laptop:
+ * B's lead showed A's browsing and A's inquiry.submit, A's email in it, and
+ * anything browsed after B had enquired as well, none of which is "the history
+ * that preceded it". So the trail is:
+ *
+ *   - events attributed to this contact (attributeSession stamps them with the
+ *     enquiry's id when it is made), or to an earlier enquiry by the same
+ *     person in the same session — a returning visitor's whole trail; and
+ *   - events the session left unattributed — attribution is best effort, and
+ *     can fail after the enquiry is stored — from before this enquiry and
+ *     after the last one somebody ELSE made on that browser.
+ */
 async function withHistory(id) {
-  const inquiry = await col().findOne(scoped(id));
+  const inquiry = await get(id);
   if (!inquiry) return null;
   // A lead with no session has no browsing trail. Querying activity by a null
   // sessionId would match EVERY anonymous/migration-imported event that also
   // has sessionId:null, splicing unrelated history onto this one lead.
   if (!inquiry.sessionId) return { ...inquiry, history: [] };
+
+  const until = inquiry.createdAt instanceof Date ? inquiry.createdAt : null;
+  const email = inquiry.contact?.email || null;
+  const earlier = await col()
+    .find({ showId: config.showId, sessionId: inquiry.sessionId, ...(until ? { createdAt: { $lte: until } } : {}) })
+    .project({ contact: 1, createdAt: 1 }).toArray();
+  const same = (x) => String(x._id) === String(inquiry._id);
+  const mine = earlier.filter(x => same(x) || (email && x.contact?.email === email)).map(x => x._id);
+  if (!mine.some(x => String(x) === String(inquiry._id))) mine.push(inquiry._id);
+  const since = earlier
+    .filter(x => !same(x) && x.contact?.email !== email && x.createdAt instanceof Date)
+    .reduce((latest, x) => (!latest || x.createdAt > latest ? x.createdAt : latest), null);
+
+  const ts = {};
+  if (until) ts.$lte = until;
+  if (since) ts.$gt = since;
   const history = await getDb().collection('activity')
-    .find({ showId: config.showId, sessionId: inquiry.sessionId })
+    .find({
+      showId: config.showId,
+      sessionId: inquiry.sessionId,
+      $or: [
+        { 'actor.contactId': { $in: mine } },
+        { 'actor.contactId': { $exists: false }, ...(Object.keys(ts).length ? { ts } : {}) },
+      ],
+    })
     .sort({ ts: 1 }).limit(500).toArray();
   return { ...inquiry, history };
 }
@@ -294,4 +335,4 @@ async function recordSend(id, { to, cc, by }) {
   return res.matchedCount === 1;
 }
 
-module.exports = { col, create, recent, withHistory, setStatus, STATUSES, assign, recordSend, setArchived, remove };
+module.exports = { col, create, recent, get, withHistory, setStatus, STATUSES, assign, recordSend, setArchived, remove };
