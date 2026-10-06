@@ -58,8 +58,8 @@ flagged to the rep before they send. Proposals carry a per-show reference
 
 ### Producing the PDF
 
-The rep opens **Save as PDF** on a proposal, which loads the print view and calls
-the browser's print dialog; they choose *Save as PDF* as the destination and
+The rep opens **Save as PDF** on a proposal, which loads the print view
+(`/sales/<event>/menu/<id>/print`) and calls the browser's print dialog; they choose *Save as PDF* as the destination and
 email the file. The print page sits behind the same login as the rest of
 `/sales` — the client receives the file, never a link, and nothing is published
 to a public URL.
