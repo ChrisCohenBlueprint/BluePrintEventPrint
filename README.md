@@ -154,7 +154,7 @@ asked.
 | Command | Does |
 |---|---|
 | `npm test` | The full suite below. No database needed. |
-| `npm run check` | `check:security` + `check:browser` against a **running local** server. Both refuse to run against an Atlas URI. |
+| `npm run check` | `check:security` + `check:browser` against a **running local** server. They book stands and submit an enquiry, so both refuse unless the server they drive is on this machine and `MONGO_URI` — from the shell, or this checkout's `.env` as a server started here would read it — is a local database. Start the server and run the check with the same local `MONGO_URI`. |
 | `npm run validate:artwork <file.svg>` | Scores a floorplan against the artwork spec and names the failed clauses. |
 | `node scripts/admin-account.js` | Break-glass account tool: `list`, `create`, `role`, `reset-2fa`, `delete`, `seed-sales`. Needs the database, not a login. |
 | `node scripts/preview-stands.js` | Prints what the extractor reads from an SVG. Writes nothing. |

@@ -39,6 +39,12 @@
  *                    unless told to — every run used to revert the admin's and
  *                    the CSV's edits and bring deleted packages back — and it
  *                    creates no index of its own to clash with the server's.
+ *
+ *   the checks     — check:security and check:browser book stands and submit
+ *                    an enquiry. They refuse unless the server they drive is on
+ *                    this machine AND the database is local — read the way a
+ *                    server started here reads it, .env included. They used to
+ *                    check only their own MONGO_URI, only for "mongodb+srv".
  */
 const fs = require('fs');
 const os = require('os');
@@ -293,6 +299,38 @@ try {
         conf(over).tier === 'platinum');
   check('but never the price or sold-out state', conf(over).price === 42000 &&
         (over.store.sponsors || []).find(p => p.key === 'bags').soldOut === true);
+
+  console.log('\nThe checks refuse unless both ends are local');
+  const check_ = (script, args, env, cwd = ROOT) => {
+    const e = { ...process.env, ...env };
+    for (const [k, v] of Object.entries(env)) if (v === undefined) delete e[k];
+    const r = spawnSync(process.execPath, [path.join(ROOT, script), ...args], { cwd, env: e, encoding: 'utf8', timeout: 30000 });
+    return { code: r.status, out: `${r.stdout}${r.stderr}` };
+  };
+  const LOCAL = 'mongodb://127.0.0.1:27017';
+  const ATLAS_PLAIN = 'mongodb://u:p@cluster0-shard-00-00.abcde.mongodb.net:27017,cluster0-shard-00-01.abcde.mongodb.net:27017/?ssl=true';
+
+  const live = check_('scripts/browser-check.js', [], { BASE: 'https://floorplan.example.com', MONGO_URI: LOCAL });
+  check('browser-check refuses a server that is not on this machine',
+        live.code === 2 && /not on this machine/.test(live.out), live.out.trim().split('\n')[0]);
+  const plain = check_('scripts/browser-check.js', [], { BASE: 'http://127.0.0.1:3000', MONGO_URI: ATLAS_PLAIN });
+  check('browser-check refuses an Atlas URI that is not mongodb+srv',
+        plain.code === 2 && /MONGO_URI/.test(plain.out), plain.out.trim().split('\n')[0]);
+  const sec = check_('scripts/security-check.js', ['https://floorplan.example.com'], { MONGO_URI: LOCAL });
+  check('security-check refuses a server that is not on this machine', sec.code === 2 && /Refusing/.test(sec.out));
+
+  // The server reads .env; a check that does not would see no URI at all
+  // while the server beside it writes to the cluster .env names.
+  const elsewhere = fs.mkdtempSync(path.join(TMP, 'checkout-'));
+  fs.writeFileSync(path.join(elsewhere, '.env'), 'MONGO_URI=mongodb+srv://u:p@cluster0.abcde.mongodb.net/\n');
+  const dotenvAtlas = check_('scripts/security-check.js', ['http://127.0.0.1:3000'], { MONGO_URI: undefined }, elsewhere);
+  check(".env's Atlas URI is seen when the shell sets none", dotenvAtlas.code === 2 && /MONGO_URI/.test(dotenvAtlas.out),
+        dotenvAtlas.out.trim().split('\n')[0]);
+
+  const { isLocalMongo, isLoopback } = require('../scripts/lib/local-only');
+  check('a local database passes', isLocalMongo(LOCAL) && isLocalMongo('mongodb://localhost') && isLocalMongo(''));
+  check('a local server passes', isLoopback('http://127.0.0.1:3000') && isLoopback('http://localhost:3000') &&
+        isLoopback('http://[::1]:3000') && !isLoopback('http://127.0.0.1.example.com'));
 } finally {
   fs.rmSync(TMP, { recursive: true, force: true });
 }

@@ -150,8 +150,12 @@ npm run validate:artwork <file.svg>
 `check:security` proves anonymous sockets cannot mutate state and that the public
 payload carries no commercial fields. `check:browser` drives real Chrome through
 the consent gate, stand selection, the shortlist and enquiry submission,
-including the XSS assertions. Both **refuse to run against an Atlas URI** — they
-seed and mutate data.
+including the XSS assertions. They seed and mutate data, so both **refuse
+unless both ends are local**: the server they drive must be on this machine,
+and `MONGO_URI` — from the shell, or `.env` as a server started from this
+checkout would read it — must be a local database (`scripts/lib/local-only.js`,
+the same test `server/config.js` uses). They used to check only their own
+`MONGO_URI`, and only for `mongodb+srv`.
 
 `scripts/persistence-check.js` has been deleted. It authenticated with HTTP
 Basic, which this app stopped using when real accounts and 2FA arrived, so it
