@@ -50,6 +50,11 @@ async function ensureIndexes() {
     { key: { showId: 1, createdAt: -1 }, name: 'show_recent' },
     { key: { sessionId: 1 },             name: 'session' },
     { key: { 'contact.email': 1 },       name: 'email' },
+    // One enquiry per request id per show: the public form re-sends the same id
+    // with every retry, and this is what makes "stored once" hold even when two
+    // retries race. Partial, so the leads from before request ids are untouched.
+    { key: { showId: 1, requestId: 1 }, name: 'show_request_unique', unique: true,
+      partialFilterExpression: { requestId: { $type: 'string' } } },
   ]);
 
   // ── activity ────────────────────────────────────────────────────────────────

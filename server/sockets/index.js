@@ -11,7 +11,7 @@ const planAreas = require('../models/plan-areas');
 const users     = require('../models/users');
 const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
-const { track } = require('../services/tracking');
+const { track, socketIp } = require('../services/tracking');
 const { socketAuth, requireAdmin: requireAdminAuth,
         checkSecretThrottle, registerSecretFailure, clearSecretFailures } = require('../auth');
 
@@ -124,6 +124,35 @@ function limiter(perMin) {
     return true;
   };
 }
+
+// The same bucket, per ADDRESS rather than per socket. A socket's buckets start
+// full and die with it, so a script that opens a fresh socket for each event is
+// never limited by them at all. `burst` is how many may go at once, `perHour`
+// how fast that refills. The map is bounded: the least recently used address is
+// forgotten first, which at worst hands an idle address a full bucket again.
+function addressLimiter({ burst, perHour, max = 20_000 }) {
+  const buckets = new Map();   // address → { tokens, last }
+  return (address) => {
+    const key = address || 'unknown';
+    const now = Date.now();
+    const b = buckets.get(key) || { tokens: burst, last: now };
+    b.tokens = Math.min(burst, b.tokens + ((now - b.last) / 3_600_000) * perHour);
+    b.last = now;
+    buckets.delete(key);
+    buckets.set(key, b);
+    if (buckets.size > max) buckets.delete(buckets.keys().next().value);
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
+    return true;
+  };
+}
+
+// Enquiries per address. Each one is stored, fires the webhook and pings every
+// admin, and the only ceiling was per socket — so one script opening a socket
+// per enquiry stored as many as it liked. Generous enough for an office of
+// colleagues behind one address; a script gets ten, then one every three
+// minutes.
+const enquiriesFrom = addressLimiter({ burst: 10, perHour: 20 });
 
 // ─── Consent, once per visitor ────────────────────────────────────────────────
 // The page re-asserts a granted consent on every connection — once buffered
@@ -530,44 +559,60 @@ function register(io) {
 
     // Replaces booth:book / booth:hold on the public floorplan. Captures the
     // name and email that were previously discarded in the browser.
-    socket.on('inquiry:submit', safe('inquiry:submit', async (payload = {}, ack) => {
-      if (!allowSubmit()) return ack?.({ ok: false, errors: ['Too many submissions. Please wait a moment.'] });
-      if (payload.website) return ack?.({ ok: true });   // honeypot
+    socket.on('inquiry:submit', safe('inquiry:submit', async (payload, ack) => {
+      if (typeof payload === 'function') { ack = payload; payload = {}; }
+      const reply = typeof ack === 'function' ? ack : () => {};
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) payload = {};
+      if (!allowSubmit()) return reply({ ok: false, errors: ['Too many submissions. Please wait a moment.'] });
+      // Per address too: the limit above dies with the socket (see enquiriesFrom).
+      if (!enquiriesFrom(socketIp(socket))) {
+        return reply({ ok: false, errors: ['Too many enquiries from your network just now. Please try again in a few minutes.'] });
+      }
+      if (payload.website) return reply({ ok: true });   // honeypot
 
+      let res;
       try {
-        const res = await inquiries.create({ ...payload, sessionId: socket.data.sessionId });
-        if (res.ok) {
-          // create() accepts an enquiry on sponsorKeys alone, so boothNumbers may
-          // be absent or a non-array. Guard the .join — a raw string would throw
-          // here, drop into the catch, and tell the visitor it failed (prompting
-          // a duplicate submit) even though the lead was saved and the admin ping
-          // below was skipped.
-          // The stand numbers as STORED (validated + length-capped by create),
-          // rather than the raw form payload.
-          const booths = res.boothsOfInterest || [];
-          // The form now sends first/last separately; build a display name from
-          // whatever it provided (falling back to a legacy single `name`).
-          // A waiting-list request carries an email and no name by design, and
-          // "Enquiry from someone" tells the admin nothing they can act on — so
-          // fall back to the address before falling back to "someone".
-          const who = [payload.firstName, payload.lastName].map(s => (s || '').trim()).filter(Boolean).join(' ')
-                    || (payload.name || '').trim()
-                    || (payload.email || '').trim()
-                    || 'someone';
-          // Escaped per element, exactly like every other value that reaches the
-          // admin log. These originate in the PUBLIC enquiry form and are never
-          // checked against real stands, so an unescaped join put attacker-chosen
-          // HTML into addLog()'s innerHTML — script execution in the
-          // authenticated admin session, triggered by an anonymous visitor.
-          log(io, `📩 Enquiry from <strong>${escapeHtml(who)}</strong> — stands ${booths.map(escapeHtml).join(', ') || 'none'}`, 'inquiry');
-          // The socket payload is rendered with textContent by the client, so it
-          // carries the raw values.
-          io.to(adminRoom(config.showId)).emit('inquiry:new', { id: res.id, name: who, booths });
-        }
-        ack?.(res);
+        res = await inquiries.create({ ...payload, sessionId: socket.data.sessionId });
       } catch (e) {
+        // Only a failure to STORE it lands here. Once create() has written the
+        // enquiry it answers ok whatever else goes wrong, because telling the
+        // visitor it failed is what made them send it again.
         console.error('Inquiry failed:', e.message);
-        ack?.({ ok: false, errors: ['Something went wrong. Please try again.'] });
+        return reply({ ok: false, errors: ['Something went wrong. Please try again.'] });
+      }
+      reply(res);
+      // A retry of one already stored was announced the first time.
+      if (!res.ok || res.duplicate) return;
+
+      // Stored, and the visitor has been told so. Telling the admins is best
+      // effort: nothing here may turn a saved enquiry into a reported failure.
+      try {
+        // The stand numbers as STORED — validated against this event and
+        // length-capped by create() — rather than the raw form payload.
+        const booths = res.boothsOfInterest || [];
+        // The form now sends first/last separately; build a display name from
+        // whatever it provided (falling back to a legacy single `name`).
+        // A waiting-list request carries an email and no name by design, and
+        // "Enquiry from someone" tells the admin nothing they can act on — so
+        // fall back to the address before falling back to "someone". Only
+        // strings count: these are the raw payload, and a number or an object
+        // in one of them used to throw here.
+        const str = (v) => (typeof v === 'string' ? v.trim().slice(0, 200) : '');
+        const who = [payload.firstName, payload.lastName].map(str).filter(Boolean).join(' ')
+                  || str(payload.name)
+                  || str(payload.email)
+                  || 'someone';
+        // Escaped per element, exactly like every other value that reaches the
+        // admin log. These originate in the PUBLIC enquiry form, so an unescaped
+        // join put attacker-chosen HTML into addLog()'s innerHTML — script
+        // execution in the authenticated admin session, triggered by an
+        // anonymous visitor.
+        log(io, `📩 Enquiry from <strong>${escapeHtml(who)}</strong> — stands ${booths.map(escapeHtml).join(', ') || 'none'}`, 'inquiry');
+        // The socket payload is rendered with textContent by the client, so it
+        // carries the raw values.
+        io.to(adminRoom(config.showId)).emit('inquiry:new', { id: res.id, name: who, booths });
+      } catch (e) {
+        console.error(`Enquiry ${res.id} stored, but the admins were not told:`, e.message);
       }
     }, socket));
 
