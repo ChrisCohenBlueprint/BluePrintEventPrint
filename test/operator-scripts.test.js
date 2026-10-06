@@ -33,6 +33,12 @@
  *                    snapshots first, refuses what it cannot carry (a merged
  *                    stand, a booking with nowhere to go) and needs --force on
  *                    an event that has sold.
+ *
+ *   seed-sponsors  — a dry run until --apply. It seeds an event with no
+ *                    catalogue; on one that has a catalogue it changes nothing
+ *                    unless told to — every run used to revert the admin's and
+ *                    the CSV's edits and bring deleted packages back — and it
+ *                    creates no index of its own to clash with the server's.
  */
 const fs = require('fs');
 const os = require('os');
@@ -249,6 +255,44 @@ try {
   check('--show lna re-seeds North America only', na.code === 0 &&
         after.filter(b => b.showId === 'LNA' && !/^N/.test(b.boothNumber)).length === FILE.length &&
         after.filter(b => b.showId === 'LEX').length === FILE.length, na.out.slice(-200));
+
+  console.log('\nseed-sponsors.js seeds a catalogue, and leaves an edited one alone');
+  const SEED = 'scripts/seed-sponsors.js';
+  const sDry = run(SEED, ['--show', 'lna']);
+  check('a plain run is a dry run, and writes nothing', sDry.code === 0 && sDry.writes.length === 0 &&
+        /14 to add/.test(sDry.out), sDry.out.slice(-300));
+  const sNew = run(SEED, ['--show', 'lna', '--apply']);
+  const lnaPk = (sNew.store.sponsors || []).filter(p => p.showId === 'LNA');
+  check('--apply seeds an event with no catalogue', sNew.code === 0 && lnaPk.length === 14, `${lnaPk.length}`);
+  check('creating no index of its own', sNew.indexWork.length === 0, JSON.stringify(sNew.indexWork));
+  check('and the operator is told to restart', /Restart the web service/.test(sNew.out));
+
+  // Europe's catalogue as an admin left it: Conference renamed, re-tiered and
+  // re-priced; Lanyards and the rest deleted.
+  const edited = () => ({ sponsors: [
+    { showId: 'LEX', key: 'conference', name: 'Conference Sponsorship 2027', tier: 'gold', price: 42000,
+      blurb: 'Rewritten by sales.', perks: ['30 VIP passes'], active: true, soldOut: false },
+    { showId: 'LEX', key: 'bags', name: 'Bags', tier: 'silver', price: 12950,
+      blurb: 'Branded bags handed out at registration.', perks: [], active: true, soldOut: true },
+  ] });
+  const conf = (r) => (r.store.sponsors || []).find(p => p.showId === 'LEX' && p.key === 'conference');
+  const lexCount = (r) => (r.store.sponsors || []).filter(p => p.showId === 'LEX').length;
+
+  const keep = run(SEED, ['--apply'], edited());
+  check('on an event with a catalogue, --apply adds nothing — deleted packages stay deleted',
+        keep.code === 0 && lexCount(keep) === 2 && /NOT added/.test(keep.out), `${lexCount(keep)} packages`);
+  check("and reverts none of the admin's edits", conf(keep).name === 'Conference Sponsorship 2027' &&
+        conf(keep).tier === 'gold' && conf(keep).blurb === 'Rewritten by sales.');
+
+  const add = run(SEED, ['--apply', '--add-missing'], edited());
+  check('--add-missing adds the packages the event lacks', lexCount(add) === 14, `${lexCount(add)}`);
+  check('still without touching the edited one', conf(add).name === 'Conference Sponsorship 2027' && conf(add).price === 42000);
+
+  const over = run(SEED, ['--apply', '--overwrite'], edited());
+  check('--overwrite resets the wording to the file', conf(over).name === 'Conference Sponsorship' &&
+        conf(over).tier === 'platinum');
+  check('but never the price or sold-out state', conf(over).price === 42000 &&
+        (over.store.sponsors || []).find(p => p.key === 'bags').soldOut === true);
 } finally {
   fs.rmSync(TMP, { recursive: true, force: true });
 }
