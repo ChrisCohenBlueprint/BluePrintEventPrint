@@ -159,20 +159,53 @@ function ownPaint(attrs) {
  */
 function readPalette(svg) {
   const map = {};
+  // Each declaration remembers where in the stylesheet it came from, because
+  // when two classes on one element both set a fill, CSS gives it to the rule
+  // written LATER — not to whichever class the element happens to list last.
+  let order = 0;
   for (const style of svg.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) {
-    for (const block of style[1].matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-      const fill = /fill:\s*([^;]+)/.exec(block[2]);
-      const stroke = /stroke:\s*([^;]+)/.exec(block[2]);
+    // A stylesheet may arrive wrapped in CDATA (Illustrator and Inkscape both
+    // do it) and may carry comments. Left in, the CDATA marker became part of
+    // the first selector — "<![CDATA[ .st0" — and that rule was lost, and a
+    // brace inside a comment broke the rule after it.
+    const css = style[1]
+      .replace(/<!\[CDATA\[|\]\]>/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const block of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const at = ++order;
+      const fill = /(?:^|[;\s])fill\s*:\s*([^;]+)/.exec(block[2]);
+      const stroke = /(?:^|[;\s])stroke\s*:\s*([^;]+)/.exec(block[2]);
       for (const sel of block[1].split(',')) {
         const name = sel.trim().replace(/^\./, '');
         if (!name) continue;
         map[name] = map[name] || {};
-        if (fill) map[name].fill = fill[1].trim().toLowerCase();
-        if (stroke) map[name].stroke = stroke[1].trim().toLowerCase();
+        if (fill) Object.assign(map[name], { fill: fill[1].trim().toLowerCase(), fillAt: at });
+        if (stroke) Object.assign(map[name], { stroke: stroke[1].trim().toLowerCase(), strokeAt: at });
       }
     }
   }
   return map;
+}
+
+/**
+ * What the stylesheet paints an element with the given class attribute.
+ *
+ * Looked up class by class. The whole attribute used to be the key, so
+ * CorelDRAW's `class="fil1 str0"` — one class for the fill, another for the
+ * stroke — found nothing at all, and every stand drawn that way read as
+ * having no colour. Where two of the classes set the same property, the rule
+ * later in the stylesheet wins, as it does in a browser.
+ */
+function classPaint(palette, cls) {
+  const out = {};
+  let fillAt = 0, strokeAt = 0;
+  for (const name of String(cls || '').split(/\s+/)) {
+    const p = name && palette[name];
+    if (!p) continue;
+    if (p.fill !== undefined && p.fillAt > fillAt) { out.fill = p.fill; fillAt = p.fillAt; }
+    if (p.stroke !== undefined && p.strokeAt > strokeAt) { out.stroke = p.stroke; strokeAt = p.strokeAt; }
+  }
+  return out;
 }
 
 // A handful of colour keywords a plan realistically uses for empty space. Only
@@ -595,9 +628,9 @@ function extractStands(svg) {
   // says about itself is then preferred to what its layers say, which is the
   // order SVG itself inherits in.
   const paintOf = (r) => {
-    const cls = palette[r.cls] || {};
+    const cls = classPaint(palette, r.cls);
     const up = r.inherit || {};
-    const upCls = palette[up.cls] || {};
+    const upCls = classPaint(palette, up.cls);
     return {
       fill: colour(r.paint.styleFill || cls.fill || r.paint.attrFill ||
                    up.styleFill || upCls.fill || up.attrFill || null),

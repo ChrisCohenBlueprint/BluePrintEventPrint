@@ -119,6 +119,45 @@ console.log('\nArea names stay on the plan; only exhibitor names come off');
         read(shownLna).stands.filter(s => !s.sponsored && s.exhibitor).length === 0);
 }
 
+console.log('\nA stylesheet is read the way CSS applies it (R12 note, brief §5 and §9)');
+{
+  // A row drawn with class="…" only, so the stylesheet is the only place a
+  // colour can come from.
+  const row = (classes) => classes.map((cls, i) =>
+    `<rect class="${cls}" x="${i * 100}" y="0" width="100" height="80"/>` +
+    `<text x="${i * 100 + 4}" y="12">${100 + i}</text><text x="${i * 100 + 60}" y="74">30 m²</text>`).join('');
+  const svg = (style, classes) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 100"><style>${style}</style>${row(classes)}</svg>`;
+
+  // CorelDRAW writes one class for the fill and another for the stroke.
+  let r = read(svg('.fil0{fill:#ffffff}.fil1{fill:#fcdf6d}.str0{stroke:#000000}.str1{stroke:#ed1c24}',
+                   ['fil0 str0', 'fil0 str0', 'fil0 str0', 'fil1 str0', 'fil1 str0', 'fil1 str0', 'fil1 str1']));
+  check('class="fil1 str0" takes its fill from one rule and its stroke from the other',
+        r.by('103').fill === '#fcdf6d' && r.by('103').stroke === '#000000',
+        `${r.by('103').fill} / ${r.by('103').stroke}`);
+  check('so the plan reads: available, sold and held',
+        r.by('100').status === 'available' && r.by('103').status === 'sold' && r.by('106').status === 'held',
+        ['100', '103', '106'].map(n => r.by(n).status).join(' '));
+  check('and no stand is left without a colour', r.unreadableFills === 0, String(r.unreadableFills));
+
+  // Two classes setting the same property: the LATER rule wins, whatever
+  // order the classes are written in on the element.
+  r = read(svg('.base{fill:#ffffff}.sold{fill:#fcdf6d}', ['sold base', 'base', 'base', 'base', 'base']));
+  check('where two classes both set the fill, the later rule wins', r.by('100').fill === '#fcdf6d', r.by('100').fill);
+
+  // Illustrator and Inkscape can wrap the stylesheet in CDATA, which made the
+  // first selector "<![CDATA[ .st0" and lost the first rule.
+  r = read(svg('<![CDATA[\n  .st0{fill:#FFFFFF;stroke:#000}\n  .st1{fill:#FCDF6D;stroke:#000}\n]]>',
+               ['st0', 'st0', 'st1', 'st1', 'st1']));
+  check('a stylesheet wrapped in CDATA keeps its first rule',
+        r.by('100').fill === '#ffffff' && r.by('100').status === 'available', `${r.by('100').fill}`);
+  check('and its last', r.by('102').fill === '#fcdf6d' && r.by('102').status === 'sold');
+
+  r = read(svg('/* stands { colours } */ .st0{fill:#ffffff} /* taken */ .st1{fill:#fcdf6d}', ['st0', 'st1', 'st1']));
+  check('a comment in the stylesheet does not swallow a rule', r.by('100').fill === '#ffffff' && r.by('101').fill === '#fcdf6d',
+        `${r.by('100').fill} ${r.by('101').fill}`);
+}
+
 const f = out.filter(x => !x).length;
 console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);
 process.exit(f ? 1 : 0);
