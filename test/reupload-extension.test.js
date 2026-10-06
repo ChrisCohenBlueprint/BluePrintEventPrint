@@ -68,6 +68,12 @@ const byNumber = (n) => db.store.booths.find(b => b.showId === SHOW && b.boothNu
         d.missing.find(m => m.boothNumber === '104').committed === true &&
         d.missing.find(m => m.boothNumber === '104').company === 'Dropped But Sold GmbH');
   check('a stand that has not moved is not listed as moved', diffStands(plan, [first('101', geom(1, 3))]).summary.moved === 0);
+  // 201 merged into 101: a drawing that still prints 201 is not adding a stand.
+  const merged = diffStands(plan, [{ ...first('101', geom(1, 3)), mergedFrom: ['201'] }]);
+  check('a number living on inside a merged block is not listed as new',
+        !merged.added.some(a => a.boothNumber === '201') && merged.summary.absorbed === 1 &&
+        merged.absorbed[0].boothNumber === '201' && merged.absorbed[0].into === '101',
+        JSON.stringify(merged.absorbed));
 
   console.log('\nWithout asking to keep bookings, the selling event is still refused');
   db = fakeDb({ booths: stored(), holds: holds(), booths_snapshots: [] });

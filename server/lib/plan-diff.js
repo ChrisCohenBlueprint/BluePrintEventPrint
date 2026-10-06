@@ -28,11 +28,20 @@ const sameSize = (g, h) => !!(g && h) && near(g.w, h.w) && near(g.h, h.h);
 function diffStands(fromPlan, existing) {
   const plan = new Map((fromPlan || []).map(s => [String(s.number), s]));
   const have = new Map((existing || []).map(b => [String(b.boothNumber), b]));
+  // Numbers that live on inside a merged block. A drawing that still prints
+  // 103 after 102 and 103 were merged is not adding a stand: the update keeps
+  // the block whole and leaves 103 inside it (importFromArtwork's `absorbed`),
+  // so calling it "new" promised a stand the import would never create.
+  const inside = new Map();
+  for (const b of existing || []) {
+    for (const n of b.mergedFrom || []) inside.set(String(n), String(b.boothNumber));
+  }
 
-  const added = [], moved = [], resized = [], unchanged = [], missing = [];
+  const added = [], absorbed = [], moved = [], resized = [], unchanged = [], missing = [];
 
   for (const [n, s] of plan) {
     const b = have.get(n);
+    if (!b && inside.has(n)) { absorbed.push({ boothNumber: n, into: inside.get(n) }); continue; }
     if (!b) { added.push({ boothNumber: n, area: s.area ?? null, status: s.status || 'available' }); continue; }
     const row = { boothNumber: n, status: b.status, company: (b.assignment && b.assignment.company) || null };
     if (sameBox(s.geometry, b.geometry)) {
@@ -55,10 +64,10 @@ function diffStands(fromPlan, existing) {
 
   const committedMissing = missing.filter(m => m.committed);
   return {
-    added, moved, resized, unchanged, missing,
+    added, absorbed, moved, resized, unchanged, missing,
     // The one line the admin needs before deciding anything.
     summary: {
-      added: added.length, moved: moved.length, resized: resized.length,
+      added: added.length, absorbed: absorbed.length, moved: moved.length, resized: resized.length,
       unchanged: unchanged.length, missing: missing.length,
       committedMissing: committedMissing.length,
     },
