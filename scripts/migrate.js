@@ -49,8 +49,8 @@ const LEGACY_FLAG = 'legacy-state-import-v1';
 const numberOf = (b) => String(b.boothId).replace(/^booth-/, '');
 
 async function main() {
+  const stateArg = valueOf('--state');   // read first: a bare --state stops the script before it connects
   const { apply, force, showId, db } = await begin('Seed stands from the shipped extraction');
-  const stateArg = valueOf('--state');
 
   await showContext.runAs(showId, async () => {
     const col = db.collection('booths');
