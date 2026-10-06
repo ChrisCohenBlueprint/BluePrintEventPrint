@@ -70,8 +70,11 @@ const SHOW = (window.__SHOW && window.__SHOW.slug) || '';
 const SHOW_NAME = (window.__SHOW && window.__SHOW.name) || 'Interactive Expo Floorplan';
 // A filename-safe token for the download. The event id (LEX / LNA / LME) is
 // already short and stable; the year comes from the clock, not from a literal
-// that goes stale in January.
-const SHOW_CODE = String((window.__SHOW && window.__SHOW.showId) || 'Floorplan').replace(/[^A-Za-z0-9-]+/g, '');
+// that goes stale in January. The server injects it as `id` (send-page.js,
+// showForRequest): this used to read `showId`, which is never there, so every
+// event's plan downloaded as "Floorplan-Floorplan-<date>.png".
+const SHOW_CODE = String((window.__SHOW && (window.__SHOW.id || window.__SHOW.slug)) || 'Floorplan')
+  .replace(/[^A-Za-z0-9-]+/g, '');
 // `auth` is a FUNCTION, not an object. An object is evaluated once, at socket
 // construction — before consent can have been given — and socket.io then
 // replays that same frozen value on every reconnect. So a visitor who accepted
@@ -2063,6 +2066,24 @@ async function downloadPlan() {
       c.classList && c.classList.remove('booth-selected', 'booth-shortlisted');
     });
 
+    // The areas, the same way — but only when the page is painting them from
+    // the event's palette (an admin chose their colours). On screen that fill
+    // is a stylesheet rule, `.has-area-palette [data-area]` in
+    // booth-colours.css, which the standalone copy does not carry; so the
+    // download showed the designer's fills while the page showed the admin's.
+    // Otherwise the areas keep the artwork's own fills, which the clone has.
+    const paintedAreas = !!(planAreas.length && BoothPalette.paintsAreas());
+    if (paintedAreas) {
+      const liveAreas = svgDoc.querySelectorAll('[data-area]');
+      const clonedAreas = clone.querySelectorAll('[data-area]');
+      liveAreas.forEach((el, i) => {
+        const c = clonedAreas[i];
+        if (!c) return;
+        c.style.setProperty('fill', BoothPalette.fillFor(el.classList.contains('area-taken') ? 'areaTaken' : 'area'), 'important');
+        c.classList.remove('booth-selected');
+      });
+    }
+
     // Set the family on the clone so the export does not fall back to the
     // browser's default SERIF, which is what a standalone SVG with no CSS gets.
     //
@@ -2104,6 +2125,12 @@ async function downloadPlan() {
                   [STATUS_FILL.sold, 'Taken'],
                   [STATUS_FILL.held, 'On Hold']];
     if (hasSponsor && Object.values(booths).some(b => b && b.sponsored)) keys.push([sponsorColor, 'Sponsored']);
+    // The same two area swatches the on-screen legend shows (updateAreaLegend),
+    // under the same condition: the areas are painted in them.
+    if (paintedAreas) {
+      keys.push([BoothPalette.fillFor('area'), 'Sponsorship area']);
+      if (planAreas.some(a => a.status === 'taken')) keys.push([BoothPalette.fillFor('areaTaken'), 'Sponsored area']);
+    }
     const itemW = (label) => 26 + Math.ceil(label.length * 9.5) + 44;
     const total = keys.reduce((s, k) => s + itemW(k[1]), 0);
     let kx = Math.max(44, (W - total) / 2);
