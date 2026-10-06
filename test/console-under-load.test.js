@@ -15,6 +15,8 @@
  *   - A tag being renamed was rebuilt out from under the typing by any
  *     broadcast, and the rename never saved.
  *   - The Undo on a release was wiped by the next toast of any kind.
+ *   - A logo larger than the server stores was sent anyway, dropped the
+ *     connection on the way, and nothing was said.
  */
 const fs = require('fs');
 const path = require('path');
@@ -185,6 +187,26 @@ stands[4].displayNumber = 'A4';                                                 
     await page.evaluate(() => [...document.querySelectorAll('.toast-action')].find(b => b.textContent === 'Undo').click());
     await page.waitForTimeout(300);
     check('and Undo still puts the booking back', restores.includes('101'), JSON.stringify(restores));
+
+    console.log('\nA sponsor logo larger than the server stores');
+    await page.evaluate(() => selectAdminBooth('102'));
+    await settle(page);
+    const big = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><!--${'x'.repeat(1_600_000)}--></svg>`);
+    await page.setInputFiles('#aba-logo-file', { name: 'huge-logo.svg', mimeType: 'image/svg+xml', buffer: big });
+    await page.waitForTimeout(400);
+    check('is not sent at all', (await emits(page, 'booth:set-logo')).length === 0);
+    check('and the admin is told why, and what to do instead', /too large/i.test(await toasts(page)) && /PNG/.test(await toasts(page)),
+          await toasts(page));
+    const fits = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><!--${'x'.repeat(1_400_000)}--></svg>`);
+    await page.setInputFiles('#aba-logo-file', { name: 'detailed-logo.svg', mimeType: 'image/svg+xml', buffer: fits });
+    await page.waitForTimeout(600);
+    const sent = (await emits(page, 'booth:set-logo')).pop();
+    check('one that fits under the cap is sent', sent && sent.payload.boothNumber === '102' && /^data:image\/svg\+xml/.test(sent.payload.logo) &&
+          sent.payload.logo.length <= 2_000_000, sent ? `${sent.payload.logo.length} characters` : 'nothing sent');
+    await page.evaluate(() => { window.__server['booth:set-logo'] = () => ({ ok: false, error: 'Could not save the logo — that image is too large — use a smaller logo.' }); });
+    await page.setInputFiles('#aba-logo-file', { name: 'small.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') });
+    await page.waitForTimeout(400);
+    check('and the server\'s own refusal is shown when it gives one', /too large/i.test(await toasts(page)), await toasts(page));
 
     check('the page raised no errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   } finally {

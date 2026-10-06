@@ -3861,16 +3861,37 @@ async function savePartner(id, fields) {
  * stays small. Render's filesystem is wiped on every deploy, so the image is
  * kept in the database rather than written to disk. SVGs pass through untouched
  * to keep them vector.
+ *
+ * Nothing this returns is longer than the server will store (IMAGE_CAP). An
+ * SVG cannot be shrunk here, so it has to fit as it is — and it used to be let
+ * through at up to 8 MB, far past what the server keeps. A logo that size did
+ * not even reach the server's refusal: it dropped the connection on the way,
+ * and the page said nothing at all. It is refused here, before it is sent,
+ * with the reason and the way round it.
  */
+const IMAGE_CAP = 2_000_000;   // characters of data URI: the server's cap on every stored image
+const SVG_PREFIX = 'data:image/svg+xml;base64,'.length;
+const tooBigSvg = (bytes) => new Error(
+  `That SVG is ${(bytes / (1024 * 1024)).toFixed(1)} MB, which is too large to store as a logo — ` +
+  `the most an SVG can be is about ${((IMAGE_CAP - SVG_PREFIX) * 3 / 4 / (1024 * 1024)).toFixed(1)} MB. ` +
+  'Save it with less detail, or export it as a PNG, which is shrunk to fit.');
+
 function fileToDataUrl(file, maxWidth = 800) {
   // Keep the stored data URI comfortably under the server's ~2M-char cap.
   const MAX_LEN = 1_500_000;
+  const svg = file.type === 'image/svg+xml';
   return new Promise((resolve, reject) => {
+    // Base64 is four characters for every three bytes; checked before the
+    // file is even read, so a 6 MB drawing is turned away at once.
+    if (svg && SVG_PREFIX + Math.ceil(file.size / 3) * 4 > IMAGE_CAP) return reject(tooBigSvg(file.size));
     if (file.size > 8 * 1024 * 1024) return reject(new Error('Image must be under 8 MB.'));
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('Could not read that file.'));
     reader.onload = () => {
-      if (file.type === 'image/svg+xml') return resolve(reader.result);
+      if (svg) {
+        if (reader.result.length > IMAGE_CAP) return reject(tooBigSvg(file.size));
+        return resolve(reader.result);
+      }
       const img = new Image();
       img.onerror = () => reject(new Error('That file is not a readable image.'));
       img.onload = () => {
@@ -6065,12 +6086,18 @@ function areaEditor(a) {
   return frag;
 }
 
+// A logo is the largest thing this console sends over the socket, and these
+// two were bare emits with no timeout: an upload the connection dropped left
+// nothing on screen, ever. emitAck always answers — with the server's reply,
+// or with a failure once it has waited long enough for a large image on a
+// slow line.
+const LOGO_ACK_MS = 60000;
+
 /** Store (or clear) an area's logo. The cards redraw from the server's answer. */
-function saveAreaLogo(key, dataUrl) {
-  socket.emit('area:set-logo', { key, logo: dataUrl || '' }, (res) => {
-    if (res && res.ok) adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
-    else adminToast((res && res.error) || 'Could not save the logo.', 'error');
-  });
+async function saveAreaLogo(key, dataUrl) {
+  const res = await emitAck(socket, 'area:set-logo', { key, logo: dataUrl || '' }, { timeout: LOGO_ACK_MS });
+  if (res && res.ok) adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
+  else adminToast((res && res.error) || 'Could not save the logo.', 'error');
 }
 
 // ── Booth panel: the sponsor and their logo ──────────────────────────────────
@@ -6108,17 +6135,18 @@ function renderBoothSponsor(n) {
 }
 
 /** Store (or clear) this stand's logo, redrawing from the server's answer. */
-function saveBoothLogo(boothNumber, dataUrl) {
-  socket.emit('booth:set-logo', { boothNumber, logo: dataUrl || '' }, (res) => {
-    if (res && res.ok) {
-      const b = booths[boothNumber];
-      if (b) b.sponsorLogo = res.logo;
-      adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
-    } else {
-      adminToast((res && res.error) || 'Could not save the logo.', 'error');
-    }
-    renderBoothSponsor(boothNumber);
-  });
+async function saveBoothLogo(boothNumber, dataUrl) {
+  const res = await emitAck(socket, 'booth:set-logo', { boothNumber, logo: dataUrl || '' }, { timeout: LOGO_ACK_MS });
+  if (res && res.ok) {
+    const b = booths[boothNumber];
+    if (b) b.sponsorLogo = res.logo;
+    adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
+  } else {
+    adminToast((res && res.error) || 'Could not save the logo.', 'error');
+  }
+  // Only if the panel is still on this stand: the answer to a slow upload can
+  // arrive after another stand has been opened.
+  if (selectedAdminId === boothNumber) renderBoothSponsor(boothNumber);
 }
 
 document.getElementById('aba-sponsored')?.addEventListener('change', (e) => {
