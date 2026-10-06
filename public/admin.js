@@ -4319,13 +4319,144 @@ async function loadPlans() {
   }
 
   grid.replaceChildren();
-  if (!rows.length) {
-    grid.textContent = 'No events yet. Add one under Tools → Events.';
-    return;
+  const here = (window.__SHOW && window.__SHOW.slug) || '';
+  // Events on air first; retired ones after them, so past years gather at the
+  // end of the page instead of between the events being sold now.
+  const ordered = [...rows.filter(r => r.active !== false), ...rows.filter(r => r.active === false)];
+  ordered.forEach(row => grid.appendChild(planCard(row, row.slug === here)));
+  // The way to the next one — a new year of an event, or a new location.
+  grid.appendChild(addEventCard(rows));
+}
+
+/**
+ * Add an event from the page that lists them.
+ *
+ * It lived only under Tools → Events, and started every event empty: no rate,
+ * no currency, no colours, no packages. A new year of an event sells the way
+ * the last one did, so it can START FROM one — taking its configuration and
+ * none of its trading. See server/services/new-event.js for exactly what moves.
+ */
+function addEventCard(rows) {
+  const card = document.createElement('div');
+  card.className = 'plan-card plan-add';
+
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'plan-add-open';
+  open.innerHTML = '<span class="plan-add-plus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span><span><b>Add an event</b>' +
+    '<small>A new year, a new show or a new location — with its own link</small></span>';
+
+  // Creating an event is owner-only on the server. Saying so here beats a form
+  // that is filled in and then refused.
+  if (currentRole && currentRole !== 'owner') {
+    open.disabled = true;
+    open.querySelector('small').textContent = 'Only the owner account can add events.';
+    card.appendChild(open);
+    return card;
   }
 
-  const here = (window.__SHOW && window.__SHOW.slug) || '';
-  rows.forEach(row => grid.appendChild(planCard(row, row.slug === here)));
+  const form = document.createElement('form');
+  form.className = 'plan-add-form';
+  form.hidden = true;
+  form.innerHTML = `
+    <div class="plan-add-title">Add an event</div>
+    <label>Start from
+      <select class="admin-select" name="copyFrom">
+        <option value="">A blank event</option>
+      </select>
+    </label>
+    <div class="plan-add-copies"></div>
+    <label>Name
+      <input class="admin-input" name="name" maxlength="80" placeholder="e.g. Lubricant Expo Europe 2028" autocomplete="off">
+    </label>
+    <div class="plan-add-pair">
+      <label>Show id
+        <input class="admin-input" name="showId" maxlength="32" placeholder="LEX28" autocomplete="off">
+      </label>
+      <label>URL name
+        <input class="admin-input" name="slug" maxlength="24" placeholder="lex28" autocomplete="off">
+      </label>
+    </div>
+    <div class="plan-add-link"></div>
+    <p class="settings-hint">The show id is permanent — every stand, lead and setting is filed under it. The name and URL name can be changed later under Tools → Events.</p>
+    <div class="plan-draft-actions">
+      <button type="submit" class="admin-btn primary">Add event</button>
+      <button type="button" class="admin-btn" data-cancel>Cancel</button>
+    </div>`;
+
+  const f = (n) => form.elements[n];
+  rows.filter(r => r.active !== false).forEach(r => {
+    const o = document.createElement('option');
+    o.value = r.showId;
+    o.textContent = r.name || r.showId;
+    f('copyFrom').appendChild(o);
+  });
+
+  // The URL name follows the show id until someone types their own.
+  let slugTouched = false;
+  const linkLine = form.querySelector('.plan-add-link');
+  const showLink = () => {
+    const slug = f('slug').value.trim();
+    linkLine.textContent = slug ? `Visitors' link: /floorplan/${slug}` : '';
+  };
+  f('showId').addEventListener('input', () => {
+    if (!slugTouched) f('slug').value = f('showId').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 24);
+    showLink();
+  });
+  f('slug').addEventListener('input', () => { slugTouched = true; showLink(); });
+
+  // Choosing an event to start from suggests the next edition of it: LEX27 is
+  // followed by LEX28, read from the name its live plan carries.
+  const copies = form.querySelector('.plan-add-copies');
+  f('copyFrom').addEventListener('change', () => {
+    const src = rows.find(r => r.showId === f('copyFrom').value);
+    if (!src) { copies.textContent = ''; return; }
+    copies.textContent = `Copies its rate, currency, units, colours, business activities and sponsorship packages. ` +
+                         'Not its stands, bookings, leads or plan — upload the new plan to the new event.';
+    const m = /^([A-Za-z]+)(\d{2})(?!\d)/.exec(src.label || src.showId || '');
+    if (m && !f('showId').value) {
+      const next = String(Number(m[2]) + 1).padStart(2, '0');
+      f('showId').value = `${m[1].toUpperCase()}${next}`;
+      f('showId').dispatchEvent(new Event('input'));
+      if (!f('name').value) f('name').value = `${src.name || src.showId} 20${next}`;
+    } else if (!f('name').value) {
+      f('name').value = src.name || '';
+    }
+  });
+
+  open.onclick = () => { open.hidden = true; form.hidden = false; f('copyFrom').focus(); };
+  form.querySelector('[data-cancel]').onclick = () => { form.reset(); slugTouched = false; copies.textContent = ''; showLink(); form.hidden = true; open.hidden = false; };
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    return withPending(form.querySelector('button[type=submit]'), async () => {
+      const body = {
+        name: f('name').value.trim(),
+        showId: f('showId').value.trim(),
+        slug: f('slug').value.trim().toLowerCase(),
+        copyFrom: f('copyFrom').value || undefined,
+      };
+      if (!body.showId || !body.slug) return adminToast('A show id and a URL name are both needed.', 'error');
+      let r;
+      try {
+        r = await api('/api/shows', { method: 'POST', body: JSON.stringify(body) });
+      } catch (err) {
+        return adminToast(err.message || 'Could not add that event.', 'error');
+      }
+      const c = r.copied;
+      adminToast(`${r.name || r.showId} added — visitors' link /floorplan/${r.slug}.` +
+        (c && c.failed ? ' Its settings could NOT be copied — set them by hand.'
+         : c ? ` Copied: settings, ${c.activities} ${c.activities === 1 ? 'activity' : 'activities'}, ` +
+               `${c.packages} ${c.packages === 1 ? 'package' : 'packages'}.` : '') +
+        ' Upload its plan from its card.', 'ok');
+      await loadPlans();
+      initShowSwitcher();
+      loadShows();
+    });
+  });
+
+  card.append(open, form);
+  return card;
 }
 
 function planCard(row, isCurrent) {
@@ -4350,6 +4481,14 @@ function planCard(row, isCurrent) {
     const badge = document.createElement('span');
     badge.className = 'plan-badge';
     badge.textContent = 'Viewing';
+    head.appendChild(badge);
+  }
+  if (row.active === false) {
+    card.classList.add('is-retired');
+    const badge = document.createElement('span');
+    badge.className = 'plan-badge is-retired';
+    badge.textContent = 'Retired';
+    badge.title = 'Off the air: its links answer 404. Nothing is deleted — put it back under Tools → Events.';
     head.appendChild(badge);
   }
 

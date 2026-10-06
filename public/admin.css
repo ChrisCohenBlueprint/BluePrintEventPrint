@@ -386,6 +386,37 @@ body {
 .plan-warn { font-size: 11px; color: var(--orange); line-height: 1.5; }
 .plan-spec { font-size: 11px; color: var(--muted); }
 .plan-spec.is-clean { color: var(--green); }
+/* A retired event: still listed, clearly off the air. */
+.plan-card.is-retired { opacity: .62; }
+.plan-badge.is-retired { background: rgba(148,163,184,.16); color: var(--muted); }
+/* The last card: the way to the next event. */
+.plan-card.plan-add { border-style: dashed; background: transparent; justify-content: center; }
+.plan-add-open {
+  display: flex; align-items: center; gap: 14px; width: 100%; min-height: 170px;
+  background: none; border: none; color: var(--text); text-align: left; cursor: pointer;
+  font: inherit; padding: 8px;
+}
+.plan-add-open[hidden] { display: none; }
+.plan-add-open:disabled { cursor: default; opacity: .7; }
+.plan-add-open b { display: block; font-family: 'Raleway', sans-serif; font-size: 15px; }
+.plan-add-open small { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.plan-add-plus {
+  flex: none; width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent); background: rgba(99,102,241,.14);
+}
+.plan-add-plus svg { width: 22px; height: 22px; }
+.plan-add-open:not(:disabled):hover .plan-add-plus { background: rgba(99,102,241,.26); }
+.plan-add-form { display: flex; flex-direction: column; gap: 10px; }
+.plan-add-form[hidden] { display: none; }
+.plan-add-title { font-family: 'Raleway', sans-serif; font-size: 15px; font-weight: 700; }
+.plan-add-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+.plan-add-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.plan-add-copies { font-size: 11px; color: var(--green); line-height: 1.5; }
+.plan-add-copies:empty, .plan-add-link:empty { display: none; }
+.plan-add-link { font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); }
+.plan-add-form .settings-hint { margin: 0; }
+
 /* The revision the public link is showing: LEX27, LEX27.1 … */
 .plan-label {
   margin-right: auto; padding: 2px 8px; border-radius: 6px;

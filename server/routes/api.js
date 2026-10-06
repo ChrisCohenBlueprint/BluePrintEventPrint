@@ -22,6 +22,7 @@ const holds     = require('../services/holds');
 const { getDb } = require('../db');
 const { track } = require('../services/tracking');
 const csv       = require('../lib/csv');
+const { copyConfiguration } = require('../services/new-event');
 
 const router = express.Router();
 
@@ -598,8 +599,15 @@ router.get('/shows', async (_req, res, next) => {
   try { res.json(showsModel.list()); } catch (e) { next(e); }
 });
 
-router.post('/shows', requireOwner, async (req, res, next) => {
+router.post('/shows', ownerOnly('add or change events'), async (req, res, next) => {
   try {
+    // "Start from" an event already running: its rate, currency, units,
+    // colours, business activities and packages come with it. Checked before
+    // anything is created, so a bad choice leaves no half-made event behind.
+    const copyFrom = req.body && req.body.copyFrom ? String(req.body.copyFrom) : '';
+    if (copyFrom && !showsModel.byId(copyFrom)) {
+      return res.status(400).json({ error: 'Could not add the event — the event to start from no longer exists.' });
+    }
     const r = await showsModel.create(req.body || {});
     if (!r.ok) {
       const why = r.reason === 'bad_slug'   ? 'the URL name must be lowercase letters, numbers or dashes'
@@ -609,14 +617,24 @@ router.post('/shows', requireOwner, async (req, res, next) => {
                 : 'it could not be created';
       return res.status(400).json({ error: `Could not add the show — ${why}.` });
     }
-    auditTeam(req, 'show.create', r.show.showId, { slug: r.show.slug });
+    let copied = null;
+    if (copyFrom) {
+      try { copied = await copyConfiguration(copyFrom, r.show.showId); }
+      catch (e) {
+        // The event exists and works; what failed is a convenience. Said
+        // plainly so nobody assumes the packages came across.
+        console.error(`New event ${r.show.showId}: copy from ${copyFrom} failed —`, e.message);
+        copied = { failed: true };
+      }
+    }
+    auditTeam(req, 'show.create', r.show.showId, { slug: r.show.slug, copyFrom: copyFrom || null, copied });
     // A new show starts with no cached state; warm it so it serves immediately.
     try { await sockets.refreshAll(); } catch (e) { console.error('Warm failed:', e.message); }
-    res.status(201).json(r.show);
+    res.status(201).json({ ...r.show, copiedFrom: copyFrom || null, copied });
   } catch (e) { next(e); }
 });
 
-router.patch('/shows/:showId', requireOwner, async (req, res, next) => {
+router.patch('/shows/:showId', ownerOnly('add or change events'), async (req, res, next) => {
   try {
     const r = await showsModel.update(req.params.showId, req.body || {});
     if (!r.ok) {
@@ -642,6 +660,16 @@ const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,31}$/;
 function requireOwner(req, res, next) {
   if (req.admin?.role === 'owner') return next();
   return res.status(403).json({ error: 'Only the owner account can manage team members.' });
+}
+
+// The same guard, saying what was actually refused. Adding an event used to be
+// refused with "only the owner can manage team members", which sends someone
+// looking in the wrong place.
+function ownerOnly(what) {
+  return (req, res, next) => {
+    if (req.admin?.role === 'owner') return next();
+    return res.status(403).json({ error: `Only the owner account can ${what}.` });
+  };
 }
 
 // One line in the audit stream per team-management action, so account changes

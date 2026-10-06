@@ -6,6 +6,10 @@ const out = [];
 const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`); };
 
 const PLANS = [
+  // Last year's Europe, off the air. Listed FIRST here so the page has to be
+  // the one that moves it after the events being sold now.
+  { slug: 'lex26', showId: 'LEX26', name: 'Lubricant Expo Europe 2026', active: false,
+    uploaded: false, filename: '/LEX27_Floorplan_Consolidated.svg', boothCount: 0 },
   { slug: 'lex', showId: 'LEX27', name: 'Lubricant Expo Europe', active: true,
     uploaded: false, filename: '/LEX27_Floorplan_Consolidated.svg', boothCount: 262 },
   { slug: 'lna', showId: 'LNA27', name: 'Lubricant Expo North America', active: true,
@@ -21,8 +25,18 @@ const PLANS = [
   const { server, base } = await listen(app);
   const br = await launch();
   const page = await br.newPage({ viewport: { width: 1500, height: 1000 }, deviceScaleFactor: 2 });
-  await page.route('**/api/shows', r => r.fulfill({ status: 200, contentType: 'application/json',
-    body: JSON.stringify(PLANS.map(p => ({ slug: p.slug, showId: p.showId, name: p.name, active: true }))) }));
+  const created = [];
+  await page.route('**/api/shows', r => {
+    if (r.request().method() === 'POST') {
+      const body = r.request().postDataJSON();
+      created.push(body);
+      return r.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({
+        slug: body.slug, showId: body.showId, name: body.name, active: true,
+        copiedFrom: body.copyFrom || null, copied: body.copyFrom ? { settings: ['ratePerSqm'], activities: 4, packages: 9 } : null }) });
+    }
+    r.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify(PLANS.map(p => ({ slug: p.slug, showId: p.showId, name: p.name, active: p.active !== false }))) });
+  });
   await page.route('**/api/floorplans', r => r.fulfill({ status: 200, contentType: 'application/json',
     body: JSON.stringify(PLANS) }));
 
@@ -90,7 +104,7 @@ const PLANS = [
   await page.click('[data-section="settings"]');
   await page.waitForTimeout(1200);
 
-  const cards = await page.evaluate(() => [...document.querySelectorAll('.plan-card')].map(c => ({
+  const cards = await page.evaluate(() => [...document.querySelectorAll('.plan-card:not(.plan-add)')].map(c => ({
     name: c.querySelector('.plan-name')?.textContent,
     current: c.classList.contains('is-current'),
     previewSrc: c.querySelector('.plan-preview')?.getAttribute('src') || null,
@@ -103,11 +117,16 @@ const PLANS = [
     label: c.querySelector('.plan-label')?.textContent || null,
     draft: c.querySelector('.plan-draft')?.textContent || null,
     draftSrc: c.querySelector('.plan-draft img')?.getAttribute('src') || null,
+    retired: c.classList.contains('is-retired'),
   })));
 
-  check('all three events are shown side by side', cards.length === 3, cards.map(c => c.name).join(' | '));
-  check('each card names its event',
-        cards.map(c => c.name).join('|') === 'Lubricant Expo Europe|Lubricant Expo North America|Lubricant Expo Middle East');
+  check('every event is shown side by side', cards.length === 4, cards.map(c => c.name).join(' | '));
+  check('the events on air first, a retired one after them',
+        cards.map(c => c.name).join('|') === 'Lubricant Expo Europe|Lubricant Expo North America|Lubricant Expo Middle East|Lubricant Expo Europe 2026',
+        cards.map(c => c.name).join('|'));
+  const retiredBadge = await page.evaluate(() =>
+    document.querySelector('.plan-card.is-retired .plan-badge.is-retired')?.textContent || '');
+  check('and marked as retired', cards[3].retired && retiredBadge === 'Retired', retiredBadge);
 
   const lex = cards[0], lna = cards[1], lme = cards[2];
   check('an event with stands previews its plan', !!lex.previewSrc && /show=lex/.test(lex.previewSrc), lex.previewSrc);
@@ -118,7 +137,7 @@ const PLANS = [
   // event that plainly had one.
   check('an event with nothing uploaded still previews the shipped plan',
         !!lme.previewSrc && /show=lme/.test(lme.previewSrc), lme.previewSrc || lme.emptyState);
-  check('all three cards show a preview',
+  check('every card shows a preview',
         cards.every(c => !!c.previewSrc), cards.map(c => c.previewSrc ? 'y' : 'n').join(''));
 
   check('each download targets its own event', lex.downloadHref.includes('show=lex') &&
@@ -271,6 +290,42 @@ const PLANS = [
   await page.waitForTimeout(600);
   check('downloading it asks for THAT event\'s stands',
         schedules.length === 1 && schedules[0].show === 'lex', JSON.stringify(schedules));
+
+  console.log('\nAdding the next event, from the page that lists them');
+  const addCard = await page.evaluate(() => {
+    const c = document.querySelector('.plan-card.plan-add');
+    return c ? { last: c === document.querySelector('#plans-grid').lastElementChild,
+                 text: c.textContent, formHidden: c.querySelector('form').hidden } : null;
+  });
+  check('the last card is Add an event', addCard && addCard.last && /Add an event/.test(addCard.text), addCard && addCard.text);
+  check('folded away until asked for', addCard && addCard.formHidden);
+  await page.click('.plan-add-open');
+  const opts = await page.evaluate(() => [...document.querySelectorAll('.plan-add-form select[name=copyFrom] option')].map(o => o.textContent));
+  check('it can start blank, or from any event on air', opts.join('|') ===
+        'A blank event|Lubricant Expo Europe|Lubricant Expo North America|Lubricant Expo Middle East', opts.join('|'));
+  await page.selectOption('.plan-add-form select[name=copyFrom]', 'LNA27');
+  const suggested = await page.evaluate(() => {
+    const f = document.querySelector('.plan-add-form');
+    return { name: f.elements.name.value, id: f.elements.showId.value, slug: f.elements.slug.value,
+             link: f.querySelector('.plan-add-link').textContent, copies: f.querySelector('.plan-add-copies').textContent };
+  });
+  check('starting from LNA27 suggests the next edition, LNA28',
+        suggested.id === 'LNA28' && suggested.slug === 'lna28' && suggested.name === 'Lubricant Expo North America 2028',
+        JSON.stringify(suggested));
+  check('shows the visitors\' link it will have', suggested.link === "Visitors' link: /floorplan/lna28", suggested.link);
+  check('and says what is copied, and what is not',
+        /rate, currency, units, colours, business activities and sponsorship packages/.test(suggested.copies) &&
+        /Not its stands, bookings, leads or plan/.test(suggested.copies), suggested.copies);
+  await page.fill('.plan-add-form input[name=slug]', 'lna-2028');
+  await page.fill('.plan-add-form input[name=showId]', 'LNA28B');
+  const kept = await page.evaluate(() => document.querySelector('.plan-add-form').elements.slug.value);
+  check('a URL name typed by hand is not overwritten', kept === 'lna-2028', kept);
+  await page.click('.plan-add-form button[type=submit]');
+  await page.waitForTimeout(800);
+  check('the event is created with what was asked for',
+        created.length === 1 && created[0].showId === 'LNA28B' && created[0].slug === 'lna-2028' &&
+        created[0].copyFrom === 'LNA27' && created[0].name === 'Lubricant Expo North America 2028',
+        JSON.stringify(created));
 
   await br.close();
   server.close();
