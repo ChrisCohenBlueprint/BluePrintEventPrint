@@ -27,21 +27,21 @@
 const { fakeDb } = require('./fake-mongo');
 
 const dbPath = require.resolve('../server/db');
-let db = fakeDb({});
+let db = fakeDb({ users: [], revokedTokens: [] });
 require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: { getDb: () => db } };
-
-// The password gate, stood in for: "pw" is right, anything else is wrong.
-const usersPath = require.resolve('../server/models/users');
-require.cache[usersPath] = { id: usersPath, filename: usersPath, loaded: true, exports: {
-  findByUsername: async () => ({ username: 'chris', passwordHash: 'x' }),
-  verifyPassword: async (pw) => pw === 'pw',
-  absorbPassword: async () => {},
-} };
 
 const showContext = require('../server/show-context');
 const booths = require('../server/models/booths');
 const holds = require('../server/services/holds');
 const sockets = require('../server/sockets');
+const users = require('../server/models/users');
+const auth = require('../server/auth');
+
+// The admin is a real account, and every hall below carries its row: an admin
+// socket's session is checked against the account on EVERY event (auth.js
+// requireAdmin), and the password gate reads it too — "pw" is its password.
+let ADMIN_ROWS = [];
+const withAdmin = (init = {}) => fakeDb({ users: ADMIN_ROWS.map(u => ({ ...u })), revokedTokens: [], ...init });
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok); console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`); };
@@ -63,10 +63,13 @@ const hours = (h) => new Date(Date.now() + h * 3600_000);
 // an authenticated admin. The handlers are the real ones from sockets/index.js.
 const emitted = [];
 const roomOf = (name) => ({ emit: (e, p) => emitted.push([name, e, p]), except: () => roomOf(name), to: (r) => roomOf(`${name}+${r}`) });
-const io = { use() {}, on(ev, cb) { if (ev === 'connection') io.connect = cb; }, to: (r) => roomOf(r) };
+const io = { use(fn) { io.handshake = fn; }, on(ev, cb) { if (ev === 'connection') io.connect = cb; }, to: (r) => roomOf(r) };
 const handlers = {};
+// Its handshake carries a session cookie minted the way the login flow mints
+// it, and goes through the real socketAuth — so it is an admin because its
+// session says so, and stays one only while the account behind it does.
 const socket = {
-  id: 'admin-1', data: { isAdmin: true, user: 'chris' },
+  id: 'admin-1', data: {},
   handshake: { query: { show: '' }, auth: {}, headers: {} },
   join() {}, emit(e, p) { emitted.push(['self', e, p]); }, on(e, h) { handlers[e] = h; },
 };
@@ -74,9 +77,18 @@ const emit = (event, payload) => new Promise(res => handlers[event](payload, res
 const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg);
 
 (async () => {
+  const admin = await users.upsert({ username: 'chris', password: 'pw', role: 'admin' });
+  ADMIN_ROWS = db.store.users.map(u => ({ ...u }));
+  let cookie = '';
+  auth.setSessionCookie({ setHeader: (_k, v) => { cookie = String(v).split(';')[0]; } }, admin);
+  socket.handshake.headers.cookie = cookie;
+
   // Registered against an empty hall, and the boot-time expiry sweep allowed
   // to finish, before any stand exists for it to touch.
   sockets.register(io);
+  await new Promise(r => io.handshake(socket, r));
+  check('(the console\'s socket is an admin by its session)', socket.data.isAdmin === true && !!socket.data.session,
+        JSON.stringify(socket.data.session));
   io.connect(socket);
   await new Promise(r => setTimeout(r, 20));
 
@@ -94,7 +106,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
   check('a name left on an available stand is not published either', glitch.company === null);
 
   console.log('\nA hold that expires takes its whole deal with it');
-  db = fakeDb({
+  db = withAdmin({
     booths: [stand('201', { status: 'held', holdExpiresAt: past(),
       assignment: { company: 'Acme', contactId: 'c-acme', actualPrice: 9000, notes: 'Acme wants the corner',
                     tags: ['oils'], country: 'DE' } })],
@@ -114,7 +126,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
         now('201').assignment.notes === '', JSON.stringify(now('201').assignment));
 
   console.log('\nRe-booking a held stand to someone else does not hand them the deal');
-  db = fakeDb({ booths: [stand('202', { status: 'held', holdExpiresAt: hours(5),
+  db = withAdmin({ booths: [stand('202', { status: 'held', holdExpiresAt: hours(5),
     assignment: { company: 'Acme', contactId: 'c-acme', actualPrice: 9000, notes: 'Acme notes', tags: ['oils'], country: 'DE' } })],
     holds: [] });
   await run(() => booths.setStatus('202', 'sold', { company: 'Beta', actor: 'chris', expect: ['available', 'held'] }));
@@ -123,7 +135,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
   check('nor Acme\'s notes or contact', beta.notes === '' && beta.contactId === null, JSON.stringify(beta));
   check('nor Acme\'s tags and country', beta.tags.length === 0 && beta.country === null);
 
-  db = fakeDb({ booths: [stand('203', { status: 'held', holdExpiresAt: hours(5),
+  db = withAdmin({ booths: [stand('203', { status: 'held', holdExpiresAt: hours(5),
     assignment: { company: 'Acme', contactId: 'c-acme', actualPrice: 9000, notes: 'Acme notes', tags: ['oils'], country: 'DE' } })],
     holds: [] });
   await run(() => booths.setStatus('203', 'sold', { company: ' acme ', actor: 'chris', expect: ['available', 'held'] }));
@@ -132,7 +144,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
         now('203').assignment.contactId === 'c-acme' && now('203').assignment.country === 'DE',
         JSON.stringify(now('203').assignment));
 
-  db = fakeDb({ booths: [stand('204', { status: 'held', holdExpiresAt: hours(5),
+  db = withAdmin({ booths: [stand('204', { status: 'held', holdExpiresAt: hours(5),
     assignment: { ...EMPTY(), company: 'Pending', actualPrice: 7000, notes: 'agreed on the phone' } })], holds: [] });
   await run(() => booths.setStatus('204', 'sold', { company: 'Gamma Oils', actor: 'chris', expect: ['available', 'held'] }));
   check('a placeholder hold that gets its real name is the same deal, and keeps its price',
@@ -140,7 +152,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
         now('204').assignment.notes === 'agreed on the phone', JSON.stringify(now('204').assignment));
 
   console.log('\nA sale is to somebody');
-  db = fakeDb({ booths: [stand('301')], holds: [] });
+  db = withAdmin({ booths: [stand('301')], holds: [] });
   const blank = await run(() => booths.setStatus('301', 'sold', { company: '   ', actor: 'chris' }));
   check('the model refuses a sale with no name', blank && blank.changed === false && blank.error === 'no_company',
         JSON.stringify(blank && blank.error));
@@ -161,7 +173,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
   check('but a hold may stay nameless', hold && hold.changed === true && now('302').status === 'held');
 
   console.log('\nA deal saved for one exhibitor cannot land on another\'s booking');
-  db = fakeDb({ booths: [stand('401', { status: 'sold',
+  db = withAdmin({ booths: [stand('401', { status: 'sold',
     assignment: { ...EMPTY(), company: 'Beta', actualPrice: 4000, notes: 'Beta notes' } })], holds: [] });
   ack = await emit('booth:update-deal', { boothNumber: '401', actualPrice: 9000, expectCompany: 'Acme' });
   check('refused when the stand has changed hands since the panel opened',
@@ -177,7 +189,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
 
   console.log('\nMoving a held booking moves its hold, countdown and all');
   const sevenDayHold = hours(30);          // a 7-day hold with a day and a bit left
-  db = fakeDb({
+  db = withAdmin({
     booths: [stand('501', { status: 'held', holdExpiresAt: sevenDayHold,
                             assignment: { ...EMPTY(), company: 'Mover Co', contactId: 'c-mover' } }),
              stand('502')],
@@ -195,7 +207,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
         JSON.stringify(db.store.holds));
   check('and nothing is left behind on the stand it left', holdOf('501').length === 0);
 
-  db = fakeDb({
+  db = withAdmin({
     booths: [stand('503', { status: 'held', holdExpiresAt: null, assignment: { ...EMPTY(), company: 'Plan Reserved Co' } }),
              stand('504')],
     holds: [{ showId: SHOW, boothNumber: '503', company: 'Plan Reserved Co', source: 'artwork-import' }],
@@ -205,7 +217,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
         now('504').status === 'held' && now('504').holdExpiresAt === null && holdOf('504').length === 1 &&
         holdOf('504')[0].expiresAt === undefined, String(now('504').holdExpiresAt));
 
-  db = fakeDb({
+  db = withAdmin({
     booths: [stand('505', { status: 'held', holdExpiresAt: past(), assignment: { ...EMPTY(), company: 'Lapsed Co' } }),
              stand('506')],
     holds: [{ showId: SHOW, boothNumber: '505', company: 'Lapsed Co', expiresAt: past() }],
@@ -215,7 +227,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
         (await run(() => holds.reconcile())).join() === '506' && now('506').status === 'available');
 
   console.log('\nA stand taken off the plan is not a booking to move, nor a place to move one');
-  db = fakeDb({ booths: [stand('601', { status: 'removed', removed: true }), stand('602'),
+  db = withAdmin({ booths: [stand('601', { status: 'removed', removed: true }), stand('602'),
                          stand('603', { status: 'sold', assignment: { ...EMPTY(), company: 'Real Co' } }),
                          stand('604', { status: 'removed', removed: true })], holds: [] });
   let mv = await run(() => booths.move('601', '602', { actor: 'chris' }));
@@ -226,14 +238,14 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
   check('and the booking stays put', now('603').status === 'sold' && now('604').status === 'removed');
 
   console.log('\nForcing a hold onto a stand off the plan writes nothing');
-  db = fakeDb({ booths: [stand('701', { status: 'removed', removed: true })], holds: [] });
+  db = withAdmin({ booths: [stand('701', { status: 'removed', removed: true })], holds: [] });
   ack = await emit('admin:setStatus', { boothNumber: '701', status: 'held', company: 'Ghost Co' });
   check('it is refused as not found', ack.ok === false && /not found/.test(ack.error), JSON.stringify(ack));
   check('with no hold document written for it', holdOf('701').length === 0, JSON.stringify(db.store.holds));
   check('and no expiry stamped on it', now('701').holdExpiresAt === undefined);
 
   console.log('\nA hold is as long as it says, within reason');
-  db = fakeDb({ booths: [stand('801'), stand('802'), stand('803'), stand('804')], holds: [] });
+  db = withAdmin({ booths: [stand('801'), stand('802'), stand('803'), stand('804')], holds: [] });
   ack = await emit('booth:hold', { boothNumber: '801', company: 'Long Co', hours: 1e10 });
   const longest = now('801').holdExpiresAt;
   check('an enormous length is cut to 30 days, not stored as 1970',
@@ -249,7 +261,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
   check('and no log line promises a hold "until Invalid Date"', !logged().some(m => /Invalid Date/.test(m)));
 
   console.log('\nA release that released nothing says so');
-  db = fakeDb({ booths: [stand('901'), stand('902', { status: 'removed', removed: true }),
+  db = withAdmin({ booths: [stand('901'), stand('902', { status: 'removed', removed: true }),
                          stand('903', { status: 'held', holdExpiresAt: hours(3), assignment: { ...EMPTY(), company: 'Let Go Co' } })],
                 holds: [{ showId: SHOW, boothNumber: '903', company: 'Let Go Co', expiresAt: hours(3) }] });
   const logsBefore = logged().length;
@@ -266,7 +278,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
         JSON.stringify(ack));
 
   console.log('\nBooking a held stand writes the sale before it lets go of the hold');
-  db = fakeDb({ booths: [stand('951', { status: 'held', holdExpiresAt: null, assignment: { ...EMPTY(), company: 'Plan Co' } })],
+  db = withAdmin({ booths: [stand('951', { status: 'held', holdExpiresAt: null, assignment: { ...EMPTY(), company: 'Plan Co' } })],
                 holds: [{ showId: SHOW, boothNumber: '951', company: 'Plan Co', source: 'artwork-import' }] });
   ack = await emit('booth:book', { boothNumber: '951', company: 'Plan Co' });
   const sale = db.calls.findIndex(c => c[0] === 'updateOne' && c[1] === 'booths' && c[3] && c[3].$set && c[3].$set.status === 'sold');
@@ -278,7 +290,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
   console.log('\nPutting a released booking back checks its tags against the catalogue');
   const express = require('express');
   const api = require('../server/routes/api');
-  db = fakeDb({ booths: [stand('981')], holds: [],
+  db = withAdmin({ booths: [stand('981')], holds: [],
                 tags: [{ showId: SHOW, key: 'oils', label: 'Oils' }, { showId: SHOW, key: 'additives', label: 'Additives' }] });
   const app = express();
   app.use(express.json());
@@ -302,7 +314,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
 
   console.log('\nThe rate keeps its cents, and revenue is what was agreed');
   const settings = require('../server/models/settings');
-  db = fakeDb({ booths: [], settings: [] });
+  db = withAdmin({ booths: [], settings: [] });
   let rate = await run(() => settings.setRate(45.5));
   check('45.5 is stored as 45.5, not 46', rate.ok && rate.ratePerSqm === 45.5 && db.store.settings[0].ratePerSqm === 45.5,
         JSON.stringify(rate));
@@ -312,7 +324,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
   check('a rate that is nothing to the cent is refused, not stored as 0',
         !rate.ok && db.store.settings[0].ratePerSqm === 0.4, JSON.stringify(rate));
 
-  db = fakeDb({ booths: [
+  db = withAdmin({ booths: [
     stand('R1', { status: 'sold', assignment: { ...EMPTY(), company: 'Discount Co', actualPrice: 4000 } }),
     stand('R2', { status: 'sold', assignment: { ...EMPTY(), company: 'List Co' } }),
     stand('R3', { status: 'held', assignment: { ...EMPTY(), company: 'Premium Co', actualPrice: 7000 } }),

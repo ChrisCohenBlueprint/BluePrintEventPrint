@@ -147,6 +147,89 @@ const PLAN = (over = {}) => [
         db.store.holds.some(h => h.boothNumber === '201' && h.company === 'Holding Co'),
         JSON.stringify(db.store.holds));
 
+  console.log('\nAn import that could not be finished is undone, and a booking made meanwhile is kept');
+  // The hall before: a person's sale at its old size, a stand the previous
+  // import holds for the plan, and an empty stand only a previous import wrote.
+  const OLD = { x: 0, y: 0, w: 20, h: 20 };
+  const undoHall = () => fakeDb({
+    booths: [
+      { showId: SHOW, boothNumber: '101', status: 'sold', sqm: 4, listPrice: 2400, geometry: OLD, updatedBy: 'chris',
+        assignment: { ...EMPTY(), company: 'Real Exhibitor Ltd', contactId: 'c1', actualPrice: 2000 } },
+      { showId: SHOW, boothNumber: '102', status: 'available', sqm: 9, listPrice: 5400, geometry: PLAN()[1].geometry,
+        assignment: EMPTY() },
+      { showId: SHOW, boothNumber: '105', status: 'held', sqm: 9, listPrice: 5400, geometry: PLAN()[3].geometry,
+        source: 'artwork-import', updatedBy: 'import', holdExpiresAt: null,
+        assignment: { ...EMPTY(), company: 'Reserved Co', notes: booths.IMPORT_NOTE } },
+      { showId: SHOW, boothNumber: '107', status: 'available', sqm: 9, listPrice: 5400, geometry: { x: 200, y: 0, w: 40, h: 40 },
+        source: 'artwork-import', updatedBy: 'import', assignment: EMPTY() },
+    ],
+    holds: [{ showId: SHOW, boothNumber: '105', company: 'Reserved Co', source: 'artwork-import' }],
+    booths_snapshots: [], settings: [{ _id: SHOW, ratePerSqm: 600 }],
+  });
+  const reissue = PLAN({ 102: { status: 'sold', exhibitor: 'Plan Co' }, 105: { status: 'available', exhibitor: null } });
+  const shapeOf = () => db.store.booths.map(b => `${b.boothNumber}:${b.status}:${JSON.stringify(b.geometry)}:${b.assignment.company || ''}`)
+    .sort().join('|');
+
+  db = undoHall();
+  const beforeImport = shapeOf();
+  r = await run(() => booths.importFromArtwork(reissue, { actor: 'chris', keep: true }));
+  check('(the re-issue moves the sale, sells 102, adds 103, releases 105 and drops 107)',
+        r.ok && JSON.stringify(now('101').geometry) !== JSON.stringify(OLD) && now('102').status === 'sold' &&
+        !!now('103') && now('105').status === 'available' && !now('107'), JSON.stringify(r.reason));
+  // A person sells 102 to someone else over a socket while the import is
+  // still finishing — no plan lock stands in the way of that.
+  await run(() => booths.setStatus('102', 'sold', { company: 'Walk-in Buyer', actor: 'chris' }));
+  const pointsBefore = (db.store.booths_snapshots || []).filter(s => s.header && s.history).length;
+  let undo = await run(() => booths.restoreSnapshot(r.snapshotId, { apply: true, undoImport: true, actor: 'chris' }));
+  check('the undo succeeds', undo.ok, JSON.stringify(undo.reason || undo.kept));
+  check('the sold stand is back at the size it was sold at, still sold to its exhibitor',
+        JSON.stringify(now('101').geometry) === JSON.stringify(OLD) && now('101').sqm === 4 &&
+        now('101').status === 'sold' && now('101').assignment.company === 'Real Exhibitor Ltd',
+        JSON.stringify([now('101').geometry, now('101').sqm]));
+  check('the sale a person made meanwhile is kept, on the stand\'s old shape',
+        now('102').status === 'sold' && now('102').assignment.company === 'Walk-in Buyer',
+        `${now('102').status} ${now('102').assignment.company}`);
+  check('the stand the import created is gone', !now('103'));
+  check('the plan\'s hold the import released is held again, with its document',
+        now('105').status === 'held' && now('105').holdExpiresAt === null &&
+        db.store.holds.some(h => h.boothNumber === '105' && h.source === 'artwork-import'),
+        JSON.stringify(db.store.holds.map(h => h.boothNumber)));
+  check('the stand it dropped is back', !!now('107') && now('107').status === 'available');
+  check('and no history point is written for it', (db.store.booths_snapshots || []).filter(s => s.header && s.history).length === pointsBefore);
+
+  db = undoHall();
+  await run(() => booths.importFromArtwork(reissue, { actor: 'chris', keep: true }));
+  // This time the person's sale lands on a stand the import itself created.
+  const snapId = db.store.booths_snapshots.find(s => s.header).snapshotId;
+  await run(() => booths.setStatus('103', 'sold', { company: 'New Stand Buyer', actor: 'chris' }));
+  const afterImport = shapeOf();
+  undo = await run(() => booths.restoreSnapshot(snapId, { apply: true, undoImport: true, actor: 'chris' }));
+  check('an undo that would delete a stand a person has since booked is refused, naming it',
+        !undo.ok && undo.reason === 'booked_since' && undo.conflicts.map(c => c.boothNumber).join() === '103',
+        JSON.stringify(undo));
+  check('before anything is written', shapeOf() === afterImport && shapeOf() !== beforeImport);
+
+  console.log('\nA booking made while an import runs is not overwritten by it');
+  db = undoHall();
+  const quiet = db;
+  let raced = false;
+  db = { ...quiet, collection: (name) => {
+    const c = quiet.collection(name);
+    if (name !== 'booths') return c;
+    // A person sells 102 in the instant between the import reading the hall
+    // and writing it.
+    return { ...c, bulkWrite: async (ops) => {
+      if (!raced) { raced = true; await booths.setStatus('102', 'sold', { company: 'Quick Buyer', actor: 'chris' }); }
+      return c.bulkWrite(ops);
+    } };
+  } };
+  r = await run(() => booths.importFromArtwork(reissue, { actor: 'chris', keep: true }));
+  db = quiet;
+  check('the import runs', r.ok && raced, JSON.stringify(r.reason));
+  check('and the sale stands, not the plan\'s reading of the stand',
+        now('102').status === 'sold' && now('102').assignment.company === 'Quick Buyer' && now('102').source === undefined,
+        `${now('102').status} ${now('102').assignment.company}`);
+
   console.log('\nThe blank plan is Europe\'s, and rebuilds nobody else');
   // server/data/booth_data.json is Europe's hall. Every event used to be
   // rebuilt from it, at the rate the file was priced at.
