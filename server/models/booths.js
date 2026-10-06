@@ -37,12 +37,14 @@ const get = (boothNumber) => col().findOne({ showId: config.showId, boothNumber 
 /**
  * Projection sent to the public floorplan.
  *
- * Status names and exhibitor company names are unchanged from the original —
- * naming who has taken a stand is the point of a published floorplan.
+ * Status names are unchanged from the original, and so is the name of the
+ * exhibitor on a SOLD stand — naming who has taken a stand is the point of a
+ * published floorplan.
  *
- * What is withheld is the negotiated price and the internal deal notes. The
- * original broadcast the entire booth record to every visitor, so those were
- * public by accident rather than by intent.
+ * What is withheld is the negotiated price, the internal deal notes, and every
+ * name on a stand that is only on hold. The original broadcast the entire
+ * booth record to every visitor, so those were public by accident rather than
+ * by intent.
  */
 function toPublic(b) {
   return {
@@ -52,7 +54,12 @@ function toPublic(b) {
     // changed — it was 273 strings on every broadcast for nobody. It stays on
     // the document, where the import and the migration scripts still write it.
     status:  b.status,
-    company: b.assignment?.company || null,
+    // Only on a SOLD stand. A hold is a provisional deal, and the public page
+    // already promised never to name one (see the directory in floorplan.js) —
+    // but the name was sent regardless, so anyone reading the socket traffic
+    // could see who was negotiating for which stand. The tags and the country
+    // below were already gated this way; the company is the one that mattered.
+    company: b.status === 'sold' ? (b.assignment?.company || null) : null,
     sqm:     b.sqm,
     geometry: b.geometry,
     displayNumber: b.displayNumber || null,   // admin-set label shown in place of boothNumber (identity is unchanged)
