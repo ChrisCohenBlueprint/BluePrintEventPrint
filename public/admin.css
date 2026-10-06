@@ -386,9 +386,17 @@ body {
 .plan-warn { font-size: 11px; color: var(--orange); line-height: 1.5; }
 .plan-spec { font-size: 11px; color: var(--muted); }
 .plan-spec.is-clean { color: var(--green); }
-/* A retired event: still listed, clearly off the air. */
-.plan-card.is-retired { opacity: .62; }
+/* A retired event: still listed, clearly off the air — and still readable,
+   because its controls act on it. The whole card was faded to 62%, which
+   dimmed exactly the buttons and the note that now have to be read; the
+   dashed edge, the greyed drawing and the note say "off the air" instead. */
+.plan-card.is-retired { border-style: dashed; background: rgba(148,163,184,.04); }
+.plan-card.is-retired .plan-preview { filter: grayscale(1); opacity: .55; }
 .plan-badge.is-retired { background: rgba(148,163,184,.16); color: var(--muted); }
+.plan-retired-note {
+  padding: 8px 10px; border-radius: 8px; font-size: 11px; line-height: 1.5; color: var(--text);
+  background: rgba(148,163,184,.10); border: 1px solid rgba(148,163,184,.28);
+}
 /* The last card: the way to the next event. */
 .plan-card.plan-add { border-style: dashed; background: transparent; justify-content: center; }
 .plan-add-open {
@@ -524,6 +532,9 @@ body {
   flex: 1; justify-content: center; text-align: center;
   font-size: 11px; padding: 5px 8px; text-decoration: none;
 }
+/* The event's address, edited where it is read: "/floorplan/" and the name. */
+.show-slug { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.show-slug-input { flex: 1; min-width: 0; font-size: 12px; padding: 5px 8px; }
 
 /* The area editor, shared by the Tools cards and the on-plan panel. */
 .ara-body { display: flex; flex-direction: column; gap: 8px; }
@@ -661,6 +672,8 @@ body {
   0%, 100% { stroke-width: 3px; filter: drop-shadow(0 0 6px  rgba(244,63,94,0.55)) !important; }
   50%      { stroke-width: 9px; filter: drop-shadow(0 0 22px rgba(244,63,94,1))    !important; }
 }
+/* The same ring put back after the plan is re-tagged: held, not pulsed again. */
+.booth-search-hit.booth-search-held { animation: none; }
 
 /* Shift-select highlight (cyan) — distinct from the white selection + rose search. */
 .booth-multi { stroke: #38bdf8 !important; stroke-width: 6px !important;
@@ -1202,6 +1215,7 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .csv-report.err { border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
 .csv-head { font-weight: 700; margin-bottom: 4px; }
 .csv-line { color: var(--muted); }
+.csv-line.csv-detail { padding-left: 12px; }   /* one package's changes, under "Update N" */
 .csv-err  { color: var(--red); }
 
 .csv-help { margin-top: 14px; font-size: 12.5px; }
@@ -1242,6 +1256,13 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .aba-hold-extend { font-size: 11px; padding: 5px 10px; flex-shrink: 0; }
 .tt-hold { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
 .tt-hold.urgent { color: var(--orange); }
+
+/* The deal form, when the stand has changed hands under what is being typed. */
+.aba-deal-note {
+  margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; font-size: 11.5px; line-height: 1.45;
+  color: var(--text); background: rgba(249,115,22,.10); border: 1px solid rgba(249,115,22,.3);
+}
+.aba-deal-note[hidden] { display: none; }
 
 /* ─── Closing a panel ───────────────────────────────────────────────────────
    There was no close control at all; the panel could only be replaced. */

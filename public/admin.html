@@ -322,6 +322,9 @@
             <label style="font-size:11px; color:var(--muted); display:block; margin-bottom:4px;">Notes</label>
             <textarea id="aba-notes" class="admin-input" rows="3" placeholder="e.g. 10% discount agreed, invoice due Sept…" style="width:100%; font-size:13px; resize:vertical;"></textarea>
           </div>
+          <!-- Shown only when the stand changes hands while something is being
+               typed here: what was typed was meant for the booking before. -->
+          <p class="aba-deal-note" id="aba-deal-note" role="status" hidden></p>
           <button class="admin-btn success" id="aba-save-deal" style="width:100%;">💾 Save Deal Details</button>
         </div>
         <button class="admin-btn" id="aba-export" style="width:100%; margin-top:8px;">⬇️ Export to CSV</button>
@@ -336,7 +339,9 @@
           <label class="settings-label">Price per unit</label>
           <div class="settings-rate-row">
             <span class="rate-current" id="rate-current">—</span>
-            <input type="number" id="rate-input" class="admin-input" placeholder="new rate per unit, e.g. 600" min="1" step="1">
+            <!-- The server keeps a rate to the cent and refuses anything at or
+                 below zero; step and min say the same, so 612.50 can be typed. -->
+            <input type="number" id="rate-input" class="admin-input" placeholder="new rate per unit, e.g. 600" min="0.01" step="0.01">
             <input type="password" id="rate-password" class="admin-input" placeholder="Your password" autocomplete="current-password">
             <button type="button" id="rate-save" class="admin-btn success">Update rate</button>
           </div>
@@ -868,7 +873,7 @@
               </select>
             </div>
             <div class="tool-field">
-              <label>Company (optional)</label>
+              <label>Company (needed for a sale; blank keeps the current one)</label>
               <input type="text" id="status-company" class="admin-input" placeholder="Company name">
             </div>
             <button type="submit" class="admin-btn success full">

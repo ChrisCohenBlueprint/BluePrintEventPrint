@@ -9,7 +9,7 @@ const socket = io({ query: { show: SHOW } });
 // knew a 401 meant "your session ended", this file did not and rendered an
 // empty dashboard instead; sales.js had a working money(), this file called one
 // that was never defined anywhere.
-const { esc, cap, money, api, emitAck, withPending, askSecret, confirmDialog } = window.UI;
+const { esc, cap, money, api, emitAck, withPending, askSecret, confirmDialog, askFields, askText, dialogOpen } = window.UI;
 
 // Show who is signed in. currentRole gates team management — only the owner may
 // add/remove members or reset a colleague's password/2FA (the server enforces
@@ -183,7 +183,12 @@ const aFrame = document.getElementById('admin-map-frame');
 const aInner = document.getElementById('admin-map-inner');
 
 let pzAdmin;
+// Once per page. The pan/zoom lives on the frame around the plan, which a new
+// drawing does not replace, so a second call only stacked a second panzoom and
+// a second set of button and search listeners on top of the first — every
+// zoom click then zoomed twice.
 function initAdminPanZoom() {
+  if (pzAdmin) return;
   pzAdmin = panzoom(aInner, {
     maxZoom: 8,
     minZoom: 0.3,
@@ -217,8 +222,8 @@ function initAdminPanZoom() {
   wireMultiBar();
 }
 
-// Wire the floating multi-select action bar once (initAdminPanZoom re-runs on
-// every floorplan (re)load, so guard against stacking duplicate listeners).
+// Wire the floating multi-select action bar once — guarded on its own, so it
+// can never stack duplicate listeners whoever calls it.
 let multiWired = false;
 function wireMultiBar() {
   if (multiWired) return;
@@ -268,10 +273,13 @@ async function consolidateMultiSelect() {
 // A merged block keeps the top-left stand's number, which is rarely what the
 // admin wants it called — so the name is asked for as the last step of the
 // merge rather than left to a separate trip through the Shown Number tool.
-// Leaving it as offered (or cancelling) keeps the number it already has.
-function nameMergedStand(primary) {
+// Leaving it as offered (or cancelling) keeps the number it already has. Asked
+// in the console's own dialog, like the other questions on this panel.
+async function nameMergedStand(primary) {
   const current = shownN(primary);
-  const name = prompt(`Merged into stand ${current}. Number to show for the merged stand:`, current);
+  const name = await askText(`The stands are merged into stand ${current}. Keep that number, or give the merged stand the one to show.`,
+    { title: 'Number the merged stand', name: 'number', label: 'Number to show', value: current, maxLength: 20,
+      confirmLabel: 'Use this number' });
   if (name === null) return;
   const displayNumber = name.trim();
   if (!displayNumber || displayNumber === current) return;
@@ -339,21 +347,50 @@ function runAdminBoothSearch() {
   if (!n) { adminToast(`No booth matching "${v}".`, 'error'); return; }
   selectAdminBooth(n);   // clears prior search hit + sets the selection
   focusAdminBooth(n);
+  searchHitId = n;       // remembered, so a re-tag can put the highlight back
   // Flag the found stand with a pulsing highlight so it's obvious which box it
   // is. Remove + reflow + re-add so the pulse restarts even on a repeat search.
   const el = svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`);
   if (el) {
-    el.classList.remove('booth-search-hit');
+    el.classList.remove('booth-search-hit', 'booth-search-held');
     void el.getBoundingClientRect();
     el.classList.add('booth-search-hit');
   }
 }
 
+// The stand the last search found, until another is selected. A re-tag — any
+// split, merge or renumber, by anyone — rebuilds the stands and BoothMap.clear
+// strips the highlight, so the found stand went back to looking like every
+// other one until the admin searched again.
+let searchHitId = null;
+
 // ─── Load Admin SVG ───────────────────────────────────────────────────────────
 let adminSvgReady = false;
 let adminTagged = false;
 
-async function loadAdminSVG() {
+/**
+ * Fetch the plan — once, however many times it is asked for.
+ *
+ * Opening the Floorplan tab started a load whenever the plan was not there
+ * yet, so a double-click on the nav, or leaving the tab and coming back while
+ * the plan was still on its way, ran two. The second replaced the drawing with
+ * a fresh UNTAGGED copy while the console still believed the plan was tagged,
+ * and set up pan/zoom a second time: a plan whose stands answered no clicks,
+ * under buttons that zoomed twice, until a reload. Now everyone who asks waits
+ * for the one load in flight.
+ */
+let adminSvgLoad = null;
+function loadAdminSVG() {
+  if (!adminSvgLoad) adminSvgLoad = fetchAdminSVG().finally(() => { adminSvgLoad = null; });
+  return adminSvgLoad;
+}
+
+/** Resolves once the plan is on the page — or has failed, and the tab says why. */
+function adminPlanReady() {
+  return svgDoc ? Promise.resolve() : loadAdminSVG();
+}
+
+async function fetchAdminSVG() {
   const mount = document.getElementById('admin-svg-mount');
   try {
     // The artwork for THIS show — uploaded per event, falling back to the file
@@ -377,6 +414,9 @@ async function loadAdminSVG() {
     svgDoc.setAttribute('width', '100%');
     svgDoc.setAttribute('height', '100%');
     adminSvgReady = true;
+    // A drawing straight off the server carries no stands, whatever was true
+    // of the one before it.
+    adminTagged = false;
     tagAdminBooths();
     lucide.createIcons();
     initAdminPanZoom();
@@ -425,6 +465,9 @@ function tagAdminBooths() {
   // shift-selection the admin was midway through building.
   if (selectedAdminId) multiEl(selectedAdminId)?.classList.add('booth-selected');
   if (multiSel.size) renderMultiSelect();
+  // And the stand a search found keeps its highlight — held still, not
+  // pulsing again: the re-tag was somebody's change, not a new search.
+  if (searchHitId) multiEl(searchHitId)?.classList.add('booth-search-hit', 'booth-search-held');
 
   paintAdminAreas();   // a re-tag rebuilds the plan under the area logos
 }
@@ -634,6 +677,13 @@ function hideAdminTooltip() { adminTooltip.classList.add('hidden'); }
 
 // ─── Admin Select Booth ───────────────────────────────────────────────────────
 function selectAdminBooth(id) {
+  // Asked for before the plan has arrived — a link in the Activity Log is often
+  // the first thing to open the Floorplan tab — this threw on the missing
+  // drawing. It waits for the plan instead, then selects.
+  if (!svgDoc) {
+    adminPlanReady().then(() => { if (svgDoc && booths[id]) selectAdminBooth(id); });
+    return;
+  }
   clearMultiSelect();                              // a plain click abandons any shift-selection
   if (splitUI.id && splitUI.id !== id) exitSplitMode();   // …and a half-placed divider on another stand
   if (selectedAreaKey) {
@@ -646,7 +696,8 @@ function selectAdminBooth(id) {
   }
   // Drop any lingering search highlight when the selection changes (e.g. a click
   // elsewhere), so only the current search hit ever pulses.
-  svgDoc.querySelectorAll('.booth-search-hit').forEach((e) => e.classList.remove('booth-search-hit'));
+  svgDoc.querySelectorAll('.booth-search-hit').forEach((e) => e.classList.remove('booth-search-hit', 'booth-search-held'));
+  searchHitId = null;
   selectedAdminId = id;
   svgDoc.querySelector(`[data-booth="${CSS.escape(id)}"]`)?.classList.add('booth-selected');
   renderAdminBoothAction(id);
@@ -731,10 +782,19 @@ function resetDescription(r) {
   return `remove the leftover cell ${shownN(r.target)}`;
 }
 
+/**
+ * The stand a successful reset actually changed. Asked of a split cell, the
+ * server undoes its parent's split and says which parent (`parent`) — so
+ * that, not the cell that was asked about and is now gone, is the stand to
+ * name and to open.
+ */
+const resetLanded = (asked, res) => (res && res.type === 'unsplit' && res.parent) || asked;
+
 function resetToastFor(boothNumber, res) {
-  return res.type === 'unmerge' ? `Stand ${shownN(boothNumber)} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
-       : res.type === 'unsplit' ? `Stand ${shownN(boothNumber)} un-split — removed ${(res.removed || []).join(', ')}.`
-       : `Removed leftover cell ${shownN(boothNumber)}.`;
+  const n = resetLanded(boothNumber, res);
+  return res.type === 'unmerge' ? `Stand ${shownN(n)} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
+       : res.type === 'unsplit' ? `Stand ${shownN(n)} un-split — removed ${(res.removed || []).join(', ')}.`
+       : `Removed leftover cell ${shownN(n)}.`;
 }
 
 async function resetFromPanel(n) {
@@ -748,7 +808,17 @@ async function resetFromPanel(n) {
   if (!await confirmDialog(`This will ${resetDescription(r)}.`,
       { title: `Reset stand ${shownN(r.target)}`, confirmLabel: 'Reset it' })) return;
   socket.emit('booth:reset', { boothNumber: r.target }, (res) => {
-    if (res && res.ok) { adminToast(resetToastFor(r.target, res), 'ok'); if (booths[r.target]) selectAdminBooth(r.target); }
+    if (res && res.ok) {
+      adminToast(resetToastFor(r.target, res), 'ok');
+      // A leftover cell is gone once reset, so its panel closes here, under
+      // the toast that says why — not a moment later when the broadcast finds
+      // the stand missing and has to explain it all over again. Otherwise the
+      // panel moves to the stand the server says it changed.
+      const landed = resetLanded(r.target, res);
+      if (res.type === 'remove-cell') closeStandPanel();
+      else if (booths[landed]) selectAdminBooth(landed);
+      else closeStandPanel();
+    }
     else adminToast((res && res.error) || 'Reset failed.', 'error');
   });
 }
@@ -787,7 +857,7 @@ async function restoreMultiSelect() {
     }
     const r = targets[i];
     socket.emit('booth:reset', { boothNumber: r.target }, (res) => {
-      if (res && res.ok) done.push(r.target);
+      if (res && res.ok) done.push(resetLanded(r.target, res));
       else failed.push((res && res.error) || `Could not reset ${shownN(r.target)}.`);
       next(i + 1);
     });
@@ -1061,7 +1131,7 @@ function applySplit() {
   document.getElementById('split-bar-apply')?.addEventListener('click', applySplit);
   document.getElementById('split-bar-cancel')?.addEventListener('click', exitSplitMode);
   document.addEventListener('keydown', (e) => {
-    if (!splitUI.id) return;
+    if (!splitUI.id || keyForDialog(e)) return;   // a dialog's keys are the dialog's
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
     const vertical = splitUI.axis === 'vertical';
@@ -1099,7 +1169,16 @@ function closeAreaPanel() {
 document.getElementById('aba-close')?.addEventListener('click', closeStandPanel);
 document.getElementById('ara-close')?.addEventListener('click', closeAreaPanel);
 
+/**
+ * Keys pressed in a dialog are the dialog's. Escape pressed to cancel a
+ * confirm also closed the stand panel behind it: the keystroke bubbles up to
+ * the page, and the dialog's focused BUTTON did not look like typing to the
+ * check below.
+ */
+const keyForDialog = (e) => dialogOpen() || !!(e.target && e.target.closest && e.target.closest('dialog'));
+
 document.addEventListener('keydown', (e) => {
+  if (keyForDialog(e)) return;
   // Split mode owns Escape while a divider is placed — see wireSplitBar above.
   if (splitUI.id) return;
   const tag = (e.target && e.target.tagName) || '';
@@ -1157,20 +1236,26 @@ function contrastText(hex) {
   return L > 0.4 ? '#111827' : '#ffffff';
 }
 
+/**
+ * The stand panel, drawn for the stand just selected.
+ *
+ * It used to be drawn ONLY here, at the click, while the broadcasts that
+ * followed repainted its tags and buttons and nothing else. Production
+ * acknowledges an action ~80 ms before the state that reflects it arrives, so
+ * the panel went on showing the stand as it was at the click: Mark Sold and it
+ * still read "Available", a merge showed one stand's size for the whole block,
+ * a split the whole stand's size for one cell. Now every broadcast redraws the
+ * open panel from the live stand — see refreshStandPanel — except whatever is
+ * being typed into it, which belongs to the person typing.
+ */
 function renderAdminBoothAction(n) {
   const b = booths[n];
   if (!b) return;
-  const d = dealOf(b);
   const panel = document.getElementById('admin-booth-action');
   panel.classList.remove('hidden');
 
-  renderPanelNumber(b);
-  document.getElementById('aba-status').textContent  = cap(b.status);
-  document.getElementById('aba-sqm').textContent     = `${b.sqm} ${UNIT}`;
-  document.getElementById('aba-price').textContent   = `${CUR}${(b.listPrice || 0).toLocaleString()}`;
-  document.getElementById('aba-company').textContent = d.company || '—';
-  document.getElementById('aba-viewers').textContent = b.viewers || 0;
-  document.getElementById('aba-clicks').textContent  = b.clicks || 0;
+  paintStandPanel(b, { fresh: true });
+  fillDealFields(b);          // a fresh selection starts from what is stored
 
   // Click history is no longer a 20-entry array on the booth; it comes from the
   // activity stream, so it survives restarts and is not capped.
@@ -1178,6 +1263,7 @@ function renderAdminBoothAction(n) {
   clickList.textContent = 'Loading…';
   api(`/api/booths/${encodeURIComponent(n)}/activity?limit=20`)
     .then(rows => {
+      if (selectedAdminId !== n) return;      // another stand was opened meanwhile
       clickList.replaceChildren();
       if (!rows.length) { clickList.textContent = 'No activity yet.'; return; }
       rows.forEach(r => {
@@ -1187,40 +1273,190 @@ function renderAdminBoothAction(n) {
         clickList.appendChild(div);
       });
     })
-    .catch(() => { clickList.textContent = 'Could not load activity.'; });
+    .catch(() => { if (selectedAdminId === n) clickList.textContent = 'Could not load activity.'; });
+
+  document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
+}
+
+/** Everything on the panel that is READ off the stand rather than typed into it. */
+function paintStandPanel(b, { fresh = false } = {}) {
+  const n = b.boothNumber;
+  const d = dealOf(b);
+  // The title follows a rename from anywhere (this panel, Tools, another
+  // admin) — unless the number is being typed here right now, in which case
+  // the admin's keystrokes are not thrown away for a broadcast.
+  const numberInput = document.getElementById('aba-id-input');
+  if (fresh || !numberInput || numberInput.hidden) renderPanelNumber(b);
+  document.getElementById('aba-status').textContent  = cap(b.status);
+  document.getElementById('aba-sqm').textContent     = `${b.sqm} ${UNIT}`;
+  document.getElementById('aba-price').textContent   = `${CUR}${(b.listPrice || 0).toLocaleString()}`;
+  document.getElementById('aba-company').textContent = d.company || '—';
+  document.getElementById('aba-viewers').textContent = b.viewers || 0;
+  document.getElementById('aba-clicks').textContent  = b.clicks || 0;
 
   renderStandActions(n);
   renderBoothSponsor(n);
   renderHoldPanel(n);   // the clock on a held stand, and the way to extend it
-  document.getElementById('aba-export').onclick  = () => exportSingleCSV(n);
-
   renderBoothTags(n);
+}
 
-  document.getElementById('aba-actual-price').value = d.actualPrice ?? '';
-  document.getElementById('aba-notes').value        = d.notes ?? '';
-  document.getElementById('aba-save-deal').onclick  = () => {
-    // Sent as typed (blank → clear). `parseFloat(v) || null` turned a legitimate
-    // zero into null, so a stand genuinely given away free could not be recorded
-    // as free — and it disagreed with the inline path in the bookings table,
-    // which has always preserved "0". The server parses and validates.
-    const raw = document.getElementById('aba-actual-price').value;
-    const actualPrice = String(raw).trim() === '' ? null : raw;
-    const notes = document.getElementById('aba-notes').value.trim();
-    const btn = document.getElementById('aba-save-deal');
-    btn.disabled = true; btn.textContent = 'Saving…';
-    // Confirm from the server rather than claiming success on emit. Previously
-    // this showed "✅ Saved!" even when the write failed.
-    socket.emit('booth:update-deal', { boothNumber: n, actualPrice, notes }, (res) => {
-      btn.disabled = false;
-      if (res && res.ok) {
-        btn.textContent = '✅ Saved!';
-        setTimeout(() => { btn.textContent = '💾 Save Deal Details'; }, 2000);
-      } else {
-        btn.textContent = '💾 Save Deal Details';
-        adminToast((res && res.error) || 'Could not save deal details.', 'error');
+/** On a broadcast: the open panel, brought in line with the stand as it now is. */
+function refreshStandPanel() {
+  const b = booths[selectedAdminId];
+  if (!b || document.getElementById('admin-booth-action')?.classList.contains('hidden')) return;
+  paintStandPanel(b);
+  syncDealFields(b);
+}
+
+// ── The deal fields: what is typed is the person's, the rest is the stand's ──
+//
+// They were filled once, when the stand was clicked, and Save sent BOTH every
+// time. So a note saved after a colleague had changed the price put the old
+// price back; and with the panel left open across a release and a fresh
+// booking, the new exhibitor's booking was written with the old one's price.
+//
+// The form now remembers what it was filled with. A field nobody has typed in
+// follows every broadcast; one that has been typed in is left alone. Save
+// sends only the fields that were typed in, and names the exhibitor the form
+// was filled for — the server refuses it if the stand has changed hands since.
+const dealForm = { booth: null, price: '', notes: '', company: null };
+
+const dealEls = () => ({
+  price: document.getElementById('aba-actual-price'),
+  notes: document.getElementById('aba-notes'),
+  save:  document.getElementById('aba-save-deal'),
+  note:  document.getElementById('aba-deal-note'),
+});
+const priceText = (v) => (v == null ? '' : String(v));
+const notesText = (v) => (v == null ? '' : String(v));
+
+function fillDealFields(b) {
+  const d = dealOf(b);
+  const f = dealEls();
+  dealForm.booth = b.boothNumber;
+  dealForm.price = priceText(d.actualPrice);
+  dealForm.notes = notesText(d.notes);
+  dealForm.company = d.company || null;
+  f.price.value = dealForm.price;
+  f.notes.value = dealForm.notes;
+  paintDealState(b);
+}
+
+/** Which fields now hold something other than what they were filled with. */
+function dealTyped() {
+  const f = dealEls();
+  return { price: f.price.value !== dealForm.price, notes: f.notes.value !== dealForm.notes };
+}
+
+const changedHands = (b) => (dealOf(b).company || null) !== dealForm.company;
+
+function syncDealFields(b) {
+  if (dealForm.booth !== b.boothNumber) return fillDealFields(b);
+  const typed = dealTyped();
+  if (!typed.price && !typed.notes) return fillDealFields(b);
+  // Something has been typed. While the stand is still the same exhibitor's,
+  // the field nobody touched follows the stand; once it has changed hands,
+  // what was typed was meant for someone else, so nothing moves and the form
+  // says so.
+  if (!changedHands(b)) {
+    const d = dealOf(b), f = dealEls();
+    if (!typed.price) { dealForm.price = priceText(d.actualPrice); f.price.value = dealForm.price; }
+    if (!typed.notes) { dealForm.notes = notesText(d.notes); f.notes.value = dealForm.notes; }
+  }
+  paintDealState(b);
+}
+
+/** Usable only where the server accepts a deal, and a stale form said plainly. */
+function paintDealState(b) {
+  const f = dealEls();
+  const editable = dealEditable(b);
+  const typed = dealTyped();
+  // A field already typed in stays usable even if the stand was released
+  // under it, so what was typed is not locked away mid-word.
+  f.price.disabled = !editable && !typed.price;
+  f.notes.disabled = !editable && !typed.notes;
+  const why = editable ? '' : 'Only a sold or held stand can carry a deal price or notes.';
+  f.price.title = why; f.notes.title = why;
+  if (f.note) {
+    const moved = changedHands(b) && (typed.price || typed.notes);
+    f.note.hidden = !moved;
+    f.note.textContent = moved
+      ? `Stand ${shownB(b)} has changed hands since this form was filled` +
+        `${dealForm.company ? ` for ${dealForm.company}` : ''}. What is typed here has not been saved — ` +
+        'click the stand again to start from its current booking.'
+      : '';
+  }
+}
+
+async function saveDealDetails() {
+  const n = dealForm.booth;
+  const b = booths[n];
+  const f = dealEls();
+  if (!b || n !== selectedAdminId) return;
+  // The server checks this too. Saying it here as well costs nothing, and
+  // does not depend on which side of the race the broadcast landed.
+  if (changedHands(b)) return adminToast('This stand has changed hands since you opened it — reopen it before saving.', 'error');
+  if (!dealEditable(b)) return adminToast('Only a sold or held stand can carry a deal price or notes.', 'error');
+  const typed = dealTyped();
+  if (!typed.price && !typed.notes) return adminToast('Nothing has been changed, so there is nothing to save.', 'ok');
+
+  const payload = { boothNumber: n };
+  // The price is sent as typed (blank → clear). `parseFloat(v) || null` turned
+  // a legitimate zero into null, so a stand genuinely given away free could
+  // not be recorded as free — and it disagreed with the inline path in the
+  // bookings table, which has always preserved "0". The server parses and
+  // validates. A field nobody typed in is not sent at all, so it cannot put
+  // back a value somebody else has since changed.
+  const sentPrice = f.price.value;
+  const sentNotes = f.notes.value.trim();
+  if (typed.price) payload.actualPrice = String(sentPrice).trim() === '' ? null : sentPrice;
+  if (typed.notes) payload.notes = sentNotes;
+  if (dealForm.company) payload.expectCompany = dealForm.company;
+
+  f.save.disabled = true; f.save.textContent = 'Saving…';
+  // Confirmed from the server rather than claimed on emit. This showed
+  // "✅ Saved!" even when the write failed.
+  const res = await emitAck(socket, 'booth:update-deal', payload);
+  f.save.disabled = false;
+  if (res && res.ok) {
+    // What was sent is now what is stored, so those fields are no longer
+    // "typed" — unless the person carried on typing while it saved.
+    if (dealForm.booth === n) {
+      if (typed.price) dealForm.price = sentPrice;
+      if (typed.notes) {
+        dealForm.notes = sentNotes;
+        if (f.notes.value.trim() === sentNotes) f.notes.value = sentNotes;
       }
-    });
-  };
+      if (booths[n]) paintDealState(booths[n]);
+    }
+    f.save.textContent = '✅ Saved!';
+    setTimeout(() => { f.save.textContent = '💾 Save Deal Details'; }, 2000);
+  } else {
+    f.save.textContent = '💾 Save Deal Details';
+    adminToast((res && res.error) || 'Could not save deal details.', 'error');
+  }
+}
+document.getElementById('aba-save-deal')?.addEventListener('click', saveDealDetails);
+['aba-actual-price', 'aba-notes'].forEach(id => document.getElementById(id)?.addEventListener('input', () => {
+  if (booths[dealForm.booth]) paintDealState(booths[dealForm.booth]);
+}));
+
+/**
+ * The stand on the open panel no longer exists: merged into a neighbour,
+ * taken off the plan, or a cell whose split was undone.
+ *
+ * The panel stayed open and live — "Stand 116 · Available", offering Mark Sold
+ * on a stand a colleague had just merged into 115, which answered "Stand 116
+ * not found." It closes now, and says why, so a stand vanishing from under the
+ * cursor is not a mystery.
+ */
+function closeVanishedStand(n, label = n, into = null) {
+  closeStandPanel();
+  const merged = into || (Object.values(booths).find(b => (b.mergedFrom || []).includes(n)) || {}).boothNumber;
+  const why = removedBooths[n] ? 'has been taken off the plan'
+            : merged ? `has been merged into stand ${shownN(merged)}`
+            : 'no longer exists — the merge or split that made it was undone';
+  adminToast(`Stand ${label} ${why}, so its panel has been closed.`, 'ok');
 }
 
 function cell(parent, tag = 'td') {
@@ -1686,6 +1922,9 @@ async function removeStandFromPlan(boothNumber) {
     { title: `Remove stand ${shownN(boothNumber)}`, confirmLabel: 'Remove it', danger: true })) return;
   const res = await emitAck(socket, 'booth:remove', { boothNumber });
   if (!res || !res.ok) return adminToast((res && res.error) || 'Could not remove that stand.', 'error');
+  // The stand is off the plan, so its panel goes with it — here, where the
+  // toast below already says what happened.
+  if (selectedAdminId === boothNumber) closeStandPanel();
   // Undo where the change was made, the way releasing a booking offers it (see
   // offerUndoRelease). Tools → Removed Stands is the permanent way back, but it
   // is one of eleven cards on a long page, and nothing about a stand quietly
@@ -1710,29 +1949,67 @@ async function removeStandFromPlan(boothNumber) {
 /** What the release/un-book gate is asking for, in the operator's words. */
 const secretNoun = () => (recoveryRequired ? 'recovery key' : 'admin password');
 
+// What a hold taken without a name is stored as. It must never become the
+// exhibitor on a confirmed sale, so it is neither offered nor accepted as one.
+const HOLD_PLACEHOLDER = 'Pending';
+const isPlaceholder = (name) => String(name || '').trim().toLowerCase() === HOLD_PLACEHOLDER.toLowerCase();
+
+// A hold is measured in hours, within the bounds the server keeps a hold to
+// (the extend route's): at least one hour, at most thirty days.
+const HOLD_HOURS_MAX = 24 * 30;
+function holdHoursProblem(text) {
+  // Number(), not parseFloat(): parseFloat reads "24 hours" as 24 and lets
+  // "Infinity" and "1e10" through as numbers, and a hold of ten billion hours
+  // is a sale nobody agreed to.
+  const h = Number(text);
+  if (text === '' || !Number.isFinite(h) || h < 1 || h > HOLD_HOURS_MAX) {
+    return `A hold lasts between 1 and ${HOLD_HOURS_MAX} hours (30 days) — enter the number of hours.`;
+  }
+  return null;
+}
+
 async function adminAction(action, boothNumber) {
   const done = (verb) => (res) => {
     if (res && res.ok) adminToast(`Stand ${boothNumber} ${verb}.`, 'ok');
     else adminToast((res && res.error) || `Could not ${action} stand ${boothNumber}.`, 'error');
   };
+  // Both of these were window.prompt(). OK on an empty "Company name:" booked
+  // the stand as "Admin"; a nameless hold's "Move to Sold" was pre-filled with
+  // "Pending", so Enter sold the stand to the placeholder; and Cancel on "Hold
+  // for how many hours?" still held it, because `parseFloat(null) || 24` is 24.
+  // They ask in the console's own dialog now, which can refuse an answer and
+  // say why without losing what was typed.
   if (action === 'book') {
+    const b = booths[boothNumber];
+    const held = !!b && b.status === 'held';
     // A held stand is already holding for someone, so the name is offered
-    // rather than asked for — Enter confirms it. Still editable, because a hold
-    // taken without a name is stored as the placeholder "Pending", and that
-    // must not become the exhibitor on a confirmed sale.
-    const existing = dealOf(booths[boothNumber]).company || '';
-    const company = existing
-      ? prompt(`Move stand ${boothNumber} to sold. Confirm the company:`, existing)
-      : prompt('Company name:');
+    // rather than asked for — Enter confirms it. Still editable, and never the
+    // placeholder a nameless hold is stored as.
+    const existing = isPlaceholder(dealOf(b).company) ? '' : (dealOf(b).company || '');
+    const company = await askText(
+      held ? `Stand ${shownN(boothNumber)} is on hold${existing ? ` for ${existing}` : ' without a name'}. Who is it sold to?`
+           : `Book stand ${shownN(boothNumber)} as sold.`,
+      { title: held ? `Move stand ${shownN(boothNumber)} to sold` : `Mark stand ${shownN(boothNumber)} sold`,
+        name: 'company', label: 'Exhibitor (company name)', value: existing,
+        confirmLabel: held ? 'Move to sold' : 'Mark sold',
+        required: true, requiredMessage: 'A sale needs the exhibitor\'s name.',
+        validate: (v) => (isPlaceholder(v)
+          ? `"${HOLD_PLACEHOLDER}" is what a hold without a name is called — enter the exhibitor's real name.` : null) });
     if (company === null) return;
-    socket.emit('booth:book', { boothNumber, company: company.trim() || 'Admin' },
-                done(existing ? 'moved to sold' : 'booked'));
+    done(held ? 'moved to sold' : 'booked')(await emitAck(socket, 'booth:book', { boothNumber, company }));
   }
   if (action === 'hold') {
-    const company = prompt('Company name:');
-    if (company === null) return;
-    const hours = parseFloat(prompt('Hold for how many hours?', '24')) || 24;
-    socket.emit('booth:hold', { boothNumber, company: company.trim() || 'Pending', hours }, done('held'));
+    const v = await askFields(
+      `Hold stand ${shownN(boothNumber)}. Nobody else can book it until the hold runs out or is released.`,
+      { title: `Put stand ${shownN(boothNumber)} on hold`, confirmLabel: 'Hold it',
+        fields: [
+          // A hold may be nameless; it is stored under the placeholder.
+          { name: 'company', label: 'For (company name — optional)', placeholder: 'Leave blank if not known yet' },
+          { name: 'hours', label: 'For how many hours', value: '24', inputMode: 'decimal', validate: holdHoursProblem },
+        ] });
+    if (!v) return;                                    // cancelled: nothing is held
+    done('held')(await emitAck(socket, 'booth:hold',
+      { boothNumber, company: v.company || HOLD_PLACEHOLDER, hours: Number(v.hours) }));
   }
   if (action === 'release') {
     // Releasing frees a stand and clears its booking, so it's gated: the recovery
@@ -2005,25 +2282,40 @@ function populateToolDropdowns() {
   renderSponsorBooths();
 }
 
-// Prefill the text box with the selected stand's current shown number.
+// Prefill the text box with the selected stand's current shown number — when
+// the choice of STAND changes, and only then. This used to run on every
+// keystroke in the box (it was the box's own `input` listener) and on every
+// broadcast and settings push (through populateToolDropdowns), and each time
+// it put the stored number back: the box could not be typed into at all.
+let numberFieldFor = null;
 function syncNumberField() {
   const sel = document.getElementById('number-stand');
   const inp = document.getElementById('number-value');
-  const prev = document.getElementById('number-preview');
   if (!sel || !inp) return;
-  const b = booths[sel.value];
-  inp.value = (b && b.displayNumber) || '';
-  if (prev) {
-    if (b) {
-      const to = inp.value.trim() || b.boothNumber;
-      prev.innerHTML = `Stand <b>${esc(b.boothNumber)}</b> → shown as <b>${esc(to)}</b>` +
-        (to === b.boothNumber ? ' <span class="mv-rate">(own number)</span>' : '');
-      prev.classList.remove('hidden');
-    } else prev.classList.add('hidden');
+  if (sel.value !== numberFieldFor) {
+    numberFieldFor = sel.value;
+    const b = booths[sel.value];
+    inp.value = (b && b.displayNumber) || '';
   }
+  paintNumberPreview();
+}
+
+/** "Stand 112 → shown as 1037", from whatever is in the box right now. */
+function paintNumberPreview() {
+  const sel = document.getElementById('number-stand');
+  const inp = document.getElementById('number-value');
+  const prev = document.getElementById('number-preview');
+  if (!sel || !inp || !prev) return;
+  const b = booths[sel.value];
+  if (b) {
+    const to = inp.value.trim() || b.boothNumber;
+    prev.innerHTML = `Stand <b>${esc(b.boothNumber)}</b> → shown as <b>${esc(to)}</b>` +
+      (to === b.boothNumber ? ' <span class="mv-rate">(own number)</span>' : '');
+    prev.classList.remove('hidden');
+  } else prev.classList.add('hidden');
 }
 document.getElementById('number-stand')?.addEventListener('change', syncNumberField);
-document.getElementById('number-value')?.addEventListener('input', syncNumberField);
+document.getElementById('number-value')?.addEventListener('input', paintNumberPreview);
 document.getElementById('number-form')?.addEventListener('submit', e => {
   e.preventDefault();
   const boothNumber = document.getElementById('number-stand').value;
@@ -2190,13 +2482,20 @@ document.getElementById('split-form')?.addEventListener('submit', (e) => {
 });
 
 // ─── Custom Split (your own numbers + sizes) ──────────────────────────────────
+// A size is kept to the hundredth, and the parts must add up to the stand
+// exactly — to the hundredth, as the server now requires. The box stepped in
+// whole units and a total out by as much as a whole unit was let through, only
+// for the server to refuse it.
+const round2 = (n) => Math.round(n * 100) / 100;
+const sizesMatch = (sum, total) => Math.abs(sum - total) < 0.005;
+
 const csplitRows = document.getElementById('csplit-rows');
 function csplitAddRow() {
   if (!csplitRows || csplitRows.children.length >= 8) return;
   const row = document.createElement('div');
   row.className = 'csplit-row';
   const num = document.createElement('input');  num.className = 'csplit-num';  num.type = 'text';   num.placeholder = 'Number';
-  const size = document.createElement('input'); size.className = 'csplit-size'; size.type = 'number'; size.min = '1'; size.step = '1'; size.placeholder = 'Size';
+  const size = document.createElement('input'); size.className = 'csplit-size'; size.type = 'number'; size.min = '0.01'; size.step = '0.01'; size.placeholder = 'Size';
   const del = document.createElement('button');  del.type = 'button'; del.className = 'csplit-del'; del.title = 'Remove'; del.textContent = '×';
   row.append(num, size, del);
   csplitRows.appendChild(row);
@@ -2208,8 +2507,8 @@ function csplitUpdateTally() {
   let sum = 0; csplitRows.querySelectorAll('.csplit-size').forEach(i => { sum += Number(i.value) || 0; });
   if (!total) { tally.textContent = 'Select a stand to see its total size.'; tally.className = 'csplit-tally'; return; }
   const left = total - sum;
-  tally.textContent = `Total ${total} ${UNIT} · placed ${sum} · left ${left}`;
-  tally.className = 'csplit-tally' + (left === 0 ? ' ok' : (left < 0 ? ' over' : ''));
+  tally.textContent = `Total ${total} ${UNIT} · placed ${round2(sum)} · left ${round2(left)}`;
+  tally.className = 'csplit-tally' + (sizesMatch(sum, total) ? ' ok' : (left < 0 ? ' over' : ''));
 }
 if (csplitRows) {
   document.getElementById('csplit-add').addEventListener('click', () => { csplitAddRow(); csplitUpdateTally(); });
@@ -2232,7 +2531,10 @@ if (csplitRows) {
       });
       if (parts.length < 2) return adminToast('Enter at least two parts, each with a number and a size.', 'error');
       const total = csplitTotal(), sum = parts.reduce((acc, p) => acc + p.sqm, 0);
-      if (Math.abs(sum - total) > 1) return adminToast(`Sizes must add up to ${total} ${UNIT} — you have ${sum}.`, 'error');
+      if (!sizesMatch(sum, total)) {
+        return adminToast(`The parts must add up to exactly ${total} ${UNIT}, the size of the stand — they come to ` +
+          `${round2(sum)} ${UNIT}, ${round2(Math.abs(total - sum))} ${UNIT} ${sum > total ? 'too much' : 'short'}.`, 'error');
+      }
       if (!await confirmDialog(
         `Split stand ${shownN(boothNumber)} (${total} ${UNIT}) into:\n\n` +
         parts.map(p => `    ${p.number} — ${p.sqm} ${UNIT}`).join('\n') +
@@ -2251,20 +2553,20 @@ if (csplitRows) {
 document.getElementById('reset-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
   return withPending(e.target.querySelector('button[type=submit]'), async () => {
-  const boothNumber = document.getElementById('reset-stand').value;
-  if (!boothNumber) return adminToast('Select a stand to reset.', 'error');
-  if (!await confirmDialog(
-    `Undo the merge or split on stand ${shownN(boothNumber)}?\n\nThe stands it was made from come back, and this stand's own number may disappear.`,
-    { title: `Reset stand ${shownN(boothNumber)}`, confirmLabel: 'Reset it' })) return;
-  const res = await emitAck(socket, 'booth:reset', { boothNumber });
-  {
-    if (res && res.ok) {
-      const msg = res.type === 'unmerge' ? `Stand ${boothNumber} un-merged — restored ${(res.restored || []).join(', ') || 'originals'}.`
-                : res.type === 'unsplit' ? `Stand ${boothNumber} un-split — removed ${(res.removed || []).join(', ')}.`
-                : `Removed leftover cell ${boothNumber}.`;
-      adminToast(msg, 'ok');
-    } else adminToast((res && res.error) || 'Reset failed.', 'error');
-  }
+    const boothNumber = document.getElementById('reset-stand').value;
+    if (!boothNumber) return adminToast('Select a stand to reset.', 'error');
+    // Resolved exactly as the stand panel resolves it (resetTargetOf). This sent
+    // the chosen number as it was, so a split CELL picked here reached the
+    // server as a stray cell and was deleted on its own — its floor space gone
+    // from the hall, the split still in place — instead of the split being
+    // undone. And the dialog could not say which of the two was about to happen.
+    const r = resetTargetOf(booths[boothNumber]);
+    if (!r) return adminToast(`Stand ${shownN(boothNumber)} was not merged or split, so there is nothing to reset.`, 'error');
+    if (!await confirmDialog(`This will ${resetDescription(r)}.`,
+        { title: `Reset stand ${shownN(r.target)}`, confirmLabel: 'Reset it' })) return;
+    const res = await emitAck(socket, 'booth:reset', { boothNumber: r.target });
+    if (res && res.ok) adminToast(resetToastFor(r.target, res), 'ok');
+    else adminToast((res && res.error) || 'Reset failed.', 'error');
   });
 });
 
@@ -2407,13 +2709,24 @@ document.getElementById('status-form')?.addEventListener('submit', (e) => {
     const status = document.getElementById('status-new').value;
     const company = document.getElementById('status-company').value.trim();
     if (!boothNumber) return;
+    const cur = booths[boothNumber];
+
+    // A sale needs a real exhibitor here as much as on the stand panel. A blank
+    // box keeps the name a held stand already has; on a stand with none, it
+    // sold the stand to nobody — and "Pending" is what a nameless hold is
+    // called, not a name.
+    if (status === 'sold') {
+      const kept = cur && !isPlaceholder(dealOf(cur).company) ? dealOf(cur).company : '';
+      if (isPlaceholder(company) || (!company && !kept)) {
+        return adminToast('A sale needs the exhibitor\'s name — enter it under Company.', 'error');
+      }
+    }
 
     // Forcing a booked/held stand back to Available un-books it, and the server
     // now gates that exactly as Release is gated: the recovery key when the
     // failsafe is on, the admin's own password when it is NOT. This only ever
     // asked in the recovery case, so with the failsafe off (the default) it sent
     // an empty secret and every un-booking from here was simply refused.
-    const cur = booths[boothNumber];
     const unbooking = status === 'available' && cur && cur.status !== 'available';
     let key;
     if (unbooking) {
@@ -2488,11 +2801,18 @@ socket.on('state:full', (allBooths) => {
   Object.keys(removedBooths).forEach(n => { if (!stillGone.has(n)) delete removedBooths[n]; });
 
   const incoming = new Set(serverBooths.map(b => b.boothNumber));
+  // Named before the reconcile below can take the stand away with its name.
+  const openLabel = selectedAdminId ? shownN(selectedAdminId) : null;
   serverBooths.forEach(b => { booths[b.boothNumber] = b; });
   // Reconcile: drop booths the server no longer has (merged secondary, reset
   // cell) so the tools, tables and overview counts don't show ghosts.
   Object.keys(booths).forEach(n => { if (!incoming.has(n)) delete booths[n]; });
-  if (selectedAdminId && !booths[selectedAdminId]) selectedAdminId = null;
+  if (selectedAdminId && !booths[selectedAdminId]) safely('stand panel', () => closeVanishedStand(selectedAdminId, openLabel));
+  // Likewise a shift-selection: a stand that has gone cannot be merged.
+  if ([...multiSel].some(n => !booths[n])) {
+    [...multiSel].forEach(n => { if (!booths[n]) multiSel.delete(n); });
+    if (svgDoc) safely('multi-select', renderMultiSelect);
+  }
   // Someone else booked or reshaped the stand under the divider: the split the
   // admin is lining up can no longer happen, so take the divider away rather
   // than let it be submitted and refused.
@@ -2509,19 +2829,9 @@ socket.on('state:full', (allBooths) => {
   // A broadcast is a state CHANGE, which is the only thing that can start or
   // end a hold — so it is exactly when the countdowns need re-reading.
   safely('hold clocks', loadHolds);
-  if (selectedAdminId) {
-    safely('stand panel', () => {
-      renderBoothTags(selectedAdminId);
-      renderStandActions(selectedAdminId);
-      renderBoothSponsor(selectedAdminId);
-      renderHoldPanel(selectedAdminId);
-      // The title follows a rename from anywhere (this panel, Tools, another
-      // admin) — unless the number is being typed here right now, in which case
-      // the admin's keystrokes are not thrown away for a broadcast.
-      const numberInput = document.getElementById('aba-id-input');
-      if (numberInput && numberInput.hidden) renderPanelNumber(booths[selectedAdminId]);
-    });
-  }
+  // The whole panel, not just its tags and buttons — status, company, size and
+  // the deal fields too. See renderAdminBoothAction.
+  if (selectedAdminId) safely('stand panel', refreshStandPanel);
 
   safely('floorplan', () => {
     // Tag on the first state if the floorplan tab is already open; otherwise
@@ -2697,6 +3007,31 @@ socket.on('error:auth', ({ message }) => {
   checkSession();
 });
 
+/**
+ * The event this console was opened for is no longer at this address —
+ * renamed, or gone, while the page was open. The server says so (show:gone)
+ * and closes the connection, and everything this page sends from then on
+ * names an event that is not there. So the page stops, with one message in
+ * front of everything that cannot be dismissed and says what to do, rather
+ * than every button failing in turn with a refusal of its own.
+ */
+let showGone = false;
+socket.on('show:gone', (info) => {
+  if (showGone) return;
+  showGone = true;
+  const name = (window.__SHOW && window.__SHOW.name) || 'The event this page was opened for';
+  window.UI.stopDialog(
+    (info && typeof info.message === 'string' && info.message) ||
+    `${name} is no longer at this address — it may have been moved to a new one, or taken off the air, while ` +
+    'this page was open. Nothing more can be saved from here.\n\nReload the page to carry on. If the event has ' +
+    'moved, open the console and choose it from the list of events.',
+    { title: 'This event is no longer here',
+      actions: [
+        { label: 'Open the console', onClick: () => { location.href = '/admin'; } },
+        { label: 'Reload the page', primary: true, onClick: () => location.reload() },
+      ] });
+});
+
 // 'booth:updated' used to be handled here. The server has never emitted it, so
 // the handler was fifteen lines that could not run — and its existence implied a
 // per-stand update channel that does not exist. Stand changes arrive as
@@ -2706,15 +3041,20 @@ socket.on('stats:updated', (stats) => {
   updateOverviewFromStats(stats);
 });
 
-socket.on('booth:consolidated', ({ secondary, absorbed }) => {
+socket.on('booth:consolidated', ({ primary, secondary, absorbed }) => {
   // Two shapes: a single merge sends one `secondary`, an N-way merge sends
   // `absorbed` as an ARRAY. This did `delete booths[secondary]` in both cases,
   // so after a multi-stand merge `secondary` was undefined, nothing was
   // removed, and every absorbed stand stayed in the table and the dropdowns as
   // a ghost until the next reload.
   const gone = Array.isArray(absorbed) ? absorbed : (secondary ? [secondary] : []);
+  const open = selectedAdminId && gone.includes(selectedAdminId)
+    ? { n: selectedAdminId, label: shownN(selectedAdminId) } : null;
   gone.forEach(n => { delete booths[n]; });
-  if (selectedAdminId && gone.includes(selectedAdminId)) selectedAdminId = null;
+  // The open panel was on a stand that has just been merged away. This only
+  // cleared the selection, and left the panel up and live over a stand that
+  // no longer existed.
+  if (open) safely('stand panel', () => closeVanishedStand(open.n, open.label, primary || null));
   // The state:full that follows re-tags the map cleanly (removing each overlay,
   // split box, number and size node together), so no ghost outline is left
   // behind on the plan either.
@@ -2741,10 +3081,18 @@ function updateOverview() {
   const availSqm = avail.reduce((s, b) => s + (b.sqm || 0), 0);
   const soldSqm = sold.reduce((s, b) => s + (b.sqm || 0), 0);
   const heldSqm = held.reduce((s, b) => s + (b.sqm || 0), 0);
-  const earnedRev = sold.reduce((s, b) => s + (b.listPrice || 0), 0);
+  // A booked stand is worth the price agreed for it, where one was agreed, and
+  // its list price only where none was — the way the server's stats() counts
+  // it. Revenue Earned summed list prices whatever the deal said, so a stand
+  // sold at a discount was counted at a price nobody is paying, and this
+  // panel disagreed with the one drawn from the server's figures.
+  const agreed = (b) => (dealOf(b).actualPrice != null ? Number(dealOf(b).actualPrice) || 0 : (b.listPrice || 0));
+  const earnedRev = sold.reduce((s, b) => s + agreed(b), 0);
   const availRev = avail.reduce((s, b) => s + (b.listPrice || 0), 0);
-  const heldRev = held.reduce((s, b) => s + (b.listPrice || 0), 0);
-  const totalRev = all.reduce((s, b) => s + (b.listPrice || 0), 0);
+  const heldRev = held.reduce((s, b) => s + agreed(b), 0);
+  // The floor's value is what its three rows add up to, so the total row and
+  // the rows above it agree.
+  const totalRev = earnedRev + heldRev + availRev;
   const fillPct = totalSqm > 0 ? Math.round(((soldSqm + heldSqm) / totalSqm) * 100) : 0;
   const soldPct = totalSqm > 0 ? Math.round((soldSqm / totalSqm) * 100) : 0;
   const heldPct = totalSqm > 0 ? Math.round((heldSqm / totalSqm) * 100) : 0;
@@ -2836,9 +3184,17 @@ function logEntry({ msg, type = 'info', time, boothNumber = null, live = false }
     entry.tabIndex = 0;
     entry.setAttribute('role', 'button');
     entry.title = `Open stand ${shownN(boothNumber)} on the plan`;
-    const go = () => {
+    // The plan may still be on its way — this is often the first thing to open
+    // the Floorplan tab — so wait for it, and for the tab to be laid out,
+    // rather than guessing at 60 ms and selecting on a plan that is not there.
+    const go = async () => {
       showAdminSection('floorplan');
-      setTimeout(() => { selectAdminBooth(boothNumber); focusAdminBooth(boothNumber); }, 60);
+      await adminPlanReady();
+      await new Promise(r => requestAnimationFrame(() => r()));
+      if (!svgDoc) return;
+      if (!booths[boothNumber]) return adminToast(`Stand ${boothNumber} is no longer on the plan.`, 'error');
+      selectAdminBooth(boothNumber);
+      focusAdminBooth(boothNumber);
     };
     entry.addEventListener('click', go);
     entry.addEventListener('keydown', (e) => {
@@ -3480,14 +3836,31 @@ async function loadNavPartners() {
 }
 loadNavPartners();
 
+/**
+ * Only the latest of overlapping loads may draw.
+ *
+ * The partner, sponsor and team tables each cleared themselves, waited for the
+ * server, and then appended a row per answer. Two loads in flight — a
+ * double-click on the nav item is enough — both cleared first and both
+ * appended after, so every row came out twice. `latestLoad('team')` returns a
+ * check that is true only while no newer load of the same table has started.
+ */
+const loadSeq = {};
+function latestLoad(name) {
+  const n = (loadSeq[name] = (loadSeq[name] || 0) + 1);
+  return () => loadSeq[name] === n;
+}
+
 // ─── Partner logos (public "In partnership with" strip) ──────────────────────
 async function loadPartners() {
   const tbody = document.getElementById('partners-tbody');
   if (!tbody) return;
-  tbody.replaceChildren();
+  const current = latestLoad('partners');
   let list = [];
   let failed = null;
   try { list = await api('/api/partners') || []; } catch (e) { failed = e.message; }
+  if (!current()) return;                    // a newer load is drawing this table
+  tbody.replaceChildren();
 
   if (failed) {
     const tr = document.createElement('tr');
@@ -3582,16 +3955,37 @@ async function savePartner(id, fields) {
  * stays small. Render's filesystem is wiped on every deploy, so the image is
  * kept in the database rather than written to disk. SVGs pass through untouched
  * to keep them vector.
+ *
+ * Nothing this returns is longer than the server will store (IMAGE_CAP). An
+ * SVG cannot be shrunk here, so it has to fit as it is — and it used to be let
+ * through at up to 8 MB, far past what the server keeps. A logo that size did
+ * not even reach the server's refusal: it dropped the connection on the way,
+ * and the page said nothing at all. It is refused here, before it is sent,
+ * with the reason and the way round it.
  */
+const IMAGE_CAP = 2_000_000;   // characters of data URI: the server's cap on every stored image
+const SVG_PREFIX = 'data:image/svg+xml;base64,'.length;
+const tooBigSvg = (bytes) => new Error(
+  `That SVG is ${(bytes / (1024 * 1024)).toFixed(1)} MB, which is too large to store as a logo — ` +
+  `the most an SVG can be is about ${((IMAGE_CAP - SVG_PREFIX) * 3 / 4 / (1024 * 1024)).toFixed(1)} MB. ` +
+  'Save it with less detail, or export it as a PNG, which is shrunk to fit.');
+
 function fileToDataUrl(file, maxWidth = 800) {
   // Keep the stored data URI comfortably under the server's ~2M-char cap.
   const MAX_LEN = 1_500_000;
+  const svg = file.type === 'image/svg+xml';
   return new Promise((resolve, reject) => {
+    // Base64 is four characters for every three bytes; checked before the
+    // file is even read, so a 6 MB drawing is turned away at once.
+    if (svg && SVG_PREFIX + Math.ceil(file.size / 3) * 4 > IMAGE_CAP) return reject(tooBigSvg(file.size));
     if (file.size > 8 * 1024 * 1024) return reject(new Error('Image must be under 8 MB.'));
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('Could not read that file.'));
     reader.onload = () => {
-      if (file.type === 'image/svg+xml') return resolve(reader.result);
+      if (svg) {
+        if (reader.result.length > IMAGE_CAP) return reject(tooBigSvg(file.size));
+        return resolve(reader.result);
+      }
       const img = new Image();
       img.onerror = () => reject(new Error('That file is not a readable image.'));
       img.onload = () => {
@@ -3732,17 +4126,23 @@ document.getElementById('partner-add-form')?.addEventListener('submit', (e) => {
 async function loadSponsorsAdmin() {
   loadPartners();
   const tbody = document.getElementById('sponsors-admin-tbody');
-  tbody.replaceChildren();
+  const current = latestLoad('sponsors');      // see latestLoad
+  let rows;
   try {
-    sponsorAdminCache = await api('/api/sponsors') || [];
+    rows = await api('/api/sponsors') || [];
   } catch (e) {
+    if (!current()) return;
     sponsorAdminCache = [];
+    tbody.replaceChildren();
     const tr = document.createElement('tr');
     const td = document.createElement('td'); td.colSpan = 8; td.className = 'partners-empty';
     td.textContent = `Could not load the sponsorship catalogue — ${e.message}`;
     tr.appendChild(td); tbody.appendChild(tr);
     return;
   }
+  if (!current()) return;                    // a newer load is drawing this table
+  sponsorAdminCache = rows;
+  tbody.replaceChildren();
 
   const TIER_RANK = { platinum: 0, gold: 1, silver: 2 };
   sponsorAdminCache.sort((a, b) => (TIER_RANK[a.tier] ?? 9) - (TIER_RANK[b.tier] ?? 9) || (b.price || 0) - (a.price || 0));
@@ -3914,7 +4314,7 @@ async function saveSponsor(key, fields) {
 // ─── Team (admin accounts) ────────────────────────────────────────────────────
 async function loadTeam() {
   const tbody = document.getElementById('team-tbody');
-  tbody.replaceChildren();
+  const current = latestLoad('team');          // see latestLoad
   const isOwner = currentRole === 'owner';
 
   // Team management (add form + per-member actions) is owner-only. Hide the
@@ -3926,6 +4326,8 @@ async function loadTeam() {
   try {
     admins = await api('/api/admins') || [];
   } catch (e) {
+    if (!current()) return;
+    tbody.replaceChildren();
     // An empty team table is indistinguishable from a company with no staff.
     const tr = document.createElement('tr');
     const td = document.createElement('td'); td.colSpan = 5; td.className = 'partners-empty';
@@ -3933,6 +4335,8 @@ async function loadTeam() {
     tr.appendChild(td); tbody.appendChild(tr);
     return;
   }
+  if (!current()) return;                    // a newer load is drawing this table
+  tbody.replaceChildren();
 
   admins.forEach(a => {
     const tr = document.createElement('tr');
@@ -4233,9 +4637,37 @@ function tagUsage(key) {
   return Object.values(booths).filter(b => (dealOf(b).tags || []).includes(key)).length;
 }
 
+/**
+ * The tag list, patched in place rather than rebuilt.
+ *
+ * It was thrown away and rebuilt on every broadcast — which is to say whenever
+ * any stand changed anywhere, because the "used on N stands" counts move with
+ * the stands. A rename being typed lost its focus mid-word, and since the
+ * input it was typed into no longer existed, its change never fired: the new
+ * name was simply gone. Now the rows stay put while the same tags are listed,
+ * and only their values and counts are brought up to date — never a field
+ * someone has their cursor in. A different SET of tags is redrawn, but not
+ * under somebody's hands: that waits until they leave the list.
+ */
+let tagListDeferred = false;
+
 function renderTagCatalogue() {
   const box = document.getElementById('tag-list');
   if (!box) return;
+  const sig = tagCatalogue.map(t => t.key).join('|');
+  const rowOf = (key) => box.querySelector(`.tag-row[data-key="${CSS.escape(key)}"]`);
+
+  if (tagCatalogue.length && box.dataset.sig === sig) {
+    tagCatalogue.forEach(t => patchTagRow(rowOf(t.key), t));
+    return;
+  }
+  if (box.contains(document.activeElement)) {
+    tagListDeferred = true;
+    tagCatalogue.forEach(t => patchTagRow(rowOf(t.key), t));
+    return;
+  }
+  tagListDeferred = false;
+  box.dataset.sig = sig;
   box.replaceChildren();
 
   if (!tagCatalogue.length) {
@@ -4246,51 +4678,75 @@ function renderTagCatalogue() {
     return;
   }
 
-  tagCatalogue.forEach(t => {
-    const row = document.createElement('div');
-    row.className = 'tag-row';
-
-    // Recolour in place — the swatch IS the colour picker.
-    const swatch = document.createElement('input');
-    swatch.type = 'color';
-    swatch.className = 'tag-swatch';
-    swatch.value = t.color;
-    swatch.title = `Colour for ${t.label}`;
-    swatch.onchange = () => saveTag(t.key, { color: swatch.value });
-    row.appendChild(swatch);
-
-    // Rename in place. Committed on blur/Enter, and reverted if the server
-    // rejects it (a duplicate name), so the field never shows a name that
-    // was not actually saved.
-    const name = document.createElement('input');
-    name.type = 'text';
-    name.className = 'admin-input tag-name';
-    name.maxLength = 40;
-    name.value = t.label;
-    name.onchange = () => {
-      const label = name.value.trim();
-      if (!label || label === t.label) { name.value = t.label; return; }
-      saveTag(t.key, { label }, () => { name.value = t.label; });
-    };
-    name.onkeydown = (e) => { if (e.key === 'Enter') name.blur(); };
-    row.appendChild(name);
-
-    const uses = tagUsage(t.key);
-    const used = document.createElement('span');
-    used.className = 'tag-uses';
-    used.textContent = uses ? `${uses} stand${uses === 1 ? '' : 's'}` : 'unused';
-    row.appendChild(used);
-
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'admin-btn danger';
-    del.textContent = 'Delete';
-    del.onclick = () => deleteTag(t, uses);
-    row.appendChild(del);
-
-    box.appendChild(row);
-  });
+  tagCatalogue.forEach(t => box.appendChild(buildTagRow(t)));
 }
+
+// Every handler looks the tag up by its key when it runs, so a row that has
+// been patched since it was built never acts on the name it was built with.
+function buildTagRow(t) {
+  const key = t.key;
+  const row = document.createElement('div');
+  row.className = 'tag-row';
+  row.dataset.key = key;
+
+  // Recolour in place — the swatch IS the colour picker.
+  const swatch = document.createElement('input');
+  swatch.type = 'color';
+  swatch.className = 'tag-swatch';
+  swatch.onchange = () => saveTag(key, { color: swatch.value });
+  row.appendChild(swatch);
+
+  // Rename in place. Committed on blur/Enter, and reverted if the server
+  // rejects it (a duplicate name), so the field never shows a name that
+  // was not actually saved.
+  const name = document.createElement('input');
+  name.type = 'text';
+  name.className = 'admin-input tag-name';
+  name.maxLength = 40;
+  name.onchange = () => {
+    const cur = tagByKey(key);
+    if (!cur) return;
+    const label = name.value.trim();
+    if (!label || label === cur.label) { name.value = cur.label; return; }
+    saveTag(key, { label }, () => { name.value = (tagByKey(key) || cur).label; });
+  };
+  name.onkeydown = (e) => { if (e.key === 'Enter') name.blur(); };
+  row.appendChild(name);
+
+  const used = document.createElement('span');
+  used.className = 'tag-uses';
+  row.appendChild(used);
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'admin-btn danger';
+  del.textContent = 'Delete';
+  del.onclick = () => deleteTag(tagByKey(key) || t, tagUsage(key));
+  row.appendChild(del);
+
+  patchTagRow(row, t);
+  return row;
+}
+
+function patchTagRow(row, t) {
+  if (!row) return;
+  const swatch = row.querySelector('.tag-swatch');
+  const name = row.querySelector('.tag-name');
+  if (swatch && document.activeElement !== swatch && swatch.value !== t.color) swatch.value = t.color;
+  if (swatch) swatch.title = `Colour for ${t.label}`;
+  if (name && document.activeElement !== name && name.value !== t.label) name.value = t.label;
+  const uses = tagUsage(t.key);
+  const used = row.querySelector('.tag-uses');
+  if (used) used.textContent = uses ? `${uses} stand${uses === 1 ? '' : 's'}` : 'unused';
+}
+
+// Whatever was put off while someone was editing is drawn the moment they leave.
+document.getElementById('tag-list')?.addEventListener('focusout', () => {
+  setTimeout(() => {
+    const box = document.getElementById('tag-list');
+    if (tagListDeferred && box && !box.contains(document.activeElement)) renderTagCatalogue();
+  }, 0);
+});
 
 document.getElementById('tag-form')?.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -4434,26 +4890,55 @@ function addEventCard(rows) {
   f('slug').addEventListener('input', () => { slugTouched = true; showLink(); });
 
   // Choosing an event to start from suggests the next edition of it: LEX27 is
-  // followed by LEX28, read from the name its live plan carries.
+  // followed by LEX28, read from the name its live plan carries, or from the
+  // event's own id where that carries the year (LEX26, LNA27). The next
+  // edition that does not exist yet, that is: counting one on from LEX26 while
+  // LEX27 is already running suggested the very event already on this page —
+  // and the add was refused. An edition counts as taken when an event's id, its
+  // URL name or its plan's name already says it.
   const copies = form.querySelector('.plan-add-copies');
+  const taken = new Set();
+  rows.forEach(r => [r.showId, r.slug, r.label && String(r.label).replace(/\.\d+$/, '')]
+    .forEach(v => { if (v) taken.add(String(v).toUpperCase()); }));
+  const EDITION = /^([A-Za-z]+)(\d{2}|\d{4})(?!\d)/;
+  const nextEdition = (src) => {
+    const m = EDITION.exec(src.label || '') || EDITION.exec(src.showId || '');
+    if (!m) return null;
+    const width = m[2].length;
+    let n = Number(m[2]), id;
+    do { n += 1; id = `${m[1].toUpperCase()}${String(n).padStart(width, '0')}`; } while (taken.has(id) && n < 10 ** width - 1);
+    return { id, year: width === 4 ? String(n) : `20${String(n).padStart(2, '0')}` };
+  };
+  // "Lubricant Expo Europe 2027" becomes "… 2028", not "… 2027 2028".
+  const YEAR_AT_END = /\b(?:19|20)\d{2}(\s*)$/;
+  const nameFor = (src, year) => {
+    const base = src.name || src.showId;
+    return YEAR_AT_END.test(base) ? base.replace(YEAR_AT_END, `${year}$1`).trim() : `${base} ${year}`;
+  };
+  // What was suggested last, so a different choice replaces it — but never
+  // something the person typed themselves.
+  let suggested = { id: '', name: '' };
   f('copyFrom').addEventListener('change', () => {
     const src = rows.find(r => r.showId === f('copyFrom').value);
     if (!src) { copies.textContent = ''; return; }
     copies.textContent = `Copies its rate, currency, units, colours, business activities and sponsorship packages. ` +
                          'Not its stands, bookings, leads or plan — upload the new plan to the new event.';
-    const m = /^([A-Za-z]+)(\d{2})(?!\d)/.exec(src.label || src.showId || '');
-    if (m && !f('showId').value) {
-      const next = String(Number(m[2]) + 1).padStart(2, '0');
-      f('showId').value = `${m[1].toUpperCase()}${next}`;
+    const next = nextEdition(src);
+    const idFree = !f('showId').value || f('showId').value === suggested.id;
+    const nameFree = !f('name').value || f('name').value === suggested.name;
+    if (next && idFree) {
+      f('showId').value = next.id;
       f('showId').dispatchEvent(new Event('input'));
-      if (!f('name').value) f('name').value = `${src.name || src.showId} 20${next}`;
-    } else if (!f('name').value) {
+      if (nameFree) f('name').value = nameFor(src, next.year);
+      suggested = { id: next.id, name: f('name').value };
+    } else if (nameFree) {
       f('name').value = src.name || '';
+      suggested = { id: suggested.id, name: f('name').value };
     }
   });
 
   open.onclick = () => { open.hidden = true; form.hidden = false; f('copyFrom').focus(); };
-  form.querySelector('[data-cancel]').onclick = () => { form.reset(); slugTouched = false; copies.textContent = ''; showLink(); form.hidden = true; open.hidden = false; };
+  form.querySelector('[data-cancel]').onclick = () => { form.reset(); slugTouched = false; suggested = { id: '', name: '' }; copies.textContent = ''; showLink(); form.hidden = true; open.hidden = false; };
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -4486,6 +4971,9 @@ function addEventCard(rows) {
   card.append(open, form);
   return card;
 }
+
+/** A retired event: kept, listed, and answering 404 to visitors. */
+const offAir = (row) => row.active === false;
 
 function planCard(row, isCurrent) {
   const card = document.createElement('div');
@@ -4612,17 +5100,38 @@ function planCard(row, isCurrent) {
   sch.hidden = !row.boothCount;
   sch.onclick = () => downloadSchedule(row, sch);
 
-  // Every plan this event has been given, and the way back to any of them.
+  // Every plan this event has been given, and the way back to any of them —
+  // offered whenever there IS one. It hid itself as soon as nothing was
+  // uploaded, which is exactly what Remove leaves behind; and Remove keeps the
+  // old plan as an earlier version precisely so it can be put back. The only
+  // way back went with it. The listing may say how many versions there are;
+  // where it does not, the event is asked.
   const ver = document.createElement('button');
   ver.type = 'button';
   ver.className = 'admin-btn';
   ver.textContent = 'Versions';
-  ver.hidden = !row.uploaded && !row.draft;
+  ver.hidden = typeof row.revisions === 'number' ? row.revisions === 0 : (!row.uploaded && !row.draft);
+  if (ver.hidden && typeof row.revisions !== 'number') {
+    api('/api/floorplan/revisions', { headers: { 'X-Show': row.slug } })
+      .then(list => { if (Array.isArray(list) && list.length) ver.hidden = false; })
+      .catch(() => { /* nothing to offer, as before */ });
+  }
   ver.onclick = () => openRevisions(row);
 
   actions.append(up, dl, imp, ver, col, sch, rm);
 
   const parts = [head, preview, meta];
+  // A retired event's controls act on THAT event — its plan, its colours, its
+  // stands — and nobody sees any of it until it is back on air. Said on the
+  // card itself and not only in the badge's tooltip, because every button
+  // below otherwise reads exactly as it does on an event that is selling.
+  if (offAir(row)) {
+    const note = document.createElement('div');
+    note.className = 'plan-retired-note';
+    note.textContent = `Off the air: /floorplan/${row.slug} answers 404. Anything changed on this card is changed ` +
+      `on ${row.name || row.showId} itself, and visitors see it once the event is put back on air under Tools → Events.`;
+    parts.push(note);
+  }
   if (specLine) parts.push(specLine);
   if (row.draft) parts.push(draftPanel(row));
   // Only where there is something to lose.
@@ -5116,7 +5625,8 @@ async function previewStands(row, { revision = null } = {}) {
     `${p.totalArea.toLocaleString()} ${unit} in total. ` +
     (p.existing
       ? `This event has ${p.existing} stands now: against this plan, ${ds.added || 0} new, ${ds.moved || 0} moved, ` +
-        `${ds.resized || 0} resized, ${ds.unchanged || 0} unchanged, ${ds.missing || 0} no longer drawn` +
+        `${ds.resized || 0} resized, ${ds.unchanged || 0} unchanged, ` +
+        (ds.absorbed ? `${ds.absorbed} inside merged blocks, ` : '') + `${ds.missing || 0} no longer drawn` +
         (ds.committedMissing ? ` — ${ds.committedMissing} of them sold or on hold` : '') + '. '
       : '') +
     'Exhibitor names become ours: drawn in our own type, searchable, and editable here.';
@@ -5135,17 +5645,23 @@ async function previewStands(row, { revision = null } = {}) {
   }
 
   const list = (rows, f) => rows.slice(0, 40).map(f).join(', ') + (rows.length > 40 ? ` … and ${rows.length - 40} more` : '');
+  // Numbers the drawing prints that this event has merged into a block: not
+  // new stands, and not stands to add — the update keeps the block whole. A
+  // server from before the diff reported them sends no such list.
+  const absorbed = (d && d.absorbed) || [];
   const pre = document.createElement('pre');
   pre.className = 'spec-report-body';
   pre.textContent = [
     ...(d && p.existing ? [
       'What this drawing changes:',
       ...(d.added.length   ? [`  new        ${list(d.added, a => a.boothNumber)}`] : []),
+      ...(absorbed.length  ? [`  inside merged blocks  ${list(absorbed, a => `${a.boothNumber} (in ${a.into})`)}`] : []),
       ...(d.moved.length   ? [`  moved      ${list(d.moved, a => a.boothNumber)}`] : []),
       ...(d.resized.length ? [`  resized    ${list(d.resized, a => `${a.boothNumber} (${a.from ?? '?'}→${a.to ?? '?'} ${unit})`)}`] : []),
       ...(d.missing.length ? [`  not drawn  ${list(d.missing, a => `${a.boothNumber}${a.committed ? ' *' : ''}`)}` +
                               (d.missing.some(m => m.committed) ? '   (* sold or on hold — kept)' : '   (empty stands are removed by Update)')] : []),
-      ...(!d.added.length && !d.moved.length && !d.resized.length && !d.missing.length ? ['  nothing — every stand is where it was'] : []),
+      ...(!d.added.length && !absorbed.length && !d.moved.length && !d.resized.length && !d.missing.length
+        ? ['  nothing — every stand is where it was'] : []),
       '',
     ] : []),
     ...(p.fills && p.fills.length ? [
@@ -5224,10 +5740,14 @@ async function importStands(row, preview, box, { mode = 'upsert', revision = nul
   const where = row.name || row.showId;
   // Said in every dialog for a revision: the one thing an organiser wants to
   // know before a new plan goes up is whether the link they sent out changes.
-  const goesLive = revision
-    ? `\n\nVisitors see ${revision.label} from now on, at the same link (/floorplan/${row.slug}). ` +
-      'If the stands cannot be moved onto it, nothing goes live.'
-    : '';
+  // A retired event has no visitors to see it, and saying it did was the one
+  // untrue sentence left on its card.
+  const goesLive = !revision ? ''
+    : offAir(row)
+      ? `\n\n${where} is retired, so nobody sees ${revision.label} until the event is put back on air — ` +
+        `then at the same link (/floorplan/${row.slug}). If the stands cannot be moved onto it, nothing changes.`
+      : `\n\nVisitors see ${revision.label} from now on, at the same link (/floorplan/${row.slug}). ` +
+        'If the stands cannot be moved onto it, nothing goes live.';
   const replace = mode === 'replace';
   const update = mode === 'update';
 
@@ -5276,7 +5796,7 @@ async function importStands(row, preview, box, { mode = 'upsert', revision = nul
   }
 
   adminToast(
-    (revision ? `${revision.label} is live on ${where}. ${r.imported} stands placed on it — `
+    (revision ? `${revision.label} is ${offAir(row) ? `now the plan for ${where}, which is still off the air` : `live on ${where}`}. ${r.imported} stands placed on it — `
               : `${where}: ${r.imported} stands ${r.mode === 'replace' ? 'replaced' : 'updated from the plan'} — `) +
     `${r.available} available, ${r.sold} sold, ${r.held || 0} on hold` +
     (r.created ? `, ${r.created} new` : '') +
@@ -5344,7 +5864,10 @@ function pickPlan(row) {
     // stored as a draft and the live plan does not move until it is made live.
     const password = await askSecret(
       `Uploading a new version of ${row.name || row.showId}'s plan as a draft.\n\n` +
-      'Visitors keep seeing the live plan. You will see what the new one does to the stands before making it live.',
+      (offAir(row)
+        ? `${row.name || row.showId} is retired, so nobody sees its plan until it is put back on air. `
+        : 'Visitors keep seeing the live plan. ') +
+      'You will see what the new one does to the stands before making it live.',
       { title: 'Upload a new version', confirmLabel: 'Upload it' });
     if (password === null) return;
     if (!password) return adminToast('Password required to change a floorplan.', 'error');
@@ -5371,7 +5894,7 @@ function pickPlan(row) {
       }
       const r = await res.json();
       const label = (r.revision && r.revision.label) || 'The new version';
-      adminToast(`${label} uploaded as a draft — visitors still see the live plan.` +
+      adminToast(`${label} uploaded as a draft — ${offAir(row) ? 'the event is off the air, so nobody sees either plan yet' : 'visitors still see the live plan'}.` +
         (r.removed && r.removed.length ? ` Removed for safety: ${r.removed.join(', ')}.` : ''), 'ok');
       // The plan is stored either way; this is what to send the designer.
       if (r.spec && r.spec.failedClauses && r.spec.failedClauses.length) {
@@ -5492,11 +6015,31 @@ async function loadShows() {
     name.className = 'admin-input area-name';
     name.value = sh.name || sh.showId;
     name.maxLength = 80;
+    name.setAttribute('aria-label', `Name of ${sh.name || sh.showId}`);
     name.onchange = () => saveShow(sh.showId, { name: name.value });
+
+    // The URL name: the address the event lives at. The Add an event card
+    // promises it can be changed here, and it could not be — the server took a
+    // new one, but nothing on this page offered it.
+    const slugRow = document.createElement('label');
+    slugRow.className = 'show-slug';
+    const slugLbl = document.createElement('span');
+    slugLbl.textContent = '/floorplan/';
+    const slug = document.createElement('input');
+    slug.type = 'text';
+    slug.className = 'admin-input show-slug-input';
+    slug.value = sh.slug;
+    slug.maxLength = 24;
+    slug.spellcheck = false;
+    slug.autocomplete = 'off';
+    slug.setAttribute('aria-label', `URL name of ${sh.name || sh.showId}`);
+    slug.onchange = () => changeShowSlug(sh, slug);
+    slug.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); slug.blur(); } };
+    slugRow.append(slugLbl, slug);
 
     const meta = document.createElement('div');
     meta.className = 'area-package-note';
-    meta.textContent = `id ${sh.showId}${sh.active === false ? ' · retired' : ''}`;
+    meta.textContent = `id ${sh.showId} (permanent)${sh.active === false ? ' · retired' : ''}`;
 
     // The two places this event lives. Shown as links so they can be opened and
     // checked without anyone having to remember the URL shape.
@@ -5534,19 +6077,67 @@ async function loadShows() {
       await saveShow(sh.showId, { active: retired });
     });
 
-    card.append(name, meta, links, retire);
+    card.append(name, slugRow, meta, links, retire);
     box.appendChild(card);
   });
 }
 
-async function saveShow(showId, fields) {
+// What the server accepts as a URL name (models/shows.js), checked here so a
+// typo is explained before anything is asked or sent.
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+
+/**
+ * Move an event to a new address.
+ *
+ * Asked first, because the old address stops answering the moment it moves:
+ * every link already sent out or printed for it starts returning 404. If this
+ * page is that event's console it reopens at the new address — left where it
+ * was, every request it made would name an event that is no longer there.
+ */
+async function changeShowSlug(sh, input) {
+  const next = input.value.trim().toLowerCase();
+  if (next === sh.slug) { input.value = sh.slug; return; }
+  if (!SLUG_RE.test(next)) {
+    input.value = sh.slug;
+    return adminToast('A URL name is up to 24 lowercase letters, numbers and dashes, starting with a letter or a number.', 'error');
+  }
+  const name = sh.name || sh.showId;
+  const here = sh.slug === SHOW;
+  const ok = await confirmDialog(
+    `Move ${name} from /floorplan/${sh.slug} to /floorplan/${next}?\n\n` +
+    `The old address stops working straight away: /floorplan/${sh.slug} and /admin/${sh.slug} answer 404, ` +
+    'including any link to them already sent out or printed. Nothing else about the event changes.' +
+    (here ? `\n\nThis page is ${name}'s console, so it reopens at /admin/${next}.` : ''),
+    { title: `Change ${name}'s address`, confirmLabel: 'Move it', danger: true });
+  if (!ok) { input.value = sh.slug; return; }
+  const saved = await saveShow(sh.showId, { slug: next }, { refresh: !here });
+  if (!saved) { input.value = sh.slug; return; }
+  if (here) location.href = `/admin/${encodeURIComponent(next)}`;
+}
+
+/**
+ * Save a change to an event, and refresh everything that lists the events.
+ *
+ * Only this card used to be refreshed, so an event renamed, retired or moved
+ * here went on reading as it was in the sidebar's switcher and on the
+ * Settings page until a reload.
+ */
+async function saveShow(showId, fields, { refresh = true } = {}) {
   try {
     await api(`/api/shows/${encodeURIComponent(showId)}`, {
       method: 'PATCH', body: JSON.stringify(fields),
     });
     adminToast('Event updated.', 'ok');
-    loadShows();
-  } catch (e) { adminToast(e.message || 'Could not update that event.', 'error'); }
+    if (refresh) refreshEventLists();
+    return true;
+  } catch (e) { adminToast(e.message || 'Could not update that event.', 'error'); return false; }
+}
+
+/** Every list of events on the page: Tools → Events, the switcher, Settings. */
+function refreshEventLists() {
+  loadShows();
+  initShowSwitcher();
+  loadPlans();
 }
 
 document.getElementById('show-form')?.addEventListener('submit', (e) => {
@@ -5561,7 +6152,9 @@ document.getElementById('show-form')?.addEventListener('submit', (e) => {
       await api('/api/shows', { method: 'POST', body: JSON.stringify({ name, slug, showId }) });
       adminToast(`${name || showId} added — it is live at /floorplan/${slug}.`, 'ok');
       ['show-name', 'show-slug', 'show-id'].forEach(id => { document.getElementById(id).value = ''; });
-      loadShows();
+      // Not just this list: an event added here was missing from the switcher
+      // and from Settings — where its plan is uploaded — until a reload.
+      refreshEventLists();
     } catch (err) { adminToast(err.message || 'Could not add that event.', 'error'); }
   });
 });
@@ -5724,12 +6317,18 @@ function areaEditor(a) {
   return frag;
 }
 
+// A logo is the largest thing this console sends over the socket, and these
+// two were bare emits with no timeout: an upload the connection dropped left
+// nothing on screen, ever. emitAck always answers — with the server's reply,
+// or with a failure once it has waited long enough for a large image on a
+// slow line.
+const LOGO_ACK_MS = 60000;
+
 /** Store (or clear) an area's logo. The cards redraw from the server's answer. */
-function saveAreaLogo(key, dataUrl) {
-  socket.emit('area:set-logo', { key, logo: dataUrl || '' }, (res) => {
-    if (res && res.ok) adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
-    else adminToast((res && res.error) || 'Could not save the logo.', 'error');
-  });
+async function saveAreaLogo(key, dataUrl) {
+  const res = await emitAck(socket, 'area:set-logo', { key, logo: dataUrl || '' }, { timeout: LOGO_ACK_MS });
+  if (res && res.ok) adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
+  else adminToast((res && res.error) || 'Could not save the logo.', 'error');
 }
 
 // ── Booth panel: the sponsor and their logo ──────────────────────────────────
@@ -5767,17 +6366,18 @@ function renderBoothSponsor(n) {
 }
 
 /** Store (or clear) this stand's logo, redrawing from the server's answer. */
-function saveBoothLogo(boothNumber, dataUrl) {
-  socket.emit('booth:set-logo', { boothNumber, logo: dataUrl || '' }, (res) => {
-    if (res && res.ok) {
-      const b = booths[boothNumber];
-      if (b) b.sponsorLogo = res.logo;
-      adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
-    } else {
-      adminToast((res && res.error) || 'Could not save the logo.', 'error');
-    }
-    renderBoothSponsor(boothNumber);
-  });
+async function saveBoothLogo(boothNumber, dataUrl) {
+  const res = await emitAck(socket, 'booth:set-logo', { boothNumber, logo: dataUrl || '' }, { timeout: LOGO_ACK_MS });
+  if (res && res.ok) {
+    const b = booths[boothNumber];
+    if (b) b.sponsorLogo = res.logo;
+    adminToast(res.logo ? 'Sponsor logo saved.' : 'Sponsor logo removed.', 'ok');
+  } else {
+    adminToast((res && res.error) || 'Could not save the logo.', 'error');
+  }
+  // Only if the panel is still on this stand: the answer to a slow upload can
+  // arrive after another stand has been opened.
+  if (selectedAdminId === boothNumber) renderBoothSponsor(boothNumber);
 }
 
 document.getElementById('aba-sponsored')?.addEventListener('change', (e) => {
@@ -6053,7 +6653,22 @@ document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e
       const plan = await send(text, { dryRun: true });
       const parts = [];
       if (plan.created.length) parts.push(list(`Add ${plan.created.length}`, plan.created));
-      if (plan.updated.length) parts.push(list(`Update ${plan.updated.length}`, plan.updated));
+      // Each update says what it changes — "Lanyards: price €5,000 → €5,500" —
+      // where it used to give only the package's name, which read the same for
+      // a file that moved one price as for one that rewrote every package.
+      if (plan.updated.length) {
+        parts.push(line(`Update ${plan.updated.length}:`, 'csv-line'));
+        plan.updated.forEach(u => parts.push(line(
+          u.detail ? `${u.name || u.key}: ${u.detail}` : (u.name || u.key), 'csv-line csv-detail')));
+      }
+      // Rows that change nothing are not written, and are counted rather than
+      // listed — a re-uploaded catalogue is mostly these.
+      const unchanged = (plan.unchanged || []).length;
+      if (unchanged) {
+        parts.push(line(unchanged === 1
+          ? 'Unchanged: 1 row matches the catalogue already and is left alone.'
+          : `Unchanged: ${unchanged} rows match the catalogue already and are left alone.`, 'csv-line'));
+      }
       if (plan.removed.length) parts.push(list(`REMOVE ${plan.removed.length}`, plan.removed));
       plan.errors.forEach(er => parts.push(line(`Row ${er.line}: ${er.error}`, 'csv-err')));
       // The server refuses removals when any row failed, because the file cannot
@@ -6083,7 +6698,10 @@ document.getElementById('sponsor-add-form')?.addEventListener('submit', async (e
 
       const done = await send(text, { dryRun: false });
       show([
-        line(`Imported: ${done.created.length} added, ${done.updated.length} updated${done.removed.length ? `, ${done.removed.length} removed` : ''}.`, 'csv-head'),
+        line(`Imported: ${done.created.length} added, ${done.updated.length} updated` +
+             `${(done.unchanged || []).length ? `, ${done.unchanged.length} unchanged` : ''}` +
+             `${done.removed.length ? `, ${done.removed.length} removed` : ''}.`, 'csv-head'),
+        ...done.updated.filter(u => u.detail).map(u => line(`${u.name || u.key}: ${u.detail}`, 'csv-line csv-detail')),
         ...done.errors.map(er => line(`Row ${er.line}: ${er.error}`, 'csv-err')),
       ], 'ok');
       adminToast('Sponsorship catalogue updated.', 'ok');

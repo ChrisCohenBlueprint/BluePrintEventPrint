@@ -58,13 +58,12 @@
   // Two pages, two existing toast elements and two class conventions, so the
   // element and its classes are parameters rather than baked in.
   const toastTimers = new Map();
+  // Which slots are on screen right now, so a message and an Undo can be
+  // placed one above the other instead of one over the other.
+  const toastLive = new Set();
 
-  function toast(msg, kind = '', opts = {}) {
-    const id = opts.id || 'toast';
-    const base = opts.cls || 'toast';
-    const shown = opts.show || '';
-    const ms = opts.ms || 3200;
-
+  /** Put a message in one slot — creating it the first time — and time it out. */
+  function paint(id, msg, kind, { cls: base, show: shown, ms }, after = null) {
     let node = byId(id);
     if (!node) {
       node = el('div', base);
@@ -75,12 +74,42 @@
     node.replaceChildren(document.createTextNode(msg));
     node.className = [base, shown, kind].filter(Boolean).join(' ');
     node.classList.remove('hidden');
+    toastLive.add(id);
 
     clearTimeout(toastTimers.get(id));
-    toastTimers.set(id, setTimeout(() => {
-      node.className = base;
-      if (!shown) node.classList.add('hidden');
-    }, ms));
+    toastTimers.set(id, setTimeout(() => { hide(id, node, base, shown); if (after) after(); }, ms));
+    return node;
+  }
+
+  function hide(id, node, base, shown) {
+    clearTimeout(toastTimers.get(id));
+    node.className = base;
+    if (!shown) node.classList.add('hidden');
+    toastLive.delete(id);
+  }
+
+  /**
+   * An ordinary message sits ABOVE an action toast that is still on screen.
+   *
+   * They used to share one element, and every toast replaced its contents — so
+   * "New enquiry received." arriving from somebody else, or any refusal, took
+   * the Undo off a release a moment after it was offered, and nothing else on
+   * the page could put that booking back. The action now has a slot of its own
+   * (`<id>-action`) that nothing but another action replaces.
+   */
+  function arrange(id) {
+    const info = byId(id);
+    if (!info) return;
+    const action = toastLive.has(`${id}-action`) ? byId(`${id}-action`) : null;
+    if (!action || !toastLive.has(id)) { info.style.removeProperty('bottom'); return; }
+    const below = parseFloat(getComputedStyle(action).bottom) || 0;
+    info.style.bottom = `${Math.round(below + action.offsetHeight + 8)}px`;
+  }
+
+  function toast(msg, kind = '', opts = {}) {
+    const id = opts.id || 'toast';
+    const node = paint(id, msg, kind, { cls: opts.cls || 'toast', show: opts.show || '', ms: opts.ms || 3200 });
+    arrange(id);
     return node;
   }
 
@@ -88,18 +117,22 @@
    * A toast carrying one action, for a change that should be reversible for a
    * moment rather than permanent the instant it happens.
    *
-   * Resolves when the window closes either way, so the caller can clean up.
+   * It goes in its own slot beside the ordinary toast — see arrange() — so the
+   * action stays on offer for as long as it says it will, whatever else the
+   * page has to report meanwhile.
    */
   function toastAction(msg, { label, onAction, kind = '', ms = 10000, id = 'toast', cls = 'toast', show = '', countdown = true } = {}) {
-    const node = toast(msg, kind, { id, cls, show, ms });
+    const slot = `${id}-action`;
+    // When its time is up, a message sitting above it comes back down.
+    const node = paint(slot, msg, kind, { cls, show, ms }, () => arrange(id));
+    arrange(id);
     if (!label || typeof onAction !== 'function') return node;
 
     const btn = el('button', 'toast-action', label);
     btn.type = 'button';
     btn.addEventListener('click', () => {
-      clearTimeout(toastTimers.get(id));
-      node.className = cls;
-      if (!show) node.classList.add('hidden');
+      hide(slot, node, cls, show);
+      arrange(id);
       onAction();
     });
     node.appendChild(btn);
@@ -225,8 +258,11 @@
     stylesInjected = true;
     const style = document.createElement('style');
     style.id = 'bp-ui-styles';
+    // margin:auto is what centres a modal dialog. The browser's own stylesheet
+    // sets it, and admin.css's `* { margin: 0 }` reset took it away, so every
+    // one of these opened jammed into the top-left corner of the window.
     style.textContent = `
-      .bp-dialog { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 0;
+      .bp-dialog { margin: auto; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 0;
         background: #111928; color: #f1f5f9; font-family: 'Raleway', system-ui, sans-serif;
         width: min(420px, calc(100vw - 32px)); box-shadow: 0 24px 60px rgba(0,0,0,.55); }
       .bp-dialog::backdrop { background: rgba(3,6,12,.66); backdrop-filter: blur(2px); }
@@ -240,6 +276,8 @@
         border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 10px 12px;
         color: inherit; font-family: inherit; font-size: 14px; outline: none; }
       .bp-dialog-field input:focus { border-color: #6366f1; }
+      .bp-dialog-field + .bp-dialog-field { margin-top: 10px; }
+      .bp-dialog-error { margin-top: 10px; font-size: 12.5px; line-height: 1.45; color: #fca5a5; }
       .bp-dialog-foot { display: flex; justify-content: flex-end; gap: 8px;
         padding: 12px 22px 18px; }
       .bp-dialog-btn { border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05);
@@ -340,11 +378,131 @@
     }).then(v => v === true);
   }
 
+  /**
+   * Ask for one or more values. Resolves with them by name, or null if the
+   * person backed out.
+   *
+   * prompt() could not say what a value was for, could not check it, and lost
+   * the difference between Cancel and a blank answer the moment a fallback was
+   * applied to it — "Hold for how many hours?" cancelled still held the stand
+   * for 24 hours, because `parseFloat(null) || 24` is 24. Here each field can
+   * carry its own check (`validate(value, all)` returns what is wrong, or
+   * nothing), and a refusal is said inside the dialog with the field still in
+   * front of the person, not in a toast after it has gone.
+   */
+  function askFields(message, { title = 'Details', confirmLabel = 'OK', fields = [] } = {}) {
+    return runDialog((dlg, close) => {
+      const body = el('div', 'bp-dialog-body');
+      body.append(el('div', 'bp-dialog-title', title));
+      if (message) body.append(el('div', 'bp-dialog-msg', message));
+
+      const inputs = fields.map((f) => {
+        const field = el('div', 'bp-dialog-field');
+        const id = 'bp-field-' + Math.random().toString(36).slice(2, 8);
+        const lab = el('label', null, f.label || ''); lab.htmlFor = id;
+        const input = document.createElement('input');
+        input.type = f.type || 'text';
+        input.id = id;
+        input.name = f.name;
+        input.value = f.value == null ? '' : String(f.value);
+        input.autocomplete = 'off';
+        if (f.placeholder) input.placeholder = f.placeholder;
+        if (f.inputMode) input.inputMode = f.inputMode;
+        if (f.maxLength) input.maxLength = f.maxLength;
+        field.append(lab, input);
+        body.appendChild(field);
+        return input;
+      });
+
+      const error = el('div', 'bp-dialog-error');
+      error.setAttribute('role', 'alert');
+      error.hidden = true;
+      body.appendChild(error);
+
+      const submit = () => {
+        const values = {};
+        inputs.forEach((i) => { values[i.name] = i.value.trim(); });
+        for (let k = 0; k < fields.length; k++) {
+          const f = fields[k];
+          const v = values[f.name];
+          const why = (f.required && !v) ? (f.requiredMessage || `${f.label || 'This'} is needed.`)
+                    : (typeof f.validate === 'function' ? f.validate(v, values) : null);
+          if (why) {
+            error.textContent = why;
+            error.hidden = false;
+            inputs[k].focus();
+            inputs[k].select();
+            return;
+          }
+        }
+        close(values);
+      };
+
+      const foot = el('div', 'bp-dialog-foot');
+      const cancel = el('button', 'bp-dialog-btn', 'Cancel'); cancel.type = 'button';
+      const go = el('button', 'bp-dialog-btn primary', confirmLabel); go.type = 'button';
+      cancel.addEventListener('click', () => close(null));
+      go.addEventListener('click', submit);
+      inputs.forEach(i => i.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      }));
+      foot.append(cancel, go);
+
+      dlg.append(body, foot);
+      setTimeout(() => { if (inputs[0]) { inputs[0].focus(); inputs[0].select(); } }, 30);
+    });
+  }
+
+  /** One value, the way prompt() asked for one: a string, or null on Cancel. */
+  function askText(message, { name = 'value', label = '', value = '', placeholder = '', required = false,
+                              requiredMessage, validate, maxLength, ...rest } = {}) {
+    return askFields(message, { ...rest, fields: [{ name, label, value, placeholder, required, requiredMessage, validate, maxLength }] })
+      .then(v => (v ? v[name] : null));
+  }
+
+  /**
+   * A message the page cannot be used past: no Cancel, and Escape does not
+   * close it. For when going on would only send work nowhere — the event the
+   * page was opened for has gone from under it. Each action does its own
+   * thing (reload, go elsewhere); nothing resolves.
+   */
+  function stopDialog(message, { title = '', actions = [] } = {}) {
+    injectStyles();
+    const dlg = document.createElement('dialog');
+    dlg.className = 'bp-dialog';
+    dlg.setAttribute('role', 'alertdialog');
+    const body = el('div', 'bp-dialog-body');
+    body.append(el('div', 'bp-dialog-title', title), el('div', 'bp-dialog-msg', message));
+    const foot = el('div', 'bp-dialog-foot');
+    actions.forEach(({ label, primary = false, onClick }) => {
+      const b = el('button', `bp-dialog-btn${primary ? ' primary' : ''}`, label);
+      b.type = 'button';
+      b.addEventListener('click', onClick);
+      foot.appendChild(b);
+    });
+    dlg.append(body, foot);
+    // Escape asks a modal dialog to close, and this one declines. A browser
+    // may insist on a repeated Escape all the same, so it simply opens again.
+    dlg.addEventListener('cancel', (e) => e.preventDefault());
+    dlg.addEventListener('close', () => { if (dlg.isConnected) dlg.showModal(); });
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    setTimeout(() => foot.lastChild && foot.lastChild.focus(), 30);
+    return dlg;
+  }
+
+  /**
+   * Is one of these dialogs open? A keystroke meant for a dialog — Escape to
+   * cancel it, above all — still bubbles to the page's own shortcuts, and the
+   * dialog's focused BUTTON does not look like typing to them.
+   */
+  const dialogOpen = () => !!document.querySelector('dialog.bp-dialog[open]');
+
   global.UI = {
     esc, cap, el, byId,
     money, setCurrency, currency,
     toast, toastAction,
     api, emitAck, withPending,
-    askSecret, confirmDialog,
+    askSecret, confirmDialog, askFields, askText, dialogOpen, stopDialog,
   };
 })(window);
