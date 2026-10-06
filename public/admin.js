@@ -2259,25 +2259,40 @@ function populateToolDropdowns() {
   renderSponsorBooths();
 }
 
-// Prefill the text box with the selected stand's current shown number.
+// Prefill the text box with the selected stand's current shown number — when
+// the choice of STAND changes, and only then. This used to run on every
+// keystroke in the box (it was the box's own `input` listener) and on every
+// broadcast and settings push (through populateToolDropdowns), and each time
+// it put the stored number back: the box could not be typed into at all.
+let numberFieldFor = null;
 function syncNumberField() {
   const sel = document.getElementById('number-stand');
   const inp = document.getElementById('number-value');
-  const prev = document.getElementById('number-preview');
   if (!sel || !inp) return;
-  const b = booths[sel.value];
-  inp.value = (b && b.displayNumber) || '';
-  if (prev) {
-    if (b) {
-      const to = inp.value.trim() || b.boothNumber;
-      prev.innerHTML = `Stand <b>${esc(b.boothNumber)}</b> → shown as <b>${esc(to)}</b>` +
-        (to === b.boothNumber ? ' <span class="mv-rate">(own number)</span>' : '');
-      prev.classList.remove('hidden');
-    } else prev.classList.add('hidden');
+  if (sel.value !== numberFieldFor) {
+    numberFieldFor = sel.value;
+    const b = booths[sel.value];
+    inp.value = (b && b.displayNumber) || '';
   }
+  paintNumberPreview();
+}
+
+/** "Stand 112 → shown as 1037", from whatever is in the box right now. */
+function paintNumberPreview() {
+  const sel = document.getElementById('number-stand');
+  const inp = document.getElementById('number-value');
+  const prev = document.getElementById('number-preview');
+  if (!sel || !inp || !prev) return;
+  const b = booths[sel.value];
+  if (b) {
+    const to = inp.value.trim() || b.boothNumber;
+    prev.innerHTML = `Stand <b>${esc(b.boothNumber)}</b> → shown as <b>${esc(to)}</b>` +
+      (to === b.boothNumber ? ' <span class="mv-rate">(own number)</span>' : '');
+    prev.classList.remove('hidden');
+  } else prev.classList.add('hidden');
 }
 document.getElementById('number-stand')?.addEventListener('change', syncNumberField);
-document.getElementById('number-value')?.addEventListener('input', syncNumberField);
+document.getElementById('number-value')?.addEventListener('input', paintNumberPreview);
 document.getElementById('number-form')?.addEventListener('submit', e => {
   e.preventDefault();
   const boothNumber = document.getElementById('number-stand').value;
@@ -4480,9 +4495,37 @@ function tagUsage(key) {
   return Object.values(booths).filter(b => (dealOf(b).tags || []).includes(key)).length;
 }
 
+/**
+ * The tag list, patched in place rather than rebuilt.
+ *
+ * It was thrown away and rebuilt on every broadcast — which is to say whenever
+ * any stand changed anywhere, because the "used on N stands" counts move with
+ * the stands. A rename being typed lost its focus mid-word, and since the
+ * input it was typed into no longer existed, its change never fired: the new
+ * name was simply gone. Now the rows stay put while the same tags are listed,
+ * and only their values and counts are brought up to date — never a field
+ * someone has their cursor in. A different SET of tags is redrawn, but not
+ * under somebody's hands: that waits until they leave the list.
+ */
+let tagListDeferred = false;
+
 function renderTagCatalogue() {
   const box = document.getElementById('tag-list');
   if (!box) return;
+  const sig = tagCatalogue.map(t => t.key).join('|');
+  const rowOf = (key) => box.querySelector(`.tag-row[data-key="${CSS.escape(key)}"]`);
+
+  if (tagCatalogue.length && box.dataset.sig === sig) {
+    tagCatalogue.forEach(t => patchTagRow(rowOf(t.key), t));
+    return;
+  }
+  if (box.contains(document.activeElement)) {
+    tagListDeferred = true;
+    tagCatalogue.forEach(t => patchTagRow(rowOf(t.key), t));
+    return;
+  }
+  tagListDeferred = false;
+  box.dataset.sig = sig;
   box.replaceChildren();
 
   if (!tagCatalogue.length) {
@@ -4493,51 +4536,75 @@ function renderTagCatalogue() {
     return;
   }
 
-  tagCatalogue.forEach(t => {
-    const row = document.createElement('div');
-    row.className = 'tag-row';
-
-    // Recolour in place — the swatch IS the colour picker.
-    const swatch = document.createElement('input');
-    swatch.type = 'color';
-    swatch.className = 'tag-swatch';
-    swatch.value = t.color;
-    swatch.title = `Colour for ${t.label}`;
-    swatch.onchange = () => saveTag(t.key, { color: swatch.value });
-    row.appendChild(swatch);
-
-    // Rename in place. Committed on blur/Enter, and reverted if the server
-    // rejects it (a duplicate name), so the field never shows a name that
-    // was not actually saved.
-    const name = document.createElement('input');
-    name.type = 'text';
-    name.className = 'admin-input tag-name';
-    name.maxLength = 40;
-    name.value = t.label;
-    name.onchange = () => {
-      const label = name.value.trim();
-      if (!label || label === t.label) { name.value = t.label; return; }
-      saveTag(t.key, { label }, () => { name.value = t.label; });
-    };
-    name.onkeydown = (e) => { if (e.key === 'Enter') name.blur(); };
-    row.appendChild(name);
-
-    const uses = tagUsage(t.key);
-    const used = document.createElement('span');
-    used.className = 'tag-uses';
-    used.textContent = uses ? `${uses} stand${uses === 1 ? '' : 's'}` : 'unused';
-    row.appendChild(used);
-
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'admin-btn danger';
-    del.textContent = 'Delete';
-    del.onclick = () => deleteTag(t, uses);
-    row.appendChild(del);
-
-    box.appendChild(row);
-  });
+  tagCatalogue.forEach(t => box.appendChild(buildTagRow(t)));
 }
+
+// Every handler looks the tag up by its key when it runs, so a row that has
+// been patched since it was built never acts on the name it was built with.
+function buildTagRow(t) {
+  const key = t.key;
+  const row = document.createElement('div');
+  row.className = 'tag-row';
+  row.dataset.key = key;
+
+  // Recolour in place — the swatch IS the colour picker.
+  const swatch = document.createElement('input');
+  swatch.type = 'color';
+  swatch.className = 'tag-swatch';
+  swatch.onchange = () => saveTag(key, { color: swatch.value });
+  row.appendChild(swatch);
+
+  // Rename in place. Committed on blur/Enter, and reverted if the server
+  // rejects it (a duplicate name), so the field never shows a name that
+  // was not actually saved.
+  const name = document.createElement('input');
+  name.type = 'text';
+  name.className = 'admin-input tag-name';
+  name.maxLength = 40;
+  name.onchange = () => {
+    const cur = tagByKey(key);
+    if (!cur) return;
+    const label = name.value.trim();
+    if (!label || label === cur.label) { name.value = cur.label; return; }
+    saveTag(key, { label }, () => { name.value = (tagByKey(key) || cur).label; });
+  };
+  name.onkeydown = (e) => { if (e.key === 'Enter') name.blur(); };
+  row.appendChild(name);
+
+  const used = document.createElement('span');
+  used.className = 'tag-uses';
+  row.appendChild(used);
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'admin-btn danger';
+  del.textContent = 'Delete';
+  del.onclick = () => deleteTag(tagByKey(key) || t, tagUsage(key));
+  row.appendChild(del);
+
+  patchTagRow(row, t);
+  return row;
+}
+
+function patchTagRow(row, t) {
+  if (!row) return;
+  const swatch = row.querySelector('.tag-swatch');
+  const name = row.querySelector('.tag-name');
+  if (swatch && document.activeElement !== swatch && swatch.value !== t.color) swatch.value = t.color;
+  if (swatch) swatch.title = `Colour for ${t.label}`;
+  if (name && document.activeElement !== name && name.value !== t.label) name.value = t.label;
+  const uses = tagUsage(t.key);
+  const used = row.querySelector('.tag-uses');
+  if (used) used.textContent = uses ? `${uses} stand${uses === 1 ? '' : 's'}` : 'unused';
+}
+
+// Whatever was put off while someone was editing is drawn the moment they leave.
+document.getElementById('tag-list')?.addEventListener('focusout', () => {
+  setTimeout(() => {
+    const box = document.getElementById('tag-list');
+    if (tagListDeferred && box && !box.contains(document.activeElement)) renderTagCatalogue();
+  }, 0);
+});
 
 document.getElementById('tag-form')?.addEventListener('submit', (e) => {
   e.preventDefault();

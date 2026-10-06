@@ -9,6 +9,9 @@
  *     untagged, and no stand on the plan answered a click until a reload.
  *   - A stand linked from the Activity Log, clicked before the plan had ever
  *     been opened, threw on the missing drawing.
+ *   - Tools → Shown Number put the stored number back on every keystroke.
+ *   - A tag being renamed was rebuilt out from under the typing by any
+ *     broadcast, and the rename never saved.
  */
 const fs = require('fs');
 const path = require('path');
@@ -95,6 +98,44 @@ stands[4].displayNumber = 'A4';                                                 
     check('clicking a stand opens it', await page.evaluate(() => !document.getElementById('admin-booth-action').classList.contains('hidden') &&
                                                             /105/.test(document.getElementById('aba-id').textContent)));
     await page.evaluate(() => document.getElementById('aba-close').click());
+
+    console.log('\nTools → Shown Number');
+    await page.click('[data-section="tools"]');
+    await page.waitForTimeout(300);
+    await page.selectOption('#number-stand', '103');
+    await page.click('#number-value');
+    await page.keyboard.type('10', { delay: 30 });
+    await page.evaluate(() => { window.__stand('110').clicks = 9; window.__broadcast(); });
+    await settle(page);
+    await page.keyboard.type('37', { delay: 30 });
+    let v = await page.$eval('#number-value', i => i.value);
+    check('what is typed stays typed, through keystrokes and a broadcast', v === '1037', JSON.stringify(v));
+    check('and the preview follows it', /1037/.test(await page.$eval('#number-preview', n => n.textContent)));
+    await page.selectOption('#number-stand', '104');
+    v = await page.$eval('#number-value', i => i.value);
+    check('choosing another stand fills in that stand\'s shown number', v === 'A4', JSON.stringify(v));
+
+    console.log('\nTools → Business Activities: renaming a tag');
+    await page.evaluate(() => window.__fire('tags:catalogue', [
+      { key: 'oil', label: 'Oil', color: '#ff8800' }, { key: 'additives', label: 'Additives', color: '#0088ff' }]));
+    await page.waitForTimeout(100);
+    const tagName = '#tag-list .tag-row:first-child .tag-name';
+    await page.click(tagName, { clickCount: 3 });
+    await page.keyboard.type('Base oi', { delay: 20 });
+    await page.evaluate(() => { window.__stand('111').clicks = 4; window.__broadcast(); });
+    await settle(page);
+    await page.keyboard.type('ls', { delay: 20 });
+    const typing = await page.evaluate(() => ({
+      focused: document.activeElement?.classList.contains('tag-name') || false,
+      value: document.activeElement?.value,
+    }));
+    check('a broadcast mid-rename leaves the field and the cursor where they were', typing.focused && typing.value === 'Base oils',
+          JSON.stringify(typing));
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(150);
+    const renamed = (await emits(page, 'tags:update')).pop();
+    check('and the rename is sent when it is finished', renamed && renamed.payload.key === 'oil' && renamed.payload.label === 'Base oils',
+          JSON.stringify(renamed && renamed.payload));
 
     check('the page raised no errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   } finally {
