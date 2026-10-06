@@ -4796,26 +4796,55 @@ function addEventCard(rows) {
   f('slug').addEventListener('input', () => { slugTouched = true; showLink(); });
 
   // Choosing an event to start from suggests the next edition of it: LEX27 is
-  // followed by LEX28, read from the name its live plan carries.
+  // followed by LEX28, read from the name its live plan carries, or from the
+  // event's own id where that carries the year (LEX26, LNA27). The next
+  // edition that does not exist yet, that is: counting one on from LEX26 while
+  // LEX27 is already running suggested the very event already on this page —
+  // and the add was refused. An edition counts as taken when an event's id, its
+  // URL name or its plan's name already says it.
   const copies = form.querySelector('.plan-add-copies');
+  const taken = new Set();
+  rows.forEach(r => [r.showId, r.slug, r.label && String(r.label).replace(/\.\d+$/, '')]
+    .forEach(v => { if (v) taken.add(String(v).toUpperCase()); }));
+  const EDITION = /^([A-Za-z]+)(\d{2}|\d{4})(?!\d)/;
+  const nextEdition = (src) => {
+    const m = EDITION.exec(src.label || '') || EDITION.exec(src.showId || '');
+    if (!m) return null;
+    const width = m[2].length;
+    let n = Number(m[2]), id;
+    do { n += 1; id = `${m[1].toUpperCase()}${String(n).padStart(width, '0')}`; } while (taken.has(id) && n < 10 ** width - 1);
+    return { id, year: width === 4 ? String(n) : `20${String(n).padStart(2, '0')}` };
+  };
+  // "Lubricant Expo Europe 2027" becomes "… 2028", not "… 2027 2028".
+  const YEAR_AT_END = /\b(?:19|20)\d{2}(\s*)$/;
+  const nameFor = (src, year) => {
+    const base = src.name || src.showId;
+    return YEAR_AT_END.test(base) ? base.replace(YEAR_AT_END, `${year}$1`).trim() : `${base} ${year}`;
+  };
+  // What was suggested last, so a different choice replaces it — but never
+  // something the person typed themselves.
+  let suggested = { id: '', name: '' };
   f('copyFrom').addEventListener('change', () => {
     const src = rows.find(r => r.showId === f('copyFrom').value);
     if (!src) { copies.textContent = ''; return; }
     copies.textContent = `Copies its rate, currency, units, colours, business activities and sponsorship packages. ` +
                          'Not its stands, bookings, leads or plan — upload the new plan to the new event.';
-    const m = /^([A-Za-z]+)(\d{2})(?!\d)/.exec(src.label || src.showId || '');
-    if (m && !f('showId').value) {
-      const next = String(Number(m[2]) + 1).padStart(2, '0');
-      f('showId').value = `${m[1].toUpperCase()}${next}`;
+    const next = nextEdition(src);
+    const idFree = !f('showId').value || f('showId').value === suggested.id;
+    const nameFree = !f('name').value || f('name').value === suggested.name;
+    if (next && idFree) {
+      f('showId').value = next.id;
       f('showId').dispatchEvent(new Event('input'));
-      if (!f('name').value) f('name').value = `${src.name || src.showId} 20${next}`;
-    } else if (!f('name').value) {
+      if (nameFree) f('name').value = nameFor(src, next.year);
+      suggested = { id: next.id, name: f('name').value };
+    } else if (nameFree) {
       f('name').value = src.name || '';
+      suggested = { id: suggested.id, name: f('name').value };
     }
   });
 
   open.onclick = () => { open.hidden = true; form.hidden = false; f('copyFrom').focus(); };
-  form.querySelector('[data-cancel]').onclick = () => { form.reset(); slugTouched = false; copies.textContent = ''; showLink(); form.hidden = true; open.hidden = false; };
+  form.querySelector('[data-cancel]').onclick = () => { form.reset(); slugTouched = false; suggested = { id: '', name: '' }; copies.textContent = ''; showLink(); form.hidden = true; open.hidden = false; };
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -5854,11 +5883,31 @@ async function loadShows() {
     name.className = 'admin-input area-name';
     name.value = sh.name || sh.showId;
     name.maxLength = 80;
+    name.setAttribute('aria-label', `Name of ${sh.name || sh.showId}`);
     name.onchange = () => saveShow(sh.showId, { name: name.value });
+
+    // The URL name: the address the event lives at. The Add an event card
+    // promises it can be changed here, and it could not be — the server took a
+    // new one, but nothing on this page offered it.
+    const slugRow = document.createElement('label');
+    slugRow.className = 'show-slug';
+    const slugLbl = document.createElement('span');
+    slugLbl.textContent = '/floorplan/';
+    const slug = document.createElement('input');
+    slug.type = 'text';
+    slug.className = 'admin-input show-slug-input';
+    slug.value = sh.slug;
+    slug.maxLength = 24;
+    slug.spellcheck = false;
+    slug.autocomplete = 'off';
+    slug.setAttribute('aria-label', `URL name of ${sh.name || sh.showId}`);
+    slug.onchange = () => changeShowSlug(sh, slug);
+    slug.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); slug.blur(); } };
+    slugRow.append(slugLbl, slug);
 
     const meta = document.createElement('div');
     meta.className = 'area-package-note';
-    meta.textContent = `id ${sh.showId}${sh.active === false ? ' · retired' : ''}`;
+    meta.textContent = `id ${sh.showId} (permanent)${sh.active === false ? ' · retired' : ''}`;
 
     // The two places this event lives. Shown as links so they can be opened and
     // checked without anyone having to remember the URL shape.
@@ -5896,19 +5945,67 @@ async function loadShows() {
       await saveShow(sh.showId, { active: retired });
     });
 
-    card.append(name, meta, links, retire);
+    card.append(name, slugRow, meta, links, retire);
     box.appendChild(card);
   });
 }
 
-async function saveShow(showId, fields) {
+// What the server accepts as a URL name (models/shows.js), checked here so a
+// typo is explained before anything is asked or sent.
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+
+/**
+ * Move an event to a new address.
+ *
+ * Asked first, because the old address stops answering the moment it moves:
+ * every link already sent out or printed for it starts returning 404. If this
+ * page is that event's console it reopens at the new address — left where it
+ * was, every request it made would name an event that is no longer there.
+ */
+async function changeShowSlug(sh, input) {
+  const next = input.value.trim().toLowerCase();
+  if (next === sh.slug) { input.value = sh.slug; return; }
+  if (!SLUG_RE.test(next)) {
+    input.value = sh.slug;
+    return adminToast('A URL name is up to 24 lowercase letters, numbers and dashes, starting with a letter or a number.', 'error');
+  }
+  const name = sh.name || sh.showId;
+  const here = sh.slug === SHOW;
+  const ok = await confirmDialog(
+    `Move ${name} from /floorplan/${sh.slug} to /floorplan/${next}?\n\n` +
+    `The old address stops working straight away: /floorplan/${sh.slug} and /admin/${sh.slug} answer 404, ` +
+    'including any link to them already sent out or printed. Nothing else about the event changes.' +
+    (here ? `\n\nThis page is ${name}'s console, so it reopens at /admin/${next}.` : ''),
+    { title: `Change ${name}'s address`, confirmLabel: 'Move it', danger: true });
+  if (!ok) { input.value = sh.slug; return; }
+  const saved = await saveShow(sh.showId, { slug: next }, { refresh: !here });
+  if (!saved) { input.value = sh.slug; return; }
+  if (here) location.href = `/admin/${encodeURIComponent(next)}`;
+}
+
+/**
+ * Save a change to an event, and refresh everything that lists the events.
+ *
+ * Only this card used to be refreshed, so an event renamed, retired or moved
+ * here went on reading as it was in the sidebar's switcher and on the
+ * Settings page until a reload.
+ */
+async function saveShow(showId, fields, { refresh = true } = {}) {
   try {
     await api(`/api/shows/${encodeURIComponent(showId)}`, {
       method: 'PATCH', body: JSON.stringify(fields),
     });
     adminToast('Event updated.', 'ok');
-    loadShows();
-  } catch (e) { adminToast(e.message || 'Could not update that event.', 'error'); }
+    if (refresh) refreshEventLists();
+    return true;
+  } catch (e) { adminToast(e.message || 'Could not update that event.', 'error'); return false; }
+}
+
+/** Every list of events on the page: Tools → Events, the switcher, Settings. */
+function refreshEventLists() {
+  loadShows();
+  initShowSwitcher();
+  loadPlans();
 }
 
 document.getElementById('show-form')?.addEventListener('submit', (e) => {
@@ -5923,7 +6020,9 @@ document.getElementById('show-form')?.addEventListener('submit', (e) => {
       await api('/api/shows', { method: 'POST', body: JSON.stringify({ name, slug, showId }) });
       adminToast(`${name || showId} added — it is live at /floorplan/${slug}.`, 'ok');
       ['show-name', 'show-slug', 'show-id'].forEach(id => { document.getElementById(id).value = ''; });
-      loadShows();
+      // Not just this list: an event added here was missing from the switcher
+      // and from Settings — where its plan is uploaded — until a reload.
+      refreshEventLists();
     } catch (err) { adminToast(err.message || 'Could not add that event.', 'error'); }
   });
 });

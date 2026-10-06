@@ -524,6 +524,9 @@ body {
   flex: 1; justify-content: center; text-align: center;
   font-size: 11px; padding: 5px 8px; text-decoration: none;
 }
+/* The event's address, edited where it is read: "/floorplan/" and the name. */
+.show-slug { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.show-slug-input { flex: 1; min-width: 0; font-size: 12px; padding: 5px 8px; }
 
 /* The area editor, shared by the Tools cards and the on-plan panel. */
 .ara-body { display: flex; flex-direction: column; gap: 8px; }
