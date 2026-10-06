@@ -2946,6 +2946,31 @@ socket.on('error:auth', ({ message }) => {
   checkSession();
 });
 
+/**
+ * The event this console was opened for is no longer at this address —
+ * renamed, or gone, while the page was open. The server says so (show:gone)
+ * and closes the connection, and everything this page sends from then on
+ * names an event that is not there. So the page stops, with one message in
+ * front of everything that cannot be dismissed and says what to do, rather
+ * than every button failing in turn with a refusal of its own.
+ */
+let showGone = false;
+socket.on('show:gone', (info) => {
+  if (showGone) return;
+  showGone = true;
+  const name = (window.__SHOW && window.__SHOW.name) || 'The event this page was opened for';
+  window.UI.stopDialog(
+    (info && typeof info.message === 'string' && info.message) ||
+    `${name} is no longer at this address — it may have been moved to a new one, or taken off the air, while ` +
+    'this page was open. Nothing more can be saved from here.\n\nReload the page to carry on. If the event has ' +
+    'moved, open the console and choose it from the list of events.',
+    { title: 'This event is no longer here',
+      actions: [
+        { label: 'Open the console', onClick: () => { location.href = '/admin'; } },
+        { label: 'Reload the page', primary: true, onClick: () => location.reload() },
+      ] });
+});
+
 // 'booth:updated' used to be handled here. The server has never emitted it, so
 // the handler was fifteen lines that could not run — and its existence implied a
 // per-stand update channel that does not exist. Stand changes arrive as
@@ -4878,6 +4903,9 @@ function addEventCard(rows) {
   return card;
 }
 
+/** A retired event: kept, listed, and answering 404 to visitors. */
+const offAir = (row) => row.active === false;
+
 function planCard(row, isCurrent) {
   const card = document.createElement('div');
   card.className = 'plan-card' + (isCurrent ? ' is-current' : '');
@@ -5024,6 +5052,17 @@ function planCard(row, isCurrent) {
   actions.append(up, dl, imp, ver, col, sch, rm);
 
   const parts = [head, preview, meta];
+  // A retired event's controls act on THAT event — its plan, its colours, its
+  // stands — and nobody sees any of it until it is back on air. Said on the
+  // card itself and not only in the badge's tooltip, because every button
+  // below otherwise reads exactly as it does on an event that is selling.
+  if (offAir(row)) {
+    const note = document.createElement('div');
+    note.className = 'plan-retired-note';
+    note.textContent = `Off the air: /floorplan/${row.slug} answers 404. Anything changed on this card is changed ` +
+      `on ${row.name || row.showId} itself, and visitors see it once the event is put back on air under Tools → Events.`;
+    parts.push(note);
+  }
   if (specLine) parts.push(specLine);
   if (row.draft) parts.push(draftPanel(row));
   // Only where there is something to lose.
@@ -5625,10 +5664,14 @@ async function importStands(row, preview, box, { mode = 'upsert', revision = nul
   const where = row.name || row.showId;
   // Said in every dialog for a revision: the one thing an organiser wants to
   // know before a new plan goes up is whether the link they sent out changes.
-  const goesLive = revision
-    ? `\n\nVisitors see ${revision.label} from now on, at the same link (/floorplan/${row.slug}). ` +
-      'If the stands cannot be moved onto it, nothing goes live.'
-    : '';
+  // A retired event has no visitors to see it, and saying it did was the one
+  // untrue sentence left on its card.
+  const goesLive = !revision ? ''
+    : offAir(row)
+      ? `\n\n${where} is retired, so nobody sees ${revision.label} until the event is put back on air — ` +
+        `then at the same link (/floorplan/${row.slug}). If the stands cannot be moved onto it, nothing changes.`
+      : `\n\nVisitors see ${revision.label} from now on, at the same link (/floorplan/${row.slug}). ` +
+        'If the stands cannot be moved onto it, nothing goes live.';
   const replace = mode === 'replace';
   const update = mode === 'update';
 
@@ -5677,7 +5720,7 @@ async function importStands(row, preview, box, { mode = 'upsert', revision = nul
   }
 
   adminToast(
-    (revision ? `${revision.label} is live on ${where}. ${r.imported} stands placed on it — `
+    (revision ? `${revision.label} is ${offAir(row) ? `now the plan for ${where}, which is still off the air` : `live on ${where}`}. ${r.imported} stands placed on it — `
               : `${where}: ${r.imported} stands ${r.mode === 'replace' ? 'replaced' : 'updated from the plan'} — `) +
     `${r.available} available, ${r.sold} sold, ${r.held || 0} on hold` +
     (r.created ? `, ${r.created} new` : '') +
@@ -5745,7 +5788,10 @@ function pickPlan(row) {
     // stored as a draft and the live plan does not move until it is made live.
     const password = await askSecret(
       `Uploading a new version of ${row.name || row.showId}'s plan as a draft.\n\n` +
-      'Visitors keep seeing the live plan. You will see what the new one does to the stands before making it live.',
+      (offAir(row)
+        ? `${row.name || row.showId} is retired, so nobody sees its plan until it is put back on air. `
+        : 'Visitors keep seeing the live plan. ') +
+      'You will see what the new one does to the stands before making it live.',
       { title: 'Upload a new version', confirmLabel: 'Upload it' });
     if (password === null) return;
     if (!password) return adminToast('Password required to change a floorplan.', 'error');
@@ -5772,7 +5818,7 @@ function pickPlan(row) {
       }
       const r = await res.json();
       const label = (r.revision && r.revision.label) || 'The new version';
-      adminToast(`${label} uploaded as a draft — visitors still see the live plan.` +
+      adminToast(`${label} uploaded as a draft — ${offAir(row) ? 'the event is off the air, so nobody sees either plan yet' : 'visitors still see the live plan'}.` +
         (r.removed && r.removed.length ? ` Removed for safety: ${r.removed.join(', ')}.` : ''), 'ok');
       // The plan is stored either way; this is what to send the designer.
       if (r.spec && r.spec.failedClauses && r.spec.failedClauses.length) {

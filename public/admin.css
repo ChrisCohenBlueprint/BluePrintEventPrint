@@ -386,9 +386,17 @@ body {
 .plan-warn { font-size: 11px; color: var(--orange); line-height: 1.5; }
 .plan-spec { font-size: 11px; color: var(--muted); }
 .plan-spec.is-clean { color: var(--green); }
-/* A retired event: still listed, clearly off the air. */
-.plan-card.is-retired { opacity: .62; }
+/* A retired event: still listed, clearly off the air — and still readable,
+   because its controls act on it. The whole card was faded to 62%, which
+   dimmed exactly the buttons and the note that now have to be read; the
+   dashed edge, the greyed drawing and the note say "off the air" instead. */
+.plan-card.is-retired { border-style: dashed; background: rgba(148,163,184,.04); }
+.plan-card.is-retired .plan-preview { filter: grayscale(1); opacity: .55; }
 .plan-badge.is-retired { background: rgba(148,163,184,.16); color: var(--muted); }
+.plan-retired-note {
+  padding: 8px 10px; border-radius: 8px; font-size: 11px; line-height: 1.5; color: var(--text);
+  background: rgba(148,163,184,.10); border: 1px solid rgba(148,163,184,.28);
+}
 /* The last card: the way to the next event. */
 .plan-card.plan-add { border-style: dashed; background: transparent; justify-content: center; }
 .plan-add-open {

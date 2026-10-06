@@ -10,6 +10,11 @@
  *     on the page, and the add was refused.
  *   - Remove on a Settings card kept the old plan as an earlier version "so it
  *     can be put back", and took away Versions, the only way to put it back.
+ *   - A retired event's card controls now act on that event (the agreed server
+ *     change), so the card has to say plainly that it is off the air, and its
+ *     dialogs must not promise visitors a plan nobody can reach.
+ *   - When the server says this console's event has gone (show:gone), the page
+ *     stops and says to reload, rather than letting every button fail in turn.
  */
 const { startConsole, seedStands, toasts, checker, launch } = require('./admin-console-harness');
 
@@ -152,6 +157,44 @@ const revisions = { lme: [{ revisionId: 'r-lme-1', label: 'LME27', status: 'supe
     const rev = await page.$eval('#revisions-panel', p => p.textContent);
     check('and Versions lists the removed plan with the way to make it live again', /LME27/.test(rev) && /Make live again/.test(rev), rev.slice(0, 160));
     await page.click('#revisions-panel .admin-btn');
+
+    console.log('\nA retired event on Settings');
+    const old = cards.find(c => c.retired);
+    check('says on the card that it is off the air, and that changes there are changes to it', old && /Off the air/.test(old.note) &&
+          /Lubricant Expo Europe 2026 itself/.test(old.note), old && old.note);
+    check('and is not faded as a whole — its controls are meant to be read and used', old && old.opacity === '1', old && old.opacity);
+    const chooser = page.waitForEvent('filechooser');
+    await page.evaluate(() => [...document.querySelectorAll('.plan-card.is-retired .plan-actions .admin-btn')]
+      .find(b => b.textContent === 'New version').click());
+    await (await chooser).setFiles({ name: 'LEX26_v2.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') });
+    await page.waitForSelector('dialog.bp-dialog[open]');
+    const up = await dialog();
+    check('its upload does not promise visitors a plan nobody can reach', /retired/.test(up.text) && !/Visitors keep seeing/.test(up.text), up.text);
+    await press('Cancel');
+    await page.evaluate(() => [...document.querySelectorAll('.plan-card.is-retired .plan-actions .admin-btn')]
+      .find(b => b.textContent === 'Colours').click());
+    await page.waitForTimeout(300);
+    check('and its controls name that event to the server', headers.some(h => h.show === 'lex26'), JSON.stringify(headers));
+
+    console.log('\nThe server\'s "no longer at that address"');
+    await page.evaluate(() => openPalettePanel({ slug: 'gone', name: 'An old event' }));
+    await page.waitForTimeout(250);
+    check('is shown as the server says it', /This event is no longer at that address\. Reload the page\./.test(await toasts(page)), await toasts(page));
+
+    console.log('\nThis console\'s event has gone (show:gone)');
+    await page.evaluate(() => window.__fire('show:gone', {}));
+    await page.waitForTimeout(150);
+    let gone = await page.evaluate(() => {
+      const d = document.querySelector('dialog.bp-dialog[open][role="alertdialog"]');
+      return d ? { text: d.textContent, buttons: [...d.querySelectorAll('button')].map(b => b.textContent) } : null;
+    });
+    check('a message in front of everything says to reload', !!gone && /Reload/i.test(gone.text) && gone.buttons.includes('Reload the page'),
+          JSON.stringify(gone));
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
+    gone = await page.evaluate(() => !!document.querySelector('dialog.bp-dialog[open][role="alertdialog"]'));
+    check('and it cannot be waved away to carry on working', gone);
 
     console.log('\nMoving the event this console is showing');
     const p2 = await br.newPage({ viewport: { width: 1400, height: 900 } });

@@ -461,6 +461,37 @@
   }
 
   /**
+   * A message the page cannot be used past: no Cancel, and Escape does not
+   * close it. For when going on would only send work nowhere — the event the
+   * page was opened for has gone from under it. Each action does its own
+   * thing (reload, go elsewhere); nothing resolves.
+   */
+  function stopDialog(message, { title = '', actions = [] } = {}) {
+    injectStyles();
+    const dlg = document.createElement('dialog');
+    dlg.className = 'bp-dialog';
+    dlg.setAttribute('role', 'alertdialog');
+    const body = el('div', 'bp-dialog-body');
+    body.append(el('div', 'bp-dialog-title', title), el('div', 'bp-dialog-msg', message));
+    const foot = el('div', 'bp-dialog-foot');
+    actions.forEach(({ label, primary = false, onClick }) => {
+      const b = el('button', `bp-dialog-btn${primary ? ' primary' : ''}`, label);
+      b.type = 'button';
+      b.addEventListener('click', onClick);
+      foot.appendChild(b);
+    });
+    dlg.append(body, foot);
+    // Escape asks a modal dialog to close, and this one declines. A browser
+    // may insist on a repeated Escape all the same, so it simply opens again.
+    dlg.addEventListener('cancel', (e) => e.preventDefault());
+    dlg.addEventListener('close', () => { if (dlg.isConnected) dlg.showModal(); });
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    setTimeout(() => foot.lastChild && foot.lastChild.focus(), 30);
+    return dlg;
+  }
+
+  /**
    * Is one of these dialogs open? A keystroke meant for a dialog — Escape to
    * cancel it, above all — still bubbles to the page's own shortcuts, and the
    * dialog's focused BUTTON does not look like typing to them.
@@ -472,6 +503,6 @@
     money, setCurrency, currency,
     toast, toastAction,
     api, emitAck, withPending,
-    askSecret, confirmDialog, askFields, askText, dialogOpen,
+    askSecret, confirmDialog, askFields, askText, dialogOpen, stopDialog,
   };
 })(window);
