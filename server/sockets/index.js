@@ -150,10 +150,13 @@ function addressLimiter({ burst, perHour, max = 20_000 }) {
 
 // Enquiries per address. Each one is stored, fires the webhook and pings every
 // admin, and the only ceiling was per socket — so one script opening a socket
-// per enquiry stored as many as it liked. Generous enough for an office of
-// colleagues behind one address; a script gets ten, then one every three
-// minutes.
-const enquiriesFrom = addressLimiter({ burst: 10, perHour: 20 });
+// per enquiry stored as many as it liked. Sized for the busiest honest case,
+// which is not an office but the hall itself: during an event every visitor on
+// the venue wifi shares one address, and an afternoon rush of enquiries from it
+// is the thing this product exists to catch. Each enquiry is already capped in
+// size and checked against the event's own stands, so what is left to limit is
+// volume — a script gets thirty, then two a minute.
+const enquiriesFrom = addressLimiter({ burst: 30, perHour: 120 });
 
 // ─── Consent, once per visitor ────────────────────────────────────────────────
 // The page re-asserts a granted consent on every connection — once buffered

@@ -9,8 +9,8 @@
  *                 field is capped, and what was left out is reported back.
  *   per address — the only limit was per socket, so a script opening a fresh
  *                 socket per enquiry stored, webhooked and pinged the admins
- *                 without limit. One address now gets ten, then one every few
- *                 minutes — and the address is the proxy's, not the one the
+ *                 without limit. One address now gets thirty, then two a
+ *                 minute — and the address is the proxy's, not the one the
  *                 client wrote into X-Forwarded-For.
  *   once        — the page sends a request id with each enquiry and every
  *                 retry of it; a retry is answered as the original was.
@@ -67,13 +67,13 @@ const enquiry = (extra = {}) => ({ firstName: 'Ada', lastName: 'Lovelace', email
     console.log('\nOne address cannot store enquiries without limit');
     db.store.inquiries = [];
     let accepted = 0, refused = 0;
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 34; i++) {
       const s = await client({ ip: '192.0.2.1, 203.0.113.50' });   // the proxy's hop is the right-most
       const a = await ask(s, 'inquiry:submit', enquiry({ email: `bot${i}@example.com` }));
       if (a && a.ok) accepted++; else refused++;
       s.disconnect();
     }
-    check('a fresh socket per enquiry no longer resets the limit', accepted === 10 && refused === 4,
+    check('a fresh socket per enquiry no longer resets the limit', accepted === 30 && refused === 4,
           `accepted ${accepted}, refused ${refused}`);
     const other = await client({ ip: '203.0.113.99' });
     check('another address is unaffected', (await ask(other, 'inquiry:submit', enquiry())).ok === true);
