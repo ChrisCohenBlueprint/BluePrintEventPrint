@@ -184,6 +184,14 @@
         </div>
       </div>
 
+      <!-- What has been taken out of the enquiry, and why: a stand that sold
+           or went on hold while it was shortlisted, an area that was
+           sponsored, a package that sold out. Outside the enquiry card so it
+           is still there when that empties the card, and always in the
+           document — empty, it takes no space — so a screen reader hears it
+           arrive. See noteRemoved() in floorplan.js. -->
+      <div class="eq-notice-region" id="eq-notice" role="status" aria-live="polite"></div>
+
       <!-- Enquiry form (hidden until a stand is shortlisted) -->
       <div class="fp-side-card enquiry-card hidden" id="enquiry-card">
         <button id="eq-collapse" class="box-collapse" type="button" aria-expanded="true" title="Hide enquiry"><i data-lucide="chevron-down"></i></button>
@@ -248,6 +256,10 @@
           <i data-lucide="check-circle"></i>
           <h4>Enquiry sent</h4>
           <p>Thanks — our team will be in touch shortly about the stands and options you selected.</p>
+          <!-- Anything the server left out because it no longer exists in this
+               event (a stand merged away between the last broadcast and the
+               send). The enquiry is stored without it, so say which. -->
+          <p class="eq-dropped" id="eq-dropped" hidden></p>
           <!-- The card used to be hidden for good, while "Add to enquiry" went
                on silently toggling the shortlist underneath it. A visitor who
                finds two more stands after sending needs a way back. -->

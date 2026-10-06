@@ -35,7 +35,18 @@ const store = {
 // Behavioural events are not sent until the visitor accepts. Stand views still
 // work; they simply are not recorded.
 const CONSENT_KEY = 'bp_consent';
-let consent = store.get(CONSENT_KEY);                     // 'granted' | 'denied' | null
+// Embedded in the marketing site (?embed=1), where the host's cookie banner is
+// the one the visitor actually answers — ours is hidden. See initConsent().
+const EMBEDDED = new URLSearchParams(location.search).has('embed');
+// What is in force NOW: 'granted' | 'denied' | null. Embedded, an answer
+// stored on an earlier visit is NOT used on its own: the host answers on every
+// load (that is the protocol), and until it has, this visit has no consent.
+// Using the stored one at once put the visitor's old session id in the
+// handshake and adopted it on connect before the host had said a word about
+// this visit — including for a visitor who had since withdrawn on the host's
+// banner. Opened directly, the stored answer was given on this page's own bar
+// and stands.
+let consent = EMBEDDED ? null : store.get(CONSENT_KEY);
 
 const SESSION_KEY = 'bp_session';
 function sessionId() {
@@ -59,8 +70,11 @@ const SHOW = (window.__SHOW && window.__SHOW.slug) || '';
 const SHOW_NAME = (window.__SHOW && window.__SHOW.name) || 'Interactive Expo Floorplan';
 // A filename-safe token for the download. The event id (LEX / LNA / LME) is
 // already short and stable; the year comes from the clock, not from a literal
-// that goes stale in January.
-const SHOW_CODE = String((window.__SHOW && window.__SHOW.showId) || 'Floorplan').replace(/[^A-Za-z0-9-]+/g, '');
+// that goes stale in January. The server injects it as `id` (send-page.js,
+// showForRequest): this used to read `showId`, which is never there, so every
+// event's plan downloaded as "Floorplan-Floorplan-<date>.png".
+const SHOW_CODE = String((window.__SHOW && (window.__SHOW.id || window.__SHOW.slug)) || 'Floorplan')
+  .replace(/[^A-Za-z0-9-]+/g, '');
 // `auth` is a FUNCTION, not an object. An object is evaluated once, at socket
 // construction — before consent can have been given — and socket.io then
 // replays that same frozen value on every reconnect. So a visitor who accepted
@@ -74,6 +88,23 @@ const socket = io({ auth: (cb) => cb({ sessionId: sessionId() }), query: { show:
 function emitTracked(event, payload) {
   if (consent !== 'granted') return;
   socket.emit(event, payload);
+}
+
+/**
+ * Tell THIS connection whose session it is — once.
+ *
+ * The server mints a fresh id for every connection, so consent has to be
+ * re-asserted on each one; but only once per connection, and only on a live
+ * one. Accepting while the socket was down used to emit an adopt that
+ * socket.io buffered, and the reconnect then sent its own: two adopts, and two
+ * consent records, for one decision. Now a decision taken offline waits for
+ * the connect handler, which is the one place a new connection adopts.
+ */
+let adoptedHere = false;
+function adoptSession() {
+  if (consent !== 'granted' || adoptedHere || !socket.connected) return;
+  adoptedHere = true;
+  socket.emit('session:adopt', { sessionId: sessionId() });
 }
 
 /**
@@ -95,23 +126,47 @@ function emitTracked(event, payload) {
  *        iframe.contentWindow.postMessage(
  *          { type: 'bp-consent', value: 'granted' }, 'https://<our-origin>');
  *      Send it again with 'declined' if the visitor withdraws consent; we stop
- *      sending behavioural events immediately and drop the stored session id.
- *      Safe to send before we have finished loading — post it on the iframe's
- *      load event, or simply post it on every banner change.
+ *      sending behavioural events immediately, drop the stored session id and
+ *      tell the server to stop tracking this connection.
+ *      Post it on the iframe's load event — EVERY load: an answer stored on an
+ *      earlier visit is not used until the host has given this one — or
+ *      simply post it on every banner change as well.
  *
- * Nothing else is accepted from the host: the message is ignored unless it is
- * that exact shape, so an unrelated postMessage on the page cannot turn
- * tracking on.
+ * Nothing else is accepted, and from nobody else: the message must be that
+ * exact shape AND come from the page this one is embedded in (window.parent).
+ * Any window can postMessage into an iframe, so a check on the shape alone let
+ * another frame on the host page — an ad, a chat widget — run
+ *   parent.frames[0].postMessage({ type: 'bp-consent', value: 'granted' }, '*')
+ * and switch tracking on. Which page may BE the parent is the server's call:
+ * the Content-Security-Policy frame-ancestors on this page names only this
+ * site and the origins in EMBED_ORIGINS, so a message from the parent is a
+ * message from one of those. (The page is not told that list, so it does not
+ * check e.origin against it as well.)
+ *
+ * Embedded, an answer stored on an earlier visit waits for the host's (see
+ * `consent` at the top of the file). There is no timer to fall back on:
+ * waiting already IS "not granted" — nothing is tracked and no session is
+ * sent — and if the host never answers, nothing ever is. A late answer is
+ * still honoured whenever it comes, since the host posts on every change.
  */
 function initConsent() {
   const bar = document.getElementById('consent-bar');
 
   const decide = (value) => {
+    const was = consent;
     consent = value;
     store.set(CONSENT_KEY, value);
     bar.classList.add('hidden');
-    if (value === 'granted') socket.emit('session:adopt', { sessionId: sessionId() });
-    else store.remove(SESSION_KEY);
+    if (value === 'granted') { adoptSession(); return; }
+    store.remove(SESSION_KEY);
+    // A withdrawal, not just a refusal: this connection may be carrying the
+    // visitor's session, and clearing local storage told the server nothing —
+    // the open socket went on being tracked under their id. Only when it WAS
+    // granted: a visitor who never agreed is not tracked, and must not be
+    // recorded as having withdrawn either. While disconnected there is no
+    // socket to stop; the next one is opened with no session at all.
+    adoptedHere = false;
+    if (was === 'granted' && socket.connected) socket.emit('consent:withdrawn');
   };
 
   // The host's answer, however it arrived. Normalised because a cookie banner's
@@ -128,6 +183,8 @@ function initConsent() {
   if (!answered) bar.classList.remove('hidden');
 
   window.addEventListener('message', (e) => {
+    // The page we are embedded in, and nothing else — see the header above.
+    if (e.source !== window.parent) return;
     const d = e.data;
     if (!d || typeof d !== 'object' || d.type !== 'bp-consent') return;
     adopt(d.value);
@@ -151,6 +208,21 @@ let shortlist   = [];      // boothNumbers the visitor wants to enquire about
 // The number to SHOW for a stand — the admin-set override if present, else the
 // real identity. Identity (n / boothNumber) stays the key for lookups + emits.
 const shownN = (n) => (booths[n] && booths[n].displayNumber) || n;
+
+/**
+ * The company a stand may be published under: a SOLD stand's, and nobody
+ * else's.
+ *
+ * A hold is a provisional deal, and naming the company on one announces a
+ * booking nobody has agreed to. The panel, the directory and the accessible
+ * name always kept to that; the painter and the search did not — "Acme Holdings
+ * Ltd" was drawn on the orange stand, typing "acme" offered it as an exhibitor,
+ * and the PNG download carried it. Every place that shows, searches or exports
+ * a company reads it through here, and state:full drops a held stand's company
+ * before it is ever stored (see there), so neither half depends on the server
+ * withholding it.
+ */
+const publicCompany = (b) => (b && b.status === 'sold' && b.company) || '';
 
 // Area unit label (m²/ft²), pushed from the server. A label only — no price or
 // numeric conversion reaches the public client.
@@ -412,8 +484,30 @@ function setBanner(text, kind) {
   el.hidden = false;
 }
 
+// The artwork for THIS show — uploaded per event, falling back to the file
+// shipped with the app. The page's X-Show header decides which comes back.
+// The event is in the URL, not only in a header. Every event used to request
+// the same /floorplan.svg and rely on X-Show to distinguish them, which any
+// cache in between is entitled to ignore — and did: one event's plan was
+// served for another's for the five minutes it stayed cached.
+const ARTWORK_URL = `/floorplan.svg?show=${encodeURIComponent(SHOW)}`;
+
+// Which drawing is on screen: the server's ETag for it (its version), so a
+// reconnect can ask "has it changed?" for the price of a 304. See
+// revalidateArtwork().
+let artworkTag = null;
+let artworkLoading = false;       // a load() is in flight
+let recheckArtwork = false;       // …and something asked for a newer drawing meanwhile
+
 let collapsersWired = false;
-async function load() {
+/**
+ * Fetch the drawing and bind every stand to it.
+ *
+ * `fetched` is a response already in hand — revalidateArtwork() has just
+ * downloaded the new drawing to find out it IS new, and fetching it a second
+ * time would be another 2 MB for nothing.
+ */
+async function load(fetched) {
   if (!collapsersWired) { collapsersWired = true; wireCollapsers(); }
   const mount = document.getElementById('svg-mount');
   mount.replaceChildren();
@@ -422,19 +516,15 @@ async function load() {
   loading.textContent = 'Loading floorplan…';
   mount.appendChild(loading);
   armStateWatchdog();
+  artworkLoading = true;
   try {
-    // The artwork for THIS show — uploaded per event, falling back to the file
-    // shipped with the app. The page's X-Show header decides which comes back.
-    // The event is in the URL, not only in a header. Every event used to
-    // request the same /floorplan.svg and rely on X-Show to distinguish them,
-    // which any cache in between is entitled to ignore — and did: one event's
-    // plan was served for another's for the five minutes it stayed cached.
-    const svgRes = await fetch(`/floorplan.svg?show=${encodeURIComponent(SHOW)}`);
+    const svgRes = fetched || await fetch(ARTWORK_URL);
     // A 4xx/5xx does not throw. Checked BEFORE the body is used, or an error
     // page is injected as markup and every failure after it is a null-deref
     // with a misleading message.
     if (!svgRes.ok) throw new Error(`The plan could not be fetched (${svgRes.status}).`);
     const text = await svgRes.text();
+    artworkTag = svgRes.headers.get('ETag');
     mount.innerHTML = text;
     svgDoc = mount.querySelector('svg');
     if (!svgDoc) throw new Error('The plan came back without any artwork in it.');
@@ -454,7 +544,45 @@ async function load() {
   } catch (e) {
     svgReady = false;
     showLoadError(e && e.message ? e.message : '');
+  } finally {
+    artworkLoading = false;
+    // A re-issue announced while this was downloading may have been published
+    // after the server answered it. Ask again — a 304 if not.
+    if (recheckArtwork) { recheckArtwork = false; revalidateArtwork(); }
   }
+}
+
+/**
+ * Is the drawing on screen still the current one? If not, put the new one up.
+ *
+ * floorplan:changed is a broadcast: sent once, to whoever is connected at the
+ * moment the drawing is replaced, and never replayed. A visitor whose
+ * connection was down then came back to a state:full carrying the NEW
+ * geometry, and retagMap() bound it to the OLD drawing still on screen — a
+ * stand that moved became a transparent overlay over wherever the old
+ * artwork was, until a reload. So every reconnect asks. The request carries
+ * the version on screen (If-None-Match), and an unchanged drawing answers 304
+ * with no body: one round trip, nothing downloaded, the plan left alone.
+ */
+async function revalidateArtwork() {
+  if (artworkLoading) { recheckArtwork = true; return; }
+  // Never loaded, or failed: load() — or its retry button — fetches whatever
+  // is current anyway.
+  if (!svgDoc || !svgReady) return;
+  let res;
+  try {
+    res = await fetch(ARTWORK_URL, artworkTag
+      ? { headers: { 'If-None-Match': artworkTag } }
+      // No version to compare (both real routes send one, so this is a
+      // fallback): let the browser revalidate, and compare the version it
+      // reports. With none at all there is no cheap answer, and putting up
+      // the drawing again is the safe one.
+      : { cache: 'no-cache' });
+  } catch { return; }                 // offline again: the next reconnect asks
+  if (res.status === 304 || !res.ok) return;
+  const tag = res.headers.get('ETag');
+  if (tag && tag === artworkTag) return;
+  load(res);
 }
 
 // Fires callback only when the pointer barely moved, so panning never selects.
@@ -632,16 +760,24 @@ function moveTooltip(e) {
 function hideTooltip() { tooltip.classList.add('hidden'); }
 
 // ─── Selection ────────────────────────────────────────────────────────────────
+//
+// The panel is built from the stand's DATA; the plan only carries the ring.
+// So a stand opens whether or not the artwork is there — it may have failed to
+// load, or still be downloading (2 MB, and usually after the stands arrive).
+// That matters most for the routes that exist for when the map is no use: the
+// A–Z directory and the search's Enter. Both end here, and this used to reach
+// into svgDoc unguarded — null in exactly those moments — so it threw and the
+// panel was never drawn. tagBooths() puts the ring on once the plan exists.
 function selectBooth(n) {
   if (selectedArea) {
     svgDoc?.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
     selectedArea = null;
   }
   if (selectedId) {
-    svgDoc.querySelector(`[data-booth="${CSS.escape(selectedId)}"]`)?.classList.remove('booth-selected');
+    svgDoc?.querySelector(`[data-booth="${CSS.escape(selectedId)}"]`)?.classList.remove('booth-selected');
   }
   selectedId = n;
-  svgDoc.querySelector(`[data-booth="${CSS.escape(n)}"]`)?.classList.add('booth-selected');
+  svgDoc?.querySelector(`[data-booth="${CSS.escape(n)}"]`)?.classList.add('booth-selected');
 
   // Location is no longer derived from the browser timezone — the server
   // resolves it from the request, which is both accurate and unspoofable.
@@ -695,7 +831,13 @@ function renderShortlist() {
   const foot = document.getElementById('eq-footer');   // fixed Send button bar
 
   if (!shortlist.length && !sponsorShortlist.length && !areaShortlist.length) {
-    card.classList.add('hidden'); if (foot) foot.hidden = true; box.innerHTML = ''; return;
+    // After a send the card is showing "Enquiry sent", which stays until the
+    // visitor starts another — emptying a shortlist that has already gone
+    // must not take the confirmation away with it.
+    if (!submitted) { card.classList.add('hidden'); if (foot) foot.hidden = true; }
+    box.innerHTML = '';
+    shownShortlistSig = shortlistSig();
+    return;
   }
   if (!submitted) { card.classList.remove('hidden'); if (foot) foot.hidden = false; }
 
@@ -734,6 +876,115 @@ function renderShortlist() {
   box.querySelectorAll('[data-remove-area]').forEach(btn => {
     btn.onclick = () => toggleAreaShortlist(btn.getAttribute('data-remove-area'));
   });
+  shownShortlistSig = shortlistSig();
+}
+
+// What the chips say, so a broadcast that changed nothing about them leaves
+// them alone. Rebuilding them on every broadcast would throw a keyboard user's
+// focus off the chip they were about to remove.
+let shownShortlistSig = '';
+function shortlistSig() {
+  return [submitted ? 1 : 0, shortlist.map(shownN).join(','),
+          areaShortlist.map(k => areaByKey(k)?.label || k).join(','),
+          sponsorShortlist.map(k => sponsorCache[k]?.name || k).join(',')].join('|');
+}
+function renderShortlistIfChanged() {
+  if (shortlistSig() !== shownShortlistSig) renderShortlist();
+}
+
+// ─── Taken out of the enquiry ────────────────────────────────────────────────
+//
+// Stands sell, go on hold, are merged into a neighbour or taken off the plan
+// while a visitor has them shortlisted; an area is sponsored; a package sells
+// out. None of it used to reach the enquiry: the stand stayed green on the map
+// over the Taken colour, kept its chip and was sent, and a sold-out package
+// was dropped from what was SENT while its chip stayed on screen — so the
+// visitor and sales were looking at two different enquiries. Whatever can no
+// longer be had now comes out, and the visitor is told which and why, here,
+// rather than finding out from a reply.
+let enquiryNotes = [];
+
+/** Say what was taken out, e.g. "Stand 102 — now taken". */
+function noteRemoved(lines) {
+  if (!lines.length) return;
+  // An enquiry already sent is not changed by this; nothing to tell them.
+  if (submitted) return;
+  enquiryNotes = enquiryNotes.concat(lines).slice(-6);
+  renderEnquiryNotes();
+}
+
+function clearEnquiryNotes() {
+  enquiryNotes = [];
+  renderEnquiryNotes();
+}
+
+// Built from DOM nodes: a line carries an area or package name an admin typed.
+function renderEnquiryNotes() {
+  const region = document.getElementById('eq-notice');
+  if (!region) return;
+  region.replaceChildren();
+  if (!enquiryNotes.length) return;
+  const box = document.createElement('div');
+  box.className = 'eq-notice';
+  const head = document.createElement('div');
+  head.className = 'eq-notice-head';
+  const title = document.createElement('strong');
+  title.textContent = 'Removed from your enquiry';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'eq-notice-close';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.textContent = '×';
+  close.onclick = clearEnquiryNotes;
+  head.append(title, close);
+  const ul = document.createElement('ul');
+  enquiryNotes.forEach(line => { const li = document.createElement('li'); li.textContent = line; ul.appendChild(li); });
+  box.append(head, ul);
+  region.appendChild(box);
+}
+
+/**
+ * Drop every shortlisted stand that is no longer available.
+ *
+ * `shownBefore` is the number each one was showing BEFORE this broadcast: the
+ * visitor knows a stand by the number on its chip, and a stand merged away is
+ * no longer in `booths` to be asked.
+ */
+function reconcileShortlist(shownBefore) {
+  // Once sent, the shortlist is a record of what was asked about, not an
+  // enquiry being built; "Start another enquiry" clears it. The map is kept
+  // truthful regardless (applyVisual).
+  if (submitted) return false;
+  const lines = [];
+  const keep = shortlist.filter(n => {
+    const b = booths[n];
+    if (b && b.status === 'available') return true;
+    // A stand taken off the plan is in removedBooths, not booths, so it reads
+    // as gone — which, to the visitor, it is.
+    const why = !b ? 'no longer on the plan' : b.status === 'held' ? 'now on hold' : 'now taken';
+    lines.push(`Stand ${shownBefore.get(n) || n} — ${why}`);
+    return false;
+  });
+  if (!lines.length) return false;
+  shortlist.splice(0, shortlist.length, ...keep);
+  noteRemoved(lines);
+  return true;
+}
+
+/** The same for areas, on every catalogue broadcast. */
+function reconcileAreaShortlist(labelBefore) {
+  if (submitted) return false;          // see reconcileShortlist
+  const lines = [];
+  const keep = areaShortlist.filter(k => {
+    const a = areaByKey(k);
+    if (a && a.status !== 'taken') return true;
+    lines.push(`${labelBefore.get(k) || a?.label || k} — ${a ? 'now sponsored' : 'no longer on the plan'}`);
+    return false;
+  });
+  if (!lines.length) return false;
+  areaShortlist.splice(0, areaShortlist.length, ...keep);
+  noteRemoved(lines);
+  return true;
 }
 
 // ─── Recommended sponsorship ────────────────────────────────────────────────
@@ -769,16 +1020,18 @@ function fetchRecos(sqm) {
     recosInflight[sqm] = fetch(`/sponsors/recommend?sqm=${encodeURIComponent(sqm)}`)
       .then(r => { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
       .then(d => (recosCache[sqm] = d.sponsors || []))
-      // On a transient failure return an empty list for THIS attempt but do NOT
-      // cache it — otherwise one network blip would leave that spend permanently
-      // showing "no options". The next open retries.
-      .catch(() => [])
+      // A failure is null, never an empty list, and is not cached. An empty
+      // list here used to be rendered as "No sponsorship options available" —
+      // a claim about the inventory made because of the network — and the
+      // panel then believed it was showing that spend's list, so nothing
+      // asked again. showSponsorRecos() says it failed and lets it be retried.
+      .catch(() => null)
       .finally(() => { delete recosInflight[sqm]; });
   }
   return recosInflight[sqm];
 }
 
-// Warm the cache silently — no UI change.
+// Warm the cache silently — no UI change, and a failure is simply not cached.
 function preloadSponsorRecos(sqm) { fetchRecos(sqm); }
 
 function updatePanelWidth() {
@@ -806,7 +1059,26 @@ async function showSponsorRecos(sqm) {
   if (recosCache[sqm]) { renderSponsors(recosCache[sqm]); return; }
   box.innerHTML = '<div class="sponsor-recos-empty">Finding the best fit…</div>';
   const list = await fetchRecos(sqm);
-  if (token === sponsorShowToken) renderSponsors(list);
+  if (token !== sponsorShowToken) return;
+  if (list) { renderSponsors(list); return; }
+  // Not showing this spend's list after all, so the next stand opened or
+  // added asks again — and so does the button, without waiting for that.
+  if (shownRecoSqm === sqm) shownRecoSqm = null;
+  renderRecosFailed();
+}
+
+function renderRecosFailed() {
+  const box = document.getElementById('sponsor-recos');
+  box.replaceChildren();
+  const msg = document.createElement('div');
+  msg.className = 'sponsor-recos-empty';
+  msg.textContent = 'The sponsorship options could not be loaded just now.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'sponsor-recos-retry';
+  retry.textContent = 'Try again';
+  retry.onclick = () => { shownRecoSqm = null; syncSponsorPanel(); };
+  box.append(msg, retry);
 }
 
 function hideSponsors() {
@@ -827,12 +1099,17 @@ function syncSponsorPanel() {
 function renderSponsors(list) {
   currentSponsorList = list;
   // A package can sell out while someone has it shortlisted. Drop it rather
-  // than sending an enquiry for something that is no longer available.
+  // than sending an enquiry for something that is no longer available — and
+  // take its chip down and say so. Only the first half used to happen, so the
+  // chip stayed in the enquiry the visitor could see while the one sent went
+  // without it.
+  const soldOut = [];
   for (const s of list) {
     if (!s.soldOut) continue;
     const i = sponsorShortlist.indexOf(s.key);
-    if (i > -1) sponsorShortlist.splice(i, 1);
+    if (i > -1) { sponsorShortlist.splice(i, 1); soldOut.push(`${s.name || s.key} — sold out`); }
   }
+  if (soldOut.length) { renderShortlist(); noteRemoved(soldOut); }
   const box = document.getElementById('sponsor-recos');
   box.replaceChildren();
   if (!list.length) { box.innerHTML = '<div class="sponsor-recos-empty">No sponsorship options available.</div>'; return; }
@@ -1032,7 +1309,7 @@ let shownPanelSig = '';
 function forgetRenderedPanel() {
   shownPanelSig = '';
   const panel = document.getElementById('booth-panel');
-  if (panel) delete panel.dataset.booth;
+  if (panel) { delete panel.dataset.booth; delete panel.dataset.areaSig; }
 }
 
 /**
@@ -1115,6 +1392,7 @@ function renderPanel(n, opts) {
   const b = booths[n] || { status: 'sold' };
   panel.classList.remove('hidden');
   panel.dataset.booth = n;
+  delete panel.dataset.areaSig;          // a stand has the panel, not an area
 
   const status = b.status || 'sold';
   const inList = shortlist.includes(n);
@@ -1247,16 +1525,21 @@ function submitWaitlist(n) {
   // rather than an enquiry, so sales can tell "wants this stand" from "wants to
   // hear if it frees up". Until that existed this sent the email's local part
   // as a first name, which put invented names on real leads.
-  emitWithTimeout('inquiry:submit', {
+  const payload = {
     kind: 'waitlist',
     email,
     boothNumbers: [n],
     message: `Waiting list: tell me if Stand ${shownN(n)} becomes available. `
            + 'Submitted from the public floorplan with an email address only.',
-  }, (res) => {
+  };
+  // The same deadline as an enquiry, so the same protection against a resend
+  // becoming a second lead — see requestIdFor.
+  payload.requestId = requestIdFor('waitlist', payload);
+  emitWithTimeout('inquiry:submit', payload, (res) => {
     btn.disabled = false;
     btn.textContent = 'Notify me';
-    if (res && res.ok) {
+    if (res && (res.ok || res.duplicate)) {   // a duplicate: the first one went
+      forgetRequestId('waitlist');
       waitlisted.push(n);
       renderPanel(n, { force: true });
       return;
@@ -1290,6 +1573,65 @@ function emitWithTimeout(event, payload, cb, ms = 12000) {
   socket.emit(event, payload, finish);
 }
 
+/**
+ * The id that makes a resend the same enquiry.
+ *
+ * The deadline above tells the visitor "We did not hear back" when it may only
+ * be the ACK that was lost — the enquiry itself saved — and the visitor, told
+ * to try again, does: a second lead for the same person and stands. Each
+ * enquiry now carries a requestId (32 lowercase hex) that the server
+ * de-duplicates on. It is minted once and sent unchanged on every retry, and
+ * forgotten after a successful send (forgetRequestId), so the next enquiry is
+ * a new one.
+ *
+ * A retry of the SAME content, that is. A visitor who adds a stand or fixes
+ * their email before trying again is sending something different, and gets a
+ * new id: de-duplicated against the first attempt, the change would be thrown
+ * away while the page reported it sent. A second lead is the lesser harm than
+ * an enquiry the visitor was told went and did not.
+ *
+ * One slot per kind, so a waiting-list request and the enquiry never share an
+ * id.
+ */
+const pendingRequest = {};
+function requestIdFor(kind, payload) {
+  const key = JSON.stringify(payload);
+  const cur = pendingRequest[kind];
+  if (cur && cur.key === key) return cur.id;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const id = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  pendingRequest[kind] = { key, id };
+  return id;
+}
+function forgetRequestId(kind) { delete pendingRequest[kind]; }
+
+/**
+ * Say what a stored enquiry went without.
+ *
+ * The server keeps only the stands, packages and areas that exist in this
+ * event when the enquiry arrives, and lists what it dropped by the key it was
+ * sent (server/models/inquiries.js). It can happen between the last broadcast
+ * and the send — a stand merged away a second before Send — so the success
+ * message says plainly which, rather than thanking the visitor for something
+ * that was not recorded. `named` turns those keys back into what the visitor
+ * saw.
+ */
+function showDropped(dropped, named) {
+  const el = document.getElementById('eq-dropped');
+  if (!el) return;
+  const lists = dropped && typeof dropped === 'object' ? dropped : {};
+  const items = ['stands', 'sponsors', 'areas'].flatMap(kind =>
+    (Array.isArray(lists[kind]) ? lists[kind] : []).map(k => named?.[kind]?.get(String(k)) || String(k)));
+  if (!items.length) { el.hidden = true; el.textContent = ''; return; }
+  const list = items.length === 1 ? items[0]
+             : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+  el.textContent = items.length === 1
+    ? `${list} was not included — it is no longer on this plan.`
+    : `${list} were not included — they are no longer on this plan.`;
+  el.hidden = false;
+}
+
 function initForm() {
   const form    = document.getElementById('enquiry-form');
   const errBox  = document.getElementById('eq-errors');
@@ -1317,6 +1659,8 @@ function initForm() {
       document.getElementById('eq-shortlist').classList.remove('hidden');
       errBox.classList.add('hidden');
       if (svgDoc) svgDoc.querySelectorAll('.booth-shortlisted').forEach(el => el.classList.remove('booth-shortlisted'));
+      clearEnquiryNotes();       // about the enquiry already sent, not this one
+      showDropped(null);
       renderShortlist();
       syncSponsorPanel();
       if (selectedId) renderPanel(selectedId, { force: true });
@@ -1343,6 +1687,15 @@ function initForm() {
       sponsorKeys: sponsorShortlist.slice(),
       areaKeys: areaShortlist.slice(),
     };
+    payload.requestId = requestIdFor('enquiry', payload);
+    // What each item is called on screen now, for saying which the server
+    // left out — by the time it answers, a stand it dropped may be gone from
+    // the page as well.
+    const named = {
+      stands:   new Map(payload.boothNumbers.map(n => [n, `Stand ${shownN(n)}`])),
+      sponsors: new Map(payload.sponsorKeys.map(k => [k, sponsorCache[k]?.name || k])),
+      areas:    new Map(payload.areaKeys.map(k => [k, areaByKey(k)?.label || k])),
+    };
 
     submit.disabled = true;
     submit.textContent = 'Sending…';
@@ -1355,8 +1708,13 @@ function initForm() {
       lucide.createIcons();
       syncSendButton();       // still disabled if the reason was being offline
 
-      if (res && res.ok) {
+      // A duplicate is the server recognising a retry of an enquiry it has
+      // already stored (see requestIdFor): the original went, so this did.
+      if (res && (res.ok || res.duplicate)) {
         submitted = true;
+        forgetRequestId('enquiry');
+        clearEnquiryNotes();     // what it said was true of the enquiry just sent
+        showDropped(res.dropped, named);
         form.classList.add('hidden');
         document.getElementById('eq-footer').hidden = true;   // hide the Send bar
         document.getElementById('eq-shortlist').classList.add('hidden');
@@ -1407,6 +1765,8 @@ function setConnectionState(online) {
 }
 
 socket.on('connect', () => {
+  // A REconnect may have missed a re-issued drawing — see revalidateArtwork.
+  if (everConnected) revalidateArtwork();
   everConnected = true;
   setConnectionState(true);
   setBanner('');
@@ -1414,11 +1774,14 @@ socket.on('connect', () => {
   // consent has to be re-asserted or this visitor's events after a reconnect
   // are filed under a stranger. The handshake `auth` function already carries
   // it; this covers a server that was restarted and has no memory of the id.
-  if (consent === 'granted') socket.emit('session:adopt', { sessionId: sessionId() });
+  // A new connection has not been told yet, whatever the last one was.
+  adoptedHere = false;
+  adoptSession();
   armStateWatchdog();
 });
 
 socket.on('disconnect', (reason) => {
+  adoptedHere = false;
   setConnectionState(false);
   setBanner('Connection lost — the plan may be out of date. Reconnecting…', 'warn');
   if (reason === 'io server disconnect') socket.connect?.();   // not retried automatically
@@ -1446,6 +1809,9 @@ const visualSig = (b) => [b.status, b.company || '', b.sponsored ? 1 : 0,
 const lastVisual = {};
 
 socket.on('state:full', (allRows) => {
+  // The number each shortlisted stand shows NOW, before this broadcast can
+  // renumber it or take it away — it is how the visitor knows it.
+  const shownBefore = new Map(shortlist.map(n => [n, shownN(n)]));
   // Removed stands travel in the same broadcast and are split out here, once,
   // so nothing below this line has to remember they exist.
   const rows = [];
@@ -1460,7 +1826,12 @@ socket.on('state:full', (allRows) => {
   // Which stands actually changed appearance, worked out BEFORE the merge while
   // the previous values are still readable.
   const dirty = [];
-  rows.forEach(b => {
+  rows.forEach(row => {
+    // Only a sold stand's company is kept — see publicCompany. Set explicitly
+    // rather than left out: each row is MERGED into what the page already
+    // holds, so a stand that was sold and has gone on hold would otherwise keep
+    // the company it had while sold once the server stops sending one.
+    const b = { ...row, company: row.status === 'sold' ? (row.company || null) : null };
     const n = b.boothNumber;
     const sig = visualSig(b);
     if (lastVisual[n] !== sig) { lastVisual[n] = sig; dirty.push(n); }
@@ -1475,6 +1846,11 @@ socket.on('state:full', (allRows) => {
     delete lastVisual[n];
   });
   if (selectedId && !booths[selectedId]) { selectedId = null; hideSelection(); }
+  // Whatever the visitor shortlisted that can no longer be had comes out of
+  // the enquiry before anything is painted, so the map, the chips and what is
+  // sent all agree — see reconcileShortlist.
+  if (reconcileShortlist(shownBefore)) syncSponsorPanel();
+  renderShortlistIfChanged();          // a renumbered stand's chip follows it
   stateReady = true;
   clearTimeout(stateWatchdog);
   setBanner('');
@@ -1614,9 +1990,9 @@ let selectedArea = null;
 
 function selectArea(key) {
   if (selectedId) { hideSelection(); selectedId = null; }
-  svgDoc.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
+  svgDoc?.querySelectorAll('[data-area]').forEach(el => el.classList.remove('booth-selected'));
   selectedArea = key;
-  svgDoc.querySelector(`[data-area="${CSS.escape(key)}"]`)?.classList.add('booth-selected');
+  svgDoc?.querySelector(`[data-area="${CSS.escape(key)}"]`)?.classList.add('booth-selected');
   renderAreaPanel(key);
 }
 
@@ -1628,23 +2004,33 @@ function toggleAreaShortlist(key) {
   if (i > -1) areaShortlist.splice(i, 1);
   else if (areaShortlist.length < 10) areaShortlist.push(key);
   renderShortlist();
-  renderAreaPanel(key);
+  // Only when it is that area's panel that is open. A chip can be removed with
+  // a STAND open, and redrawing the area's panel there swapped the stand out
+  // from under the visitor — with the stand still ringed on the map and no
+  // area selected, so the next broadcast swapped it back.
+  if (selectedArea === key) renderAreaPanel(key);
 }
 
 function renderAreaPanel(key) {
   const a = areaByKey(key);
   if (!a) return;
   const panel = document.getElementById('booth-panel');
+  const taken = a.status === 'taken';
+  const inList = areaShortlist.includes(key);
+  // Every catalogue broadcast re-renders the open area, so one that changed
+  // nothing about it must leave it alone — see rebuildPanel() for what a
+  // rebuild costs a keyboard user. renderPanel() and forgetRenderedPanel()
+  // drop this marker whenever anything else takes the panel.
+  const sig = [key, a.label, a.status, a.sponsor || '', a.logo || '', inList ? 1 : 0].join('|');
+  if (panel.dataset.areaSig === sig) return;
   panel.classList.remove('hidden');
   // An area has taken the panel over; whatever stand was in it is no longer
   // rendered, so renderPanel() must not think it still is.
   forgetRenderedPanel();
+  panel.dataset.areaSig = sig;
   document.getElementById('empty-state')?.classList.add('hidden');
 
-  const taken = a.status === 'taken';
-  const inList = areaShortlist.includes(key);
-
-  panel.innerHTML = `
+  rebuildPanel(`
     <div class="stand-header">
       <div class="stand-id">${esc(a.label)}</div>
       <div class="stand-badge ${taken ? 'badge-sold' : 'badge-available'}">${taken ? 'Sponsored' : 'Available'}</div>
@@ -1665,9 +2051,9 @@ function renderAreaPanel(key) {
       <button type="button" class="btn-shortlist ${inList ? 'in-list' : ''}" id="area-shortlist-btn">
         ${inList ? 'Added to enquiry' : 'Add to enquiry'}
       </button>`}
-  `;
-  document.getElementById('area-shortlist-btn')?.addEventListener('click', () => toggleAreaShortlist(key));
-  lucide.createIcons();
+  `, () => {
+    document.getElementById('area-shortlist-btn')?.addEventListener('click', () => toggleAreaShortlist(key));
+  });
   syncSponsorPanel();
 }
 
@@ -1676,7 +2062,10 @@ function renderAreaPanel(key) {
 // every stand, exactly as a first load does; the stands, the shortlist and the
 // open panel are all state this page already holds and are left alone.
 socket.on('floorplan:changed', () => {
-  if (!svgDoc) return;         // still loading, or failed: load() will fetch the current one
+  // Mid-download, the drawing coming in may be the one just replaced: check
+  // again once it has landed.
+  if (artworkLoading) { recheckArtwork = true; return; }
+  if (!svgDoc) return;         // failed: load() will fetch the current one
   load();
 });
 
@@ -1692,9 +2081,23 @@ function updateAreaLegend() {
 }
 
 socket.on('areas:catalogue', (list) => {
+  // Each area's name as the visitor last saw it, for telling them what left
+  // their enquiry — an area that is renamed and sponsored in one change is
+  // still the one on their chip.
+  const labelBefore = new Map(planAreas.map(a => [a.key, a.label]));
   planAreas = Array.isArray(list) ? list : [];
   updateAreaLegend();
   paintAreas();
+  // An area sponsored (or taken off the plan) while it was shortlisted comes
+  // out of the enquiry, and a renamed one's chip follows it.
+  reconcileAreaShortlist(labelBefore);
+  renderShortlistIfChanged();
+  // The open area's panel used to go on saying "Available — Add to enquiry"
+  // after it was sponsored, until the visitor clicked away and back.
+  if (selectedArea) {
+    if (areaByKey(selectedArea)) renderAreaPanel(selectedArea);
+    else { selectedArea = null; hideSelection(); syncSponsorPanel(); }
+  }
 });
 
 socket.on('tags:catalogue', (list) => {
@@ -1773,6 +2176,24 @@ async function downloadPlan() {
       c.classList && c.classList.remove('booth-selected', 'booth-shortlisted');
     });
 
+    // The areas, the same way — but only when the page is painting them from
+    // the event's palette (an admin chose their colours). On screen that fill
+    // is a stylesheet rule, `.has-area-palette [data-area]` in
+    // booth-colours.css, which the standalone copy does not carry; so the
+    // download showed the designer's fills while the page showed the admin's.
+    // Otherwise the areas keep the artwork's own fills, which the clone has.
+    const paintedAreas = !!(planAreas.length && BoothPalette.paintsAreas());
+    if (paintedAreas) {
+      const liveAreas = svgDoc.querySelectorAll('[data-area]');
+      const clonedAreas = clone.querySelectorAll('[data-area]');
+      liveAreas.forEach((el, i) => {
+        const c = clonedAreas[i];
+        if (!c) return;
+        c.style.setProperty('fill', BoothPalette.fillFor(el.classList.contains('area-taken') ? 'areaTaken' : 'area'), 'important');
+        c.classList.remove('booth-selected');
+      });
+    }
+
     // Set the family on the clone so the export does not fall back to the
     // browser's default SERIF, which is what a standalone SVG with no CSS gets.
     //
@@ -1814,6 +2235,12 @@ async function downloadPlan() {
                   [STATUS_FILL.sold, 'Taken'],
                   [STATUS_FILL.held, 'On Hold']];
     if (hasSponsor && Object.values(booths).some(b => b && b.sponsored)) keys.push([sponsorColor, 'Sponsored']);
+    // The same two area swatches the on-screen legend shows (updateAreaLegend),
+    // under the same condition: the areas are painted in them.
+    if (paintedAreas) {
+      keys.push([BoothPalette.fillFor('area'), 'Sponsorship area']);
+      if (planAreas.some(a => a.status === 'taken')) keys.push([BoothPalette.fillFor('areaTaken'), 'Sponsored area']);
+    }
     const itemW = (label) => 26 + Math.ceil(label.length * 9.5) + 44;
     const total = keys.reduce((s, k) => s + itemW(k[1]), 0);
     let kx = Math.max(44, (W - total) / 2);
@@ -1922,8 +2349,9 @@ function deliverPNG(blob, filename) {
 // replacing it.
 //
 // The country and activity a stand carries only reach the public client on a
-// SOLD stand (see booths.toPublic), so a search can never reveal who is behind
-// a provisional hold.
+// SOLD stand (see booths.toPublic), and the company is only ever read through
+// publicCompany(), so a search can never reveal who is behind a provisional
+// hold.
 //
 // Matching stands are lit; everything else fades. Nothing is hidden: a visitor
 // searching for a competitor still has to see the hall around them, and hiding
@@ -1938,13 +2366,42 @@ let filterMatches = null;
 
 const filterActive = () => !!(filter.q || filter.country || filter.activity);
 
-/** Every string a stand can be found by, lowercased once per search. */
+/**
+ * Text as the search compares it: lower case, accents off, one apostrophe.
+ *
+ * The comparison used to be letter-for-letter, so "wurth" — how anyone types
+ * it on an English keyboard — missed "Würth", and "cote d'ivoire" missed
+ * "Côte d’Ivoire" because the country list spells it with a typographic
+ * apostrophe and a keyboard types a straight one. Both sides go through here,
+ * so neither the visitor nor the data has to be spelt "right".
+ */
+function fold(s) {
+  return String(s ?? '').normalize('NFKD').replace(/\p{M}+/gu, '')
+    .replace(/[‘’‚‛′ʼ`´]/g, "'")
+    .toLowerCase();
+}
+
+/**
+ * Does one search term hit this (folded) text?
+ *
+ * Two letters are too few to match INSIDE a word: "us" is how a visitor asks
+ * for the United States, and as a substring it lit "Acme Industries" — and
+ * "de" lit "Golden Delta Trading". So a two-letter term has to be a whole word
+ * (a country code is one; so is "UK"). Anything longer still matches inside a
+ * word, which is what a half-typed name needs.
+ */
+function termHits(t, text) {
+  if (t.length !== 2) return text.includes(t);
+  return text.split(/[^\p{L}\p{N}]+/u).includes(t);
+}
+
+/** Every string a stand can be found by, folded once per search. */
 function haystack(n, b) {
-  const parts = [n, b.displayNumber || '', b.company || ''];
+  const parts = [n, b.displayNumber || '', publicCompany(b)];
   const c = countryOf(b.country);
   if (c) parts.push(c.name, c.code, ...(c.aliases || []));
   (b.tags || []).forEach(k => { const t = tagByKey(k); if (t) parts.push(t.label); });
-  return parts.filter(Boolean).join(' ␟ ').toLowerCase();
+  return fold(parts.filter(Boolean).join(' ␟ '));
 }
 
 /**
@@ -1952,13 +2409,14 @@ function haystack(n, b) {
  *
  * Free text is split on whitespace and EVERY term must hit — so "germany base
  * oils" narrows rather than widens, which is what someone typing a second word
- * is asking for. A two-letter term also matches a country code exactly, so "de"
- * finds Germany without "de" matching every company with those letters in it.
+ * is asking for. A two-letter term matches only a whole word or the stand's
+ * country code, so "de" finds Germany without matching every company with
+ * those letters in it (see termHits).
  */
 function computeMatches() {
   if (!filterActive()) return null;
 
-  const terms = filter.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = fold(filter.q).split(/\s+/).filter(Boolean);
   const found = new Set();
 
   Object.entries(booths).forEach(([n, b]) => {
@@ -1969,7 +2427,7 @@ function computeMatches() {
     if (terms.length) {
       const hay  = haystack(n, b);
       const code = (b.country || '').toLowerCase();
-      const ok = terms.every(t => hay.includes(t) || (t.length === 2 && t === code));
+      const ok = terms.every(t => t === code || termHits(t, hay));
       if (!ok) return;
     }
     found.add(n);
@@ -2105,7 +2563,9 @@ let suggestions = [];
 let suggestIndex = -1;
 
 function buildSuggestions(q) {
-  const term = q.trim().toLowerCase();
+  // Folded and matched exactly as the filter is (fold, termHits), so the list
+  // never offers something the plan then refuses to light — or the reverse.
+  const term = fold(q.trim());
   if (term.length < 2) return [];
 
   const out = [];
@@ -2116,21 +2576,22 @@ function buildSuggestions(q) {
     if (!b) return;
     if (b.country) counts.country.set(b.country, (counts.country.get(b.country) || 0) + 1);
     (b.tags || []).forEach(k => counts.activity.set(k, (counts.activity.get(k) || 0) + 1));
-    if (b.company && b.company.toLowerCase().includes(term)) companies.push({ n, company: b.company });
+    const company = publicCompany(b);
+    if (company && termHits(term, fold(company))) companies.push({ n, company });
   });
 
   counts.country.forEach((n, code) => {
     const c = countryOf(code);
     if (!c) return;
-    const hit = c.name.toLowerCase().includes(term)
+    const hit = termHits(term, fold(c.name))
              || c.code.toLowerCase() === term
-             || (c.aliases || []).some(a => a.toLowerCase().includes(term));
+             || (c.aliases || []).some(a => termHits(term, fold(a)));
     if (hit) out.push({ kind: 'country', value: code, label: `${c.flag} ${c.name}`, meta: `${n} stand${n === 1 ? '' : 's'}` });
   });
 
   counts.activity.forEach((n, key) => {
     const t = tagByKey(key);
-    if (t && t.label.toLowerCase().includes(term)) {
+    if (t && termHits(term, fold(t.label))) {
       out.push({ kind: 'activity', value: key, label: t.label, color: t.color, meta: `${n} stand${n === 1 ? '' : 's'}` });
     }
   });
@@ -2138,8 +2599,8 @@ function buildSuggestions(q) {
   // Exhibitors: a name that STARTS with what was typed is what was meant more
   // often than one that merely contains it, so those come first.
   companies.sort((a, b) => {
-    const sa = a.company.toLowerCase().startsWith(term) ? 0 : 1;
-    const sb = b.company.toLowerCase().startsWith(term) ? 0 : 1;
+    const sa = fold(a.company).startsWith(term) ? 0 : 1;
+    const sb = fold(b.company).startsWith(term) ? 0 : 1;
     return sa - sb || a.company.localeCompare(b.company, 'en');
   });
   companies.slice(0, 6).forEach(c =>
@@ -2148,9 +2609,9 @@ function buildSuggestions(q) {
   // A stand number typed straight in.
   Object.keys(booths).forEach(n => {
     if (out.length > 20) return;
-    if (String(shownN(n)).toLowerCase() === term || n.toLowerCase() === term) {
+    if (fold(shownN(n)) === term || fold(n) === term) {
       if (!out.some(o => o.kind === 'booth' && o.value === n)) {
-        out.push({ kind: 'booth', value: n, label: `Stand ${shownN(n)}`, meta: booths[n]?.company || STATUS_LABEL[booths[n]?.status] || '' });
+        out.push({ kind: 'booth', value: n, label: `Stand ${shownN(n)}`, meta: publicCompany(booths[n]) || STATUS_LABEL[booths[n]?.status] || '' });
       }
     }
   });
@@ -2226,8 +2687,10 @@ function pickSuggestion(i) {
 
   if (sg.kind === 'booth') {
     // A named exhibitor is a destination, not a filter: open the stand and go
-    // to it, and leave the plan lit so the visitor can see where it sits.
-    filter.q = booths[sg.value]?.company || '';
+    // to it, and leave the plan lit so the visitor can see where it sits. A
+    // stand picked by its number — a held one among them — is lit by its
+    // number, never by a company it may not publish.
+    filter.q = publicCompany(booths[sg.value]) || String(shownN(sg.value));
     if (input) input.value = filter.q;
     hideSuggestions();
     applyFilter();
@@ -2404,7 +2867,10 @@ function applyVisual(n) {
   el.classList.remove('booth-available', 'booth-sold', 'booth-held', 'booth-sponsored');
   el.classList.add(`booth-${status}`);
 
-  if (shortlist.includes(n)) el.classList.add('booth-shortlisted');
+  // Only an available stand is shown as shortlisted. state:full takes a stand
+  // out of the shortlist as soon as it stops being available, so this is the
+  // belt to that: the map must never paint a sold stand as one you can have.
+  if (status === 'available' && shortlist.includes(n)) el.classList.add('booth-shortlisted');
   else el.classList.remove('booth-shortlisted');
 
   // Search highlight. Set here as well as in paintFilter() because applyVisual
@@ -2425,12 +2891,15 @@ function applyVisual(n) {
   // innerHTML — the value reaches here from the public enquiry form.
   let textNode = svgDoc.getElementById(`text-booth-${n}`);
   let logoNode = svgDoc.getElementById(`logo-booth-${n}`);
-  const company = booths[n]?.company;
+  // Sold stands only. This used to paint any stand that was not available, so
+  // a held stand carried its prospect's name — and the PNG export, which
+  // clones these nodes, carried it into the download.
+  const company = publicCompany(booths[n]);
   // A sponsor's logo, sent only for a stand flagged as sponsored. It REPLACES
   // the exhibitor name rather than sitting beside it: on a 9 m² stand there is
   // room for one or the other, and a logo already says the name.
   const logo = booths[n]?.sponsorLogo || null;
-  const wantsName = status !== 'available' && company && !logo;
+  const wantsName = !!company && !logo;
 
   // VISUAL box (post-transform): most LEX27 stands are rotated, so the local
   // getBBox would place the name off the stand and fit it to swapped
