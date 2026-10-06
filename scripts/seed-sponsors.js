@@ -74,7 +74,7 @@ const CATALOGUE = [
 ];
 
 async function main() {
-  await connect();
+  await connect({ indexes: false });   // never index work from a script — see db.connect
   const db = getDb();
   const col = db.collection('sponsors');
   await col.createIndex({ showId: 1, key: 1 }, { unique: true });

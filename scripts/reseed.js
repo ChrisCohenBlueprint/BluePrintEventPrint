@@ -28,7 +28,7 @@ function hasState(b) {
 }
 
 async function main() {
-  await connect();
+  await connect({ indexes: false });   // never index work from a script — see db.connect
   const db = getDb();
 
   const oldBooths = await db.collection('booths').find({ showId: config.showId }).toArray();

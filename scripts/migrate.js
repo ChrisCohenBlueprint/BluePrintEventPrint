@@ -23,7 +23,7 @@ const statePath = stateFlag > -1
   : path.join(__dirname, '..', 'booth_state.json');
 
 async function main() {
-  await connect();
+  await connect({ indexes: false });   // never index work from a script — see db.connect
   const db = getDb();
 
   // ── Show document ───────────────────────────────────────────────────────────
