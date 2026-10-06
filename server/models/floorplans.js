@@ -32,28 +32,228 @@ const MAX_BYTES = 8 * 1024 * 1024;
  * show, with no explanation an organiser can act on, is worse than a plan with
  * its interactivity removed. What is removed is reported back so the upload is
  * not silently altered.
+ *
+ * The markup is read the way a browser reads it, not by what it looks like.
+ * The regular expressions this replaced matched the tidy form of each thing
+ * and a browser is far more forgiving, so `<rect/onload=…>` (a slash where the
+ * space would be), a <script> or <foreignObject> never closed, and
+ * `javascr&#105;pt:` all went through untouched — and the admin was told the
+ * file was unchanged. Now:
+ *
+ *  - every "<" is read as the start of a tag, following the HTML tokenizer's
+ *    rules for names, quotes and separators. Every one, not only those a
+ *    single pass would reach: a browser starts a tag wherever its own context
+ *    says so (after a comment that ends at "--!>", after a <style>, before the
+ *    <svg> root), and a "<" that is really text only costs a needless check;
+ *  - an attribute is judged on its decoded value, with the tabs and newlines a
+ *    URL parser ignores taken out;
+ *  - an element with no closing tag takes everything after it with it, as a
+ *    browser would have made all of that its content;
+ *  - removing something can join what was either side of it into something
+ *    new, so the result is read again until nothing more is found.
  */
-function sanitise(svg) {
-  const removed = [];
-  let out = String(svg);
+const isWs = (c) => c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f';
+const SCRIPT_URL = /(?:java|vb)script:/i;
 
-  const drop = (re, label) => {
-    const before = out;
-    out = out.replace(re, '');
-    if (out !== before) removed.push(label);
+// Character references, decoded once as the parser decodes an attribute.
+// Only the named ones that can spell out a URL scheme or hide a separator are
+// needed; the numeric forms cover everything else.
+const NAMED_REFS = { colon: ':', tab: '\t', newline: '\n', sol: '/', lpar: '(', rpar: ')',
+                     amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: '\u00a0' };
+function decodeRefs(v) {
+  return v.replace(/&#x([0-9a-f]+);?|&#(\d+);?|&([a-z]+);?/gi, (m, hex, dec, name) => {
+    if (name) return NAMED_REFS[name.toLowerCase()] ?? m;
+    const cp = parseInt(hex || dec, hex ? 16 : 10);
+    return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd';
+  });
+}
+
+/** Why this attribute has to go, or null. `quoted` says how its value was written. */
+function attributeDanger(name, value, quoted) {
+  const local = name.slice(name.lastIndexOf(':') + 1);
+  if (/^on[a-z]/i.test(local)) return 'inline event handlers';
+  // `src=x/onerror=…` is one unquoted value to an HTML parser, but it is
+  // written to look like two attributes to anything that splits at the slash.
+  // Nothing honest is written that way, so it goes either way.
+  if (value && !quoted && /\/on[a-z]+\s*=/i.test(value)) return 'inline event handlers';
+  // A whole HTML document in an attribute, run as this page's own origin.
+  if (/^srcdoc$/i.test(local)) return 'embedded documents';
+  // javascript: anywhere in a value, not just at the start of an href — an
+  // <animate values="…"> or <set to="…"> can put one into a link.
+  if (value && /[:&]/.test(value) &&
+      SCRIPT_URL.test(decodeRefs(value).replace(/[\u0000-\u0020\u007f]/g, ''))) return 'javascript: links';
+  return null;
+}
+
+// <script> and <foreignObject>, with any namespace prefix: the prefix makes no
+// difference to an HTML parser and every difference to an XML one.
+const BLOCK = /^(?:[^\s/>]*:)?(script|foreignobject)$/;
+
+/**
+ * Everything that has to go from `s`, as [start, end, label] ranges.
+ * Returns null if reading it took more work than any real file could need.
+ */
+function findUnsafe(s) {
+  const cuts = [];
+  let budget = 64 * s.length + 1e6;
+
+  // Where a tag name that starts at `from` ends. Searches started inside the
+  // last answer end at the same place, which keeps a run of "<a<a<a…" linear.
+  let nameFrom = -1, nameTo = -1;
+  const nameEnd = (from) => {
+    if (from >= nameFrom && from <= nameTo) return nameTo;
+    let i = from;
+    while (i < s.length && !isWs(s[i]) && s[i] !== '/' && s[i] !== '>') i++;
+    budget -= i - from;
+    nameFrom = from; nameTo = i;
+    return i;
   };
 
-  drop(/<script\b[\s\S]*?<\/script\s*>/gi, 'script blocks');
-  drop(/<foreignObject\b[\s\S]*?<\/foreignObject\s*>/gi, 'foreignObject');
-  // Inline handlers: on… attributes in either quoting style, or unquoted.
-  drop(/\son[a-z]+\s*=\s*"[^"]*"/gi, 'inline event handlers');
-  drop(/\son[a-z]+\s*=\s*'[^']*'/gi, 'inline event handlers');
-  drop(/\son[a-z]+\s*=\s*[^\s>]+/gi, 'inline event handlers');
-  // javascript: in href/xlink:href.
-  drop(/(?:xlink:)?href\s*=\s*"\s*javascript:[^"]*"/gi, 'javascript: links');
-  drop(/(?:xlink:)?href\s*=\s*'\s*javascript:[^']*'/gi, 'javascript: links');
+  // Two tags read from different "<" that reach the same point between
+  // attributes read identically from there on. Remember where each read went,
+  // so the second stops at once. A typed array rather than a Map, so a file of
+  // a few million tiny attributes costs four bytes a character, not a Map
+  // entry each: the tag's end + 1, negative if it closed itself, 0 if unread.
+  const settled = new Int32Array(s.length + 1);
 
-  return { svg: out, removed: [...new Set(removed)] };
+  /** Read the attributes from `i` to the end of the tag, flagging as it goes. */
+  function readAttributes(i) {
+    const visited = [];
+    let result = null;
+    while (!result) {
+      while (i < s.length && isWs(s[i])) i++;
+      if (i >= s.length) { result = { end: s.length, selfClosing: false }; break; }
+      const known = settled[i];
+      if (known) { result = { end: Math.abs(known) - 1, selfClosing: known < 0 }; break; }
+      visited.push(i);
+      if (--budget < 0) return null;
+      const c = s[i];
+      if (c === '>') { result = { end: i + 1, selfClosing: false }; break; }
+      if (c === '/') {
+        if (s[i + 1] === '>') { result = { end: i + 2, selfClosing: true }; break; }
+        i++;                     // a stray slash separates attributes, as a space does
+        continue;
+      }
+      // The attribute's name: its first character whatever it is (even "="),
+      // then up to a separator or "=".
+      const start = i++;
+      while (i < s.length && !isWs(s[i]) && s[i] !== '/' && s[i] !== '>' && s[i] !== '=') i++;
+      const name = s.slice(start, i);
+      let end = i, value = null, j = i, quoted = false;
+      while (j < s.length && isWs(s[j])) j++;
+      if (s[j] === '=') {
+        j++;
+        while (j < s.length && isWs(s[j])) j++;
+        const q = s[j];
+        if (q === '"' || q === "'") {
+          quoted = true;
+          const close = s.indexOf(q, j + 1);
+          value = s.slice(j + 1, close === -1 ? s.length : close);
+          j = close === -1 ? s.length : close + 1;
+        } else if (q !== '>') {
+          const from = j;
+          while (j < s.length && !isWs(s[j]) && s[j] !== '>') j++;
+          value = s.slice(from, j);
+        }
+        end = i = j;
+      }
+      budget -= end - start;
+      const why = attributeDanger(name, value, quoted);
+      if (why) cuts.push([start, end, why]);
+    }
+    const mark = (result.end + 1) * (result.selfClosing ? -1 : 1);
+    for (const v of visited) settled[v] = mark;
+    return result;
+  }
+
+  // Where the first closing tag for a block, from `from` on, ends — or the end
+  // of the file if there is none. Remembered per element, so a file of
+  // unclosed <script>s is not searched to its end once for each.
+  const closes = {};
+  const closeAfter = (local, from) => {
+    const c = closes[local];
+    if (c && from >= c.from && (c.at === -1 || from <= c.at)) return c.end;
+    const re = new RegExp(`</(?:[^\\s/>]*:)?${local}(?=[\\s/>]|$)`, 'ig');
+    re.lastIndex = from;
+    const m = re.exec(s);
+    budget -= (m ? m.index : s.length) - from;
+    let end = s.length;
+    if (m) {
+      const tail = readAttributes(m.index + m[0].length);
+      end = tail ? tail.end : s.length;
+    }
+    closes[local] = { from, at: m ? m.index : -1, end };
+    return end;
+  };
+
+  for (let at = s.indexOf('<'); at !== -1; at = s.indexOf('<', at + 1)) {
+    if (budget < 0) return null;
+    let i = at + 1;
+    const closing = s[i] === '/';
+    if (closing) i++;
+    // A tag name starts with a letter for HTML; XML also allows "_", ":" and
+    // anything beyond ASCII. Either is read.
+    if (!/[A-Za-z_:\u0080-\uffff]/.test(s[i] || '')) continue;
+    const nEnd = nameEnd(i);
+    // Only the last characters of a long name can make it a block element.
+    const name = s.slice(Math.max(i, nEnd - 14), nEnd).toLowerCase();
+    const block = (nEnd - i <= 14 ? name : `:${name.split(':').pop()}`).match(BLOCK);
+    const tag = readAttributes(nEnd);
+    if (!tag) return null;
+    if (closing || !block) continue;
+    const label = block[1] === 'script' ? 'script blocks' : 'foreignObject';
+    const end = tag.selfClosing ? tag.end : closeAfter(block[1], tag.end);
+    if (end === null) return null;
+    cuts.push([at, end, label]);
+  }
+
+  // XML can declare an entity whose text is markup or a javascript: link and
+  // use it anywhere — <!ENTITY x "&#60;script…"> then &x; — and a standalone
+  // SVG is parsed as XML. Illustrator declares harmless ones (namespace URLs),
+  // so only those carrying markup or a script link go.
+  const entity = /<!ENTITY\b(?:[^>"']|"[^"]*"|'[^']*')*>?/gi;
+  for (let m; (m = entity.exec(s));) {
+    const text = decodeRefs(m[0].slice(2)).replace(/[\u0000-\u0020\u007f]/g, '');
+    if (text.includes('<') || SCRIPT_URL.test(text)) cuts.push([m.index, m.index + m[0].length, 'entity declarations']);
+  }
+  // An XML stylesheet instruction can name an XSLT transform, which writes a
+  // new document — scripts and all — when the SVG is opened on its own.
+  // Illustrator never writes one.
+  const pi = /<\?xml-stylesheet\b[\s\S]*?(?:\?>|$)/gi;
+  for (let m; (m = pi.exec(s));) cuts.push([m.index, m.index + m[0].length, 'stylesheet instructions']);
+  return cuts;
+}
+
+function sanitise(svg) {
+  const removed = new Set();
+  let out = String(svg);
+
+  // Each pass removes something, so the file shrinks every time round; a real
+  // export needs one pass, or two. A file still producing new things to remove
+  // after ten has been built to, and is made inert outright.
+  for (let pass = 0; ; pass++) {
+    const cuts = findUnsafe(out);
+    if (cuts && !cuts.length) break;
+    if (!cuts || pass === 10) {
+      out = out.replace(/</g, '&lt;');
+      removed.add('all markup (the file could not be read safely)');
+      break;
+    }
+    cuts.sort((a, b) => a[0] - b[0]);
+    let next = '', pos = 0;
+    for (const [start, end, label] of cuts) {
+      removed.add(label);
+      if (end <= pos) continue;                      // inside a range already cut
+      let from = Math.max(start, pos);
+      // An attribute goes with the space before it, so a tidy file stays tidy.
+      if (from === start) while (from > pos && isWs(out[from - 1])) from--;
+      next += out.slice(pos, from);
+      pos = end;
+    }
+    out = next + out.slice(pos);
+  }
+
+  return { svg: out, removed: [...removed] };
 }
 
 /** The stored artwork for the current show, or null to use the shipped file. */
