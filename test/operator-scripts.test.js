@@ -24,6 +24,15 @@
  *                    put the stand it absorbed back beside it, available — the
  *                    same floor sellable twice. A booth_state.json lying in the
  *                    project folder is never applied unless named with --state.
+ *
+ *   reseed.js      — a dry run until --apply (it used to be the other way
+ *                    round); a renumbered extraction carries EVERY field a stand
+ *                    has — it used to keep six and lose tags, country, shown
+ *                    numbers, sponsor flags and logos, and removed flags — and
+ *                    follows holds, leads and proposals to the new numbers. It
+ *                    snapshots first, refuses what it cannot carry (a merged
+ *                    stand, a booking with nowhere to go) and needs --force on
+ *                    an event that has sold.
  */
 const fs = require('fs');
 const os = require('os');
@@ -169,6 +178,77 @@ try {
   const t777 = (told.store.booths || []).find(b => b.showId === 'LNA' && b.boothNumber === '777');
   check('and --apply writes them, once', t777 && t777.status === 'sold' && t777.assignment.company === 'Legacy Ltd' &&
         (told.store.meta || []).some(m => m._id === 'legacy-state-import-v1'));
+
+  console.log('\nreseed.js carries every stand across a renumbered extraction');
+  const RESEED = 'scripts/reseed.js';
+  // The same hall, numbered differently: what a fresh extraction looks like.
+  const renumbered = () => {
+    const stands = standsFor('LEX').map(b => ({ ...b, boothNumber: `X${b.boothNumber}` }));
+    const at = (n) => stands.find(b => b.boothNumber === n);
+    Object.assign(at('X777'), {
+      status: 'sold', updatedBy: 'chris', displayNumber: 'A1', displayNumberKey: 'a1', sponsored: true,
+      sponsorLogo: 'data:image/png;base64,AAAA',
+      assignment: { company: 'Acme Lubricants', contactId: 'c-1', actualPrice: 5000, notes: 'signed',
+                    tags: ['base-oils'], country: 'DE' },
+    });
+    Object.assign(at('X780'), { status: 'held', updatedBy: 'chris', assignment: { ...blank(), company: 'Holdco' } });
+    Object.assign(at('X679'), { removed: true, removedAt: '2026-09-01', removedBy: 'chris' });
+    return stands;
+  };
+  const world = () => ({
+    booths: renumbered(),
+    holds: [{ showId: 'LEX', boothNumber: 'X780', company: 'Holdco' }],
+    inquiries: [{ showId: 'LEX', company: 'Lead Ltd', boothsOfInterest: ['X777', 'X780'] }],
+    menus: [{ showId: 'LEX', ref: 'LEX-P001', owner: 'rep', boothNumbers: ['X778'] }],
+  });
+
+  const rDry = run(RESEED, [], world());
+  check('a plain run is a dry run, and writes nothing', rDry.code === 0 && /DRY RUN/.test(rDry.out) &&
+        rDry.writes.length === 0, JSON.stringify(rDry.writes.map(w => w.slice(0, 2))));
+  check('it shows where each booking goes', /X777\s+→ 777\s+sold\s+Acme Lubricants/.test(rDry.out));
+
+  const rNoForce = run(RESEED, ['--apply'], world());
+  check('on an event that has sold, --apply alone is refused', rNoForce.code === 1 && /REFUSED/.test(rNoForce.out) &&
+        rNoForce.writes.length === 0);
+
+  const r = run(RESEED, ['--apply', '--force'], world());
+  const lex = (r.store.booths || []).filter(b => b.showId === 'LEX');
+  const s777 = lex.find(b => b.boothNumber === '777');
+  check('--apply --force rebuilds the event from the file', r.code === 0 && lex.length === FILE.length &&
+        !lex.some(b => /^X/.test(b.boothNumber)), `${lex.length} stands`);
+  check('the sale is carried: status, company, contact, agreed price, notes',
+        s777 && s777.status === 'sold' && s777.assignment.company === 'Acme Lubricants' &&
+        s777.assignment.contactId === 'c-1' && s777.assignment.actualPrice === 5000 && s777.assignment.notes === 'signed');
+  check('and everything else it had: tags, country, shown number, sponsor flag and logo',
+        s777 && s777.assignment.tags.join() === 'base-oils' && s777.assignment.country === 'DE' &&
+        s777.displayNumber === 'A1' && s777.displayNumberKey === 'a1' && s777.sponsored === true &&
+        s777.sponsorLogo === 'data:image/png;base64,AAAA', JSON.stringify(s777));
+  check('a stand taken off the plan stays off it', lex.find(b => b.boothNumber === '679')?.removed === true);
+  check('the hold follows its stand', (r.store.holds || []).every(h => h.boothNumber === '780'));
+  check('so do the lead and the proposal',
+        r.store.inquiries[0].boothsOfInterest.join() === '777,780' && r.store.menus[0].boothNumbers.join() === '778',
+        `${r.store.inquiries[0].boothsOfInterest} / ${r.store.menus[0].boothNumbers}`);
+  const snapAt = r.calls.findIndex(c => c[1] === 'booths_snapshots' && c[0] === 'insertMany');
+  const delAt = r.calls.findIndex(c => c[1] === 'booths' && c[0] === 'deleteMany');
+  check('the old stands were snapshotted before anything was deleted', snapAt > -1 && snapAt < delAt, `${snapAt} < ${delAt}`);
+  check('and the operator is told to restart', /Restart the web service/.test(r.out));
+
+  const merged = run(RESEED, ['--apply', '--force'], { booths: europeWithMergedSale() });
+  check('a merged stand cannot be carried, so even --force is refused',
+        merged.code === 1 && /merged or split/.test(merged.out) && merged.writes.length === 0);
+
+  const lost = world();
+  lost.booths.find(b => b.boothNumber === 'X777').geometry = { x: -900, y: -900, w: 40, h: 40 };
+  const stranded = run(RESEED, ['--apply', '--force'], lost);
+  check('a booking that matches no stand in the file is refused, not dropped',
+        stranded.code === 1 && /match no stand/.test(stranded.out) && stranded.writes.length === 0);
+
+  const both = { booths: [...standsFor('LEX'), ...standsFor('LNA').map(b => ({ ...b, boothNumber: `N${b.boothNumber}` }))] };
+  const na = run(RESEED, ['--show=lna', '--apply'], both);
+  const after = na.store.booths || [];
+  check('--show lna re-seeds North America only', na.code === 0 &&
+        after.filter(b => b.showId === 'LNA' && !/^N/.test(b.boothNumber)).length === FILE.length &&
+        after.filter(b => b.showId === 'LEX').length === FILE.length, na.out.slice(-200));
 } finally {
   fs.rmSync(TMP, { recursive: true, force: true });
 }
