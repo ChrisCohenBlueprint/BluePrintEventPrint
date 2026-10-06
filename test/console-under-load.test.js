@@ -14,6 +14,7 @@
  *   - Tools → Shown Number put the stored number back on every keystroke.
  *   - A tag being renamed was rebuilt out from under the typing by any
  *     broadcast, and the rename never saved.
+ *   - The Undo on a release was wiped by the next toast of any kind.
  */
 const fs = require('fs');
 const path = require('path');
@@ -152,6 +153,38 @@ stands[4].displayNumber = 'A4';                                                 
     }));
     check('Sponsors: each package once', sp.sponsors === 3, `${sp.sponsors} rows for 3 packages`);
     check('and each partner logo once', sp.partners === 2, `${sp.partners} rows for 2 logos`);
+
+    console.log('\nThe Undo on a release outlives the toasts after it');
+    await page.click('[data-section="floorplan"]');
+    await page.waitForTimeout(300);
+    await page.evaluate(() => selectAdminBooth('101'));
+    await settle(page);
+    await page.click('#aba-release');
+    await page.waitForSelector('dialog.bp-dialog[open]');
+    await page.fill('dialog.bp-dialog[open] input', 'pw');
+    await page.evaluate(() => [...document.querySelectorAll('dialog.bp-dialog[open] button')].find(b => b.textContent === 'Release it').click());
+    await settle(page);
+    const undoShown = () => page.evaluate(() => {
+      const btn = [...document.querySelectorAll('.toast-action')].find(b => b.textContent === 'Undo');
+      const host = btn && btn.parentElement;
+      return !!(btn && host && host.classList.contains('show'));
+    });
+    check('Undo is offered', await undoShown());
+    await page.evaluate(() => window.__fire('inquiry:new', { id: 'x', name: 'Visitor', booths: ['120'] }));
+    await page.waitForTimeout(150);
+    check('a new enquiry arriving does not take it away', await undoShown(), await toasts(page));
+    await page.evaluate(() => window.__fire('error:action', { message: 'Something unrelated was refused.' }));
+    await page.waitForTimeout(250);
+    check('nor does an unrelated refusal', await undoShown(), await toasts(page));
+    const overlap = await page.evaluate(() => {
+      const a = document.getElementById('admin-toast-action')?.getBoundingClientRect();
+      const b = document.getElementById('admin-toast')?.getBoundingClientRect();
+      return !a || !b ? 'missing' : (a.top < b.bottom && b.top < a.bottom) ? 'overlap' : 'apart';
+    });
+    check('the two sit one above the other, both readable', overlap === 'apart', overlap);
+    await page.evaluate(() => [...document.querySelectorAll('.toast-action')].find(b => b.textContent === 'Undo').click());
+    await page.waitForTimeout(300);
+    check('and Undo still puts the booking back', restores.includes('101'), JSON.stringify(restores));
 
     check('the page raised no errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   } finally {

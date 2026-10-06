@@ -58,13 +58,12 @@
   // Two pages, two existing toast elements and two class conventions, so the
   // element and its classes are parameters rather than baked in.
   const toastTimers = new Map();
+  // Which slots are on screen right now, so a message and an Undo can be
+  // placed one above the other instead of one over the other.
+  const toastLive = new Set();
 
-  function toast(msg, kind = '', opts = {}) {
-    const id = opts.id || 'toast';
-    const base = opts.cls || 'toast';
-    const shown = opts.show || '';
-    const ms = opts.ms || 3200;
-
+  /** Put a message in one slot — creating it the first time — and time it out. */
+  function paint(id, msg, kind, { cls: base, show: shown, ms }, after = null) {
     let node = byId(id);
     if (!node) {
       node = el('div', base);
@@ -75,12 +74,42 @@
     node.replaceChildren(document.createTextNode(msg));
     node.className = [base, shown, kind].filter(Boolean).join(' ');
     node.classList.remove('hidden');
+    toastLive.add(id);
 
     clearTimeout(toastTimers.get(id));
-    toastTimers.set(id, setTimeout(() => {
-      node.className = base;
-      if (!shown) node.classList.add('hidden');
-    }, ms));
+    toastTimers.set(id, setTimeout(() => { hide(id, node, base, shown); if (after) after(); }, ms));
+    return node;
+  }
+
+  function hide(id, node, base, shown) {
+    clearTimeout(toastTimers.get(id));
+    node.className = base;
+    if (!shown) node.classList.add('hidden');
+    toastLive.delete(id);
+  }
+
+  /**
+   * An ordinary message sits ABOVE an action toast that is still on screen.
+   *
+   * They used to share one element, and every toast replaced its contents — so
+   * "New enquiry received." arriving from somebody else, or any refusal, took
+   * the Undo off a release a moment after it was offered, and nothing else on
+   * the page could put that booking back. The action now has a slot of its own
+   * (`<id>-action`) that nothing but another action replaces.
+   */
+  function arrange(id) {
+    const info = byId(id);
+    if (!info) return;
+    const action = toastLive.has(`${id}-action`) ? byId(`${id}-action`) : null;
+    if (!action || !toastLive.has(id)) { info.style.removeProperty('bottom'); return; }
+    const below = parseFloat(getComputedStyle(action).bottom) || 0;
+    info.style.bottom = `${Math.round(below + action.offsetHeight + 8)}px`;
+  }
+
+  function toast(msg, kind = '', opts = {}) {
+    const id = opts.id || 'toast';
+    const node = paint(id, msg, kind, { cls: opts.cls || 'toast', show: opts.show || '', ms: opts.ms || 3200 });
+    arrange(id);
     return node;
   }
 
@@ -88,18 +117,22 @@
    * A toast carrying one action, for a change that should be reversible for a
    * moment rather than permanent the instant it happens.
    *
-   * Resolves when the window closes either way, so the caller can clean up.
+   * It goes in its own slot beside the ordinary toast — see arrange() — so the
+   * action stays on offer for as long as it says it will, whatever else the
+   * page has to report meanwhile.
    */
   function toastAction(msg, { label, onAction, kind = '', ms = 10000, id = 'toast', cls = 'toast', show = '', countdown = true } = {}) {
-    const node = toast(msg, kind, { id, cls, show, ms });
+    const slot = `${id}-action`;
+    // When its time is up, a message sitting above it comes back down.
+    const node = paint(slot, msg, kind, { cls, show, ms }, () => arrange(id));
+    arrange(id);
     if (!label || typeof onAction !== 'function') return node;
 
     const btn = el('button', 'toast-action', label);
     btn.type = 'button';
     btn.addEventListener('click', () => {
-      clearTimeout(toastTimers.get(id));
-      node.className = cls;
-      if (!show) node.classList.add('hidden');
+      hide(slot, node, cls, show);
+      arrange(id);
       onAction();
     });
     node.appendChild(btn);
