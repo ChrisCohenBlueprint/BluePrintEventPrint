@@ -16,6 +16,11 @@
  *   an inline logo    — the export wrote every data URI into the file, so one
  *                       uploaded logo pushed it past the import's own size
  *                       limit (and past Excel's 32,767-character cell).
+ *   the plan's areas  — a lounge linked to a package stayed "Available to
+ *                       sponsor" after a CSV marked the package sold out, and
+ *                       renamed or deleted packages lingered in the areas the
+ *                       plan is sent. Only the sold-out toggle in the editor
+ *                       ever reached them.
  *
  * The real /api routes and models run against the stand-in database.
  */
@@ -164,6 +169,43 @@ const area = (key) => db.store.planAreas.find(a => a.key === key);
     check("a name that really starts with ' survives the round trip",
           csv.parseCsvObjects(csv.toCsv(['name'], [["'=quoted"]])).rows[0].name === "'=quoted");
 
+    console.log('\nA package change reaches the areas it sells');
+    notified.length = 0;
+    const sold = await importCsv('key,name,soldOut\r\nnetworking-lounge,Networking Lounge,true\r\n');
+    check('a CSV marking the package sold out applies', sold.status === 200 && pkg('networking-lounge').soldOut === true);
+    check('both linked lounges are taken', area('lounge-a').status === 'taken' && area('lounge-b').status === 'taken',
+          `${area('lounge-a').status}, ${area('lounge-b').status}`);
+    check('the area unlinked from it is not moved', area('bag-desk').status === 'available');
+    check('and the plan is sent the new catalogue', notified.length > 0 &&
+          notified.at(-1).find(a => a.key === 'lounge-a')?.package?.soldOut === true);
+
+    // A file that merely repeats the current state must not move an area an
+    // admin has set by hand.
+    await planAreas.setSponsor('lounge-b', { status: 'available' });
+    await importCsv('key,name,soldOut\r\nnetworking-lounge,Networking Lounge,true\r\n');
+    check('a file that does not change sold-out leaves hand-set areas alone', area('lounge-b').status === 'available');
+
+    notified.length = 0;
+    await importCsv('key,name\r\nnetworking-lounge,The Networking Lounge\r\n');
+    check('a rename reaches the plan', notified.length > 0 &&
+          notified.at(-1).find(a => a.key === 'lounge-a')?.package?.name === 'The Networking Lounge');
+
+    notified.length = 0;
+    const del = await call('DELETE', '/sponsors/bags');
+    check('a deleted package leaves the plan', del.status === 200 && notified.length > 0 &&
+          notified.at(-1).find(a => a.key === 'bag-desk')?.package === null);
+
+    notified.length = 0;
+    const made = await call('POST', '/sponsors', { name: 'Bags', key: 'bags', tier: 'gold', soldOut: true });
+    check('a package created sold out takes the areas linked to its key', made.status === 200 &&
+          area('bag-desk').status === 'taken', area('bag-desk').status);
+    check('and the plan is told', notified.length > 0 &&
+          notified.at(-1).find(a => a.key === 'bag-desk')?.package?.name === 'Bags');
+
+    notified.length = 0;
+    const patched = await call('PATCH', '/sponsors/networking-lounge', { availability: '1 Available' });
+    check('an edit that is not sold-out still reaches the plan', patched.status === 200 && notified.length > 0 &&
+          notified.at(-1).find(a => a.key === 'lounge-a')?.package?.availability === '1 Available');
   } finally {
     server.close();
   }

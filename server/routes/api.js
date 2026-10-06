@@ -791,6 +791,32 @@ router.delete('/admins/:username', requireOwner, async (req, res, next) => {
 });
 
 // ─── Sponsors (admin — includes price) ────────────────────────────────────────
+
+/**
+ * Carry a package change onto the plan.
+ *
+ * An area on the plan that a package sells shows that package's name, tier,
+ * availability and sold-out state, from a catalogue the socket layer caches
+ * per show. Only the editor's sold-out toggle ever reached it: a CSV that
+ * marked the Networking Lounge sold out left both lounges advertised as
+ * "Available to sponsor", and a renamed or deleted package lingered on the
+ * plan until something unrelated refreshed the cache. Every route below that
+ * writes a package now ends here.
+ *
+ * `soldOut` moves only the areas LINKED to that package, exactly as the toggle
+ * does — an unlinked area is managed by hand and must not shift underneath
+ * its admin. Best-effort, like the toggle: the package write has already
+ * happened, and failing the request now would tell the admin it had not.
+ */
+async function packagesChanged(soldOut = [], actor = null) {
+  for (const { key, soldOut: isSoldOut } of soldOut) {
+    try { await planAreas.applyPackageSoldOut(key, isSoldOut, { actor }); }
+    catch (e) { console.error(`Area sold-out cascade failed for "${key}":`, e.message); }
+  }
+  try { await sockets.notifyAreas(); }
+  catch (e) { console.error('Areas catalogue not refreshed after a package change:', e.message); }
+}
+
 router.get('/sponsors', async (_req, res, next) => {
   try { res.json(await sponsors.all()); } catch (e) { next(e); }
 });
@@ -855,6 +881,9 @@ router.post('/sponsors/import', async (req, res, next) => {
       track({ type: 'sponsor.import', boothNumber: null, actor: req.admin?.user || 'unknown',
               meta: { created: report.created.length, updated: report.updated.length,
                       removed: report.removed.length, errors: report.errors.length } });
+      if (report.created.length || report.updated.length || report.removed.length) {
+        await packagesChanged(report.soldOutChanges, req.admin?.user || null);
+      }
     }
     res.json(report);
   } catch (e) { next(e); }
@@ -867,6 +896,10 @@ router.post('/sponsors', async (req, res, next) => {
     if (!r.ok) return res.status(400).json(r);
     track({ type: 'sponsor.create', boothNumber: null, actor: req.admin?.user || 'unknown',
             meta: { key: r.sponsor.key, name: r.sponsor.name } });
+    // An area can already be linked to this key — one whose package was deleted
+    // and is now being put back.
+    await packagesChanged(r.sponsor.soldOut === true ? [{ key: r.sponsor.key, soldOut: true }] : [],
+                          req.admin?.user || null);
     res.json(r);
   } catch (e) { next(e); }
 });
@@ -879,8 +912,13 @@ router.post('/sponsors', async (req, res, next) => {
 router.delete('/sponsors/:key', async (req, res, next) => {
   try {
     const ok = await sponsors.remove(req.params.key);
-    if (ok) track({ type: 'sponsor.delete', boothNumber: null, actor: req.admin?.user || 'unknown',
-                    meta: { key: req.params.key } });
+    if (ok) {
+      track({ type: 'sponsor.delete', boothNumber: null, actor: req.admin?.user || 'unknown',
+              meta: { key: req.params.key } });
+      // The areas keep their link (re-creating the package restores it) and
+      // their status; the plan simply stops naming a package that is gone.
+      await packagesChanged([], req.admin?.user || null);
+    }
     res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: 'No such package.' });
   } catch (e) { next(e); }
 });
@@ -913,15 +951,12 @@ router.patch('/sponsors/:key', async (req, res, next) => {
 
     // A package that has sold out takes the areas it sells with it, so the plan
     // stops advertising the Networking Lounge the moment the lounge is gone.
-    // Only areas LINKED to this package move; an unlinked one is managed by
-    // hand and must not shift underneath its admin.
-    if ('soldOut' in body) {
-      try {
-        const moved = await planAreas.applyPackageSoldOut(req.params.key, updated.soldOut === true,
-                                                          { actor: req.admin?.user || null });
-        if (moved) await sockets.notifyAreas();
-      } catch (e) { console.error('Area sold-out cascade failed:', e.message); }
-    }
+    // The catalogue is re-sent whatever changed: it carries the package's tier
+    // and availability too, and a sold-out flip that moved no area (both
+    // already taken) still changes what those areas say. It used to be sent
+    // only when an area moved.
+    await packagesChanged('soldOut' in body ? [{ key: req.params.key, soldOut: updated.soldOut === true }] : [],
+                          req.admin?.user || null);
 
     res.json(updated);
   } catch (e) { next(e); }
