@@ -158,6 +158,93 @@ console.log('\nA stylesheet is read the way CSS applies it (R12 note, brief §5 
         `${r.by('100').fill} ${r.by('101').fill}`);
 }
 
+console.log('\nSplit cells are read under the numbers the schedule gives them (R20, R23)');
+{
+  // The app names the cells of a split stand 105, 105-2, 105-3, and that is
+  // what the stand schedule sent to the designer lists. A designer following
+  // R23 draws exactly that — and every cell came back "missing".
+  const cells = [];
+  for (let i = 0; i < 10; i++) cells.push([String(200 + i), '#ffffff', '#000000']);
+  cells.push(['105', '#ffffff', '#000000'], ['105-2', '#ffffff', '#000000'], ['105-3', '#fcdf6d', '#000000', 'Cell Three Ltd']);
+  cells.push(['106a', '#ffffff', '#000000'], ['106b', '#ffffff', '#000000']);
+  const r = read(plan(cells));
+  check('105-2 and 105-3 are stand numbers', !!r.by('105-2') && !!r.by('105-3'),
+        r.stands.map(s => s.number).filter(n => /^10[56]/.test(n)).join(','));
+  check('with their own exhibitor and status', r.by('105-3').exhibitor === 'Cell Three Ltd' && r.by('105-3').status === 'sold');
+  check('and none of them is read as a name', !r.stands.some(s => /^10[56]/.test(s.exhibitor || '')));
+  check('a lower-case letter suffix is read, as a capital', !!r.by('106A') && !!r.by('106B'),
+        r.stands.map(s => s.number).filter(n => /^106/.test(n)).join(','));
+
+  const { diffStands } = require('../server/lib/plan-diff');
+  const at = (n) => r.by(n).geometry;
+  const existing = ['105', '105-2', '105-3'].map(n => ({ boothNumber: n, status: 'available', geometry: at(n) }));
+  const d = diffStands(r.stands.filter(s => !s.sponsored), existing);
+  check('so a re-issue drawn from the schedule finds every cell where it was',
+        d.summary.missing === 0 && d.unchanged.length === 3, JSON.stringify(d.summary));
+
+  const brief = fs.readFileSync(path.join(__dirname, '..', 'docs', 'floorplan-designer-brief.html'), 'utf8');
+  const spec = fs.readFileSync(path.join(__dirname, '..', 'docs', 'floorplan-artwork-spec.html'), 'utf8');
+  check('the brief names the form the app uses, not 105a', /105-2/.test(brief) && !/105a/.test(brief));
+  check('and so does the specification', /105-2/.test(spec));
+}
+
+console.log('\nA decimal comma is a decimal (R20, brief §3)');
+{
+  const cells = [];
+  for (let i = 0; i < 6; i++) cells.push([String(100 + i), '#ffffff', '#000000']);
+  const svg = plan(cells)
+    .replace('>30 m²<', '>30,5 m²<')
+    .replace('>30 m²<', '>30.5 m²<')
+    .replace('>30 m²<', '>1,250 m²<')
+    .replace('>30 m²<', '>12,75 m²<');
+  const r = read(svg);
+  check('"30,5 m²" is thirty and a half', r.by('100').printedArea === 30.5, String(r.by('100').printedArea));
+  check('as "30.5 m²" is', r.by('101').printedArea === 30.5, String(r.by('101').printedArea));
+  check('a comma before three digits still separates thousands', r.by('102').printedArea === 1250,
+        String(r.by('102').printedArea));
+  check('two decimals with a comma read too', r.by('103').printedArea === 12.75, String(r.by('103').printedArea));
+}
+
+console.log('\nA rectangle placed only by its transform is read (R17, brief §9)');
+{
+  // x and y default to 0 in SVG, so a rect positioned entirely by
+  // transform="translate(…)" is a perfectly good shape — and was dropped,
+  // leaving its number outside every stand.
+  const cells = [];
+  for (let i = 0; i < 5; i++) cells.push([String(100 + i), '#ffffff', '#000000']);
+  const svg = plan(cells, { extra:
+    '<rect transform="translate(600 0)" width="100" height="80" fill="#fcdf6d" stroke="#000000"/>' +
+    '<text x="604" y="12">777</text><text x="660" y="74">30 m²</text>' });
+  const r = read(svg);
+  check('the stand is found', !!r.by('777'), r.warnings.join(' | '));
+  check('where it appears', r.by('777') && r.by('777').visual.x === 600 && r.by('777').visual.w === 100,
+        JSON.stringify(r.by('777') && r.by('777').visual));
+  check('and its number is not reported as astray', !r.issues.orphans.includes('777'));
+}
+
+console.log('\nTwo stands that are one rectangle in two placed groups are reported');
+{
+  // The page binds a stand to its shape by the rectangle's own attributes,
+  // before any group transform. Two stands drawn as copies of one rectangle,
+  // moved apart only by their groups, look identical to it, and the second
+  // would answer to the first. The reader cannot fix that without changing
+  // how every existing plan binds, so it says so, by number.
+  const rowOf = (ty, base) => `<g transform="translate(0 ${ty})">` +
+    [0, 1, 2, 3].map(i => `<rect x="${i * 100}" y="0" width="100" height="80" fill="#ffffff" stroke="#000"/>` +
+      `<text x="${i * 100 + 4}" y="12">${base + i}</text><text x="${i * 100 + 60}" y="74">30 m²</text>`).join('') + '</g>';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200">${rowOf(0, 101)}${rowOf(100, 201)}</svg>`;
+  const r = read(svg);
+  check('every stand is still read, where it appears', r.stands.length === 8 && r.by('201').visual.y === 100);
+  check('the shared shapes are listed as an issue', Array.isArray(r.issues.sharedShape) &&
+        r.issues.sharedShape.some(p => /101/.test(p) && /201/.test(p)), JSON.stringify(r.issues.sharedShape));
+  const w = r.warnings.find(x => /same rectangle/.test(x)) || '';
+  check('and the preview says which stands, and what it means', /101/.test(w) && /201/.test(w) && /first/.test(w), w);
+
+  const lna = read(LNA);
+  check('North America\'s plan has none of this', (lna.issues.sharedShape || []).length === 0,
+        JSON.stringify(lna.issues.sharedShape));
+}
+
 const f = out.filter(x => !x).length;
 console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);
 process.exit(f ? 1 : 0);

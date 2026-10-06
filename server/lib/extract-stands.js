@@ -337,12 +337,17 @@ function readShapes(svg) {
 
     if (m[0].startsWith('<rect')) {
       const a = m[3];
-      const x = numAttr(a, 'x'), y = numAttr(a, 'y');
+      // x and y default to 0, as they do in SVG: a rectangle placed entirely
+      // by transform="translate(…)" is a whole shape, and dropping it left its
+      // stand number sitting in no shape at all — though R17 and the brief say
+      // transforms are resolved.
+      const x = numAttr(a, 'x') ?? 0, y = numAttr(a, 'y') ?? 0;
       const w = numAttr(a, 'width'), h = numAttr(a, 'height');
-      if (x == null || y == null || !w || !h) continue;
+      if (!w || !h) continue;
       // As authored. This is what the page reports for the element when it
       // binds a stand to its shape — it reads the x/y/width/height attributes
-      // and does NOT apply the element's own transform — so it is what must be
+      // (or, with none, the element's own box, which is the same thing) and
+      // does NOT apply the element's own transform — so it is what must be
       // stored.
       pushShape(a, { x, y, w, h }, 'rect');
       continue;
@@ -463,7 +468,18 @@ const labelRuns = (texts) => texts.filter(t => !(/scale\(/.test(t.transform) && 
 /** Text runs, flattened across tspans and placed however the plan placed them. */
 const readTexts = (svg) => labelRuns(readShapes(svg).texts);
 
-const NUMBER = /^[A-Z]{0,2}\d{2,5}[A-Z]?$/;          // 142, 1249, P014, A12
+/**
+ * A stand number: 142, 1249, P014, A12 — and a cell of a split stand, under
+ * the number the app gave it, 105-2 (a cell split again is 105-2-2).
+ *
+ * The cell form is not a nicety. It is what the stand schedule sent to the
+ * designer lists, and R23 asks for cells to be drawn under exactly those
+ * numbers; read as an exhibitor's name instead, every cell on a re-issue came
+ * back as a stand the drawing had dropped. A letter after the number is read
+ * in either case and stored as a capital, so 105a and 105A are one stand.
+ */
+const NUMBER = /^[A-Z]{0,2}\d{2,5}[A-Za-z]?(?:-\d){0,3}$/;
+const numberOf = (text) => text.replace(/^([A-Z]{0,2}\d{2,5})([a-z])/, (_, n, s) => n + s.toUpperCase());
 /**
  * A printed area.
  *
@@ -476,6 +492,24 @@ const NUMBER = /^[A-Z]{0,2}\d{2,5}[A-Z]?$/;          // 142, 1249, P014, A12
  * from the drawing instead of read from the label beside it.
  */
 const AREA   = /^([\d,]+(?:\.\d+)?)\s*(sqm|sqft|m|ft)\s*[²2]?$/i;
+
+/**
+ * The figure an area label prints, as a number.
+ *
+ * A comma is read the way the label means it. Before one or two final digits
+ * it is a decimal comma — "30,5 m²", the ordinary spelling in German and most
+ * of Europe. Stripping every comma read that as 305 m², and because a printed
+ * area outranks the drawing, the stand was priced at ten times its size. Before
+ * three digits it separates thousands, as in "1,250 m²".
+ */
+function areaFigure(text) {
+  const figure = AREA.exec(text)[1];
+  const decimalComma = /,(\d{1,2})$/.exec(figure);
+  const n = decimalComma
+    ? parseFloat(`${figure.slice(0, decimalComma.index).replace(/,/g, '')}.${decimalComma[1]}`)
+    : parseFloat(figure.replace(/,/g, ''));
+  return Math.round(n * 100) / 100;
+}
 
 /**
  * Pull the stands out of a floorplan.
@@ -506,7 +540,8 @@ function extractStands(svg) {
       : `${allTexts.length} text runs were found, but none of them reads as a stand number ` +
         `(expected something like 142, 1249 or P014).`;
     return { stands: [], unit: null, unitsPerArea: null, fills: [], printedNames: [],
-             issues: { collisions: [], repeated: [], orphans: [], implausible: [], noArea: [], sizeDisagrees: [] },
+             issues: { collisions: [], repeated: [], orphans: [], implausible: [], noArea: [], sizeDisagrees: [],
+                       sharedShape: [] },
              rects: rects.length, texts: allTexts.length, warnings: [why] };
   }
 
@@ -647,8 +682,8 @@ function extractStands(svg) {
     const name = nameFor.get(r);
     const paint = paintOf(r);
     stands.push({
-      number: n.text,
-      printedArea: a ? Math.round(parseFloat(AREA.exec(a.text)[1].replace(/,/g, '')) * 100) / 100 : null,
+      number: numberOf(n.text),
+      printedArea: a ? areaFigure(a.text) : null,
       geometry: { x: +r.raw.x.toFixed(2), y: +r.raw.y.toFixed(2),
                   w: +r.raw.w.toFixed(2), h: +r.raw.h.toFixed(2) },
       visual: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), w: +r.w.toFixed(2), h: +r.h.toFixed(2) },
@@ -687,6 +722,37 @@ function extractStands(svg) {
   const orphans = numbers.filter(n => !claimed.has(n));
   if (orphans.length) {
     warnings.push(`${orphans.length} stand numbers sit outside any shape: ${orphans.slice(0, 6).map(o => o.text).join(', ')}.`);
+  }
+
+  /**
+   * Stands the plan page cannot tell apart.
+   *
+   * The page binds a stand to its shape by the rectangle's own coordinates —
+   * the `geometry` stored here, before any group's transform — because that is
+   * what it can read off an element. Two stands drawn as copies of one
+   * rectangle, moved apart only by the groups they sit in, have the same
+   * coordinates, and both bind to whichever comes first: 201 is clicked by
+   * clicking 101. Storing where they APPEAR instead would change how every
+   * plan with a transformed group binds, so this is not fixed here; it is
+   * found, and said by number, so it is seen before the plan goes live.
+   * Within the page's own matching tolerance.
+   */
+  const BIND_TOL = 2;
+  const sameBox = (p, q) => Math.abs(p.x - q.x) < BIND_TOL && Math.abs(p.y - q.y) < BIND_TOL &&
+                            Math.abs(p.w - q.w) < BIND_TOL && Math.abs(p.h - q.h) < BIND_TOL;
+  const sharedShape = [];
+  for (let i = 0; i < stands.length; i++) {
+    for (let j = i + 1; j < stands.length; j++) {
+      const a = stands[i], b = stands[j];
+      if (sameBox(a.geometry, b.geometry) && !sameBox(a.visual, b.visual)) sharedShape.push(`${a.number}/${b.number}`);
+    }
+  }
+  if (sharedShape.length) {
+    warnings.push(`${sharedShape.length} pairs of stands are drawn as the same rectangle, placed apart only by the ` +
+      `groups they sit in (${sharedShape.slice(0, 8).join(', ')}). They are read correctly here, but the interactive ` +
+      `plan matches a stand to its shape by the rectangle's own coordinates and cannot yet tell these apart: the ` +
+      `second of each pair would answer clicks on the first. Ask for these stands to be drawn at their own ` +
+      `coordinates (copies expanded or ungrouped) before the plan goes live.`);
   }
 
   // Calibrate drawing units against the printed areas. The median is used so
@@ -755,6 +821,7 @@ function extractStands(svg) {
     implausible,                                 // a number inside a shape no stand could be
     noArea: stands.filter(s => s.printedArea == null).map(s => s.number),
     sizeDisagrees: disagree.slice(),
+    sharedShape,                                 // "101/201": one rectangle, two placed groups
   };
 
   return { stands, unit, unitsPerArea, fills, printedNames, issues,

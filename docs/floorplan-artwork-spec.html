@@ -190,9 +190,9 @@
     <h1>Floorplan artwork specification</h1>
     <p class="sub">Mandatory requirements for exhibition floorplan files supplied to Blueprint Event Company. Files that do not meet these requirements cannot be used in the interactive floorplan and will be returned.</p>
     <div class="issue">
-      <span><b>Issue</b>1.3</span>
+      <span><b>Issue</b>1.4</span>
       <span><b>Applies to</b>All halls, all shows</span>
-      <span><b>Supersedes</b>Issue 1.2 (section 8 added: R21–R25 govern a revision of a plan that is already selling)</span>
+      <span><b>Supersedes</b>Issue 1.3 (R20 and R23: a split stand's cells are numbered as the schedule lists them, <code>105-2</code>, and an area may use a decimal comma; R17 names the one grouping the interactive plan cannot yet tell apart)</span>
       <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
     </div>
   </header>
@@ -367,8 +367,8 @@
         <div class="cid">R20</div>
         <div>
           <h3><span class="kw must">Must</span> write each label in the form given</h3>
-          <p>A stand number is two to five digits, with up to two letters before and one after: <code>142</code>, <code>1249</code>, <code>P014</code>, <code>A12</code>. Letters are <strong>capitals</strong>. Nothing else belongs in the text object — no <em>Stand</em>, no full stop.</p>
-          <p>An area is the figure, a space, then the unit: <code>30 m²</code>, <code>300 ft²</code>. <code>sqm</code>, <code>sqft</code>, <code>m2</code> and a bare <code>m</code> read the same, the ² may be a superscript within the same text object, and a decimal is accepted. One unit for the whole plan.</p>
+          <p>A stand number is two to five digits, with up to two letters before and one after: <code>142</code>, <code>1249</code>, <code>P014</code>, <code>A12</code>. A cell of a split stand carries the number the stand schedule gives it, suffix included: <code>105-2</code>, <code>105-3</code>. Letters are <strong>capitals</strong>. Nothing else belongs in the text object — no <em>Stand</em>, no full stop.</p>
+          <p>An area is the figure, a space, then the unit: <code>30 m²</code>, <code>300 ft²</code>. <code>sqm</code>, <code>sqft</code>, <code>m2</code> and a bare <code>m</code> read the same, the ² may be a superscript within the same text object, and a decimal is accepted with a point or a comma: <code>30.5 m²</code> and <code>30,5 m²</code> read the same. A comma before three digits separates thousands: <code>1,250 m²</code>. One unit for the whole plan.</p>
           <div class="why"><b>Because</b>A text object is recognised as a number or an area by its shape alone; there is nothing else to go on. A lower-case prefix or a number written <code>Stand 142</code> is read as an exhibitor's name, and the stand is then a stand with no number, which is to say not a stand.</div>
         </div>
       </div>
@@ -473,6 +473,7 @@
         <div>
           <h3><span class="kw must">Must</span> keep the drawing frame stable between issues</h3>
           <p>Groups, nested groups, transforms and rotated stands are all resolved on receipt and need no special handling — an earlier issue of this clause asked for geometry to be baked flat, which is neither necessary nor how any of these tools export.</p>
+          <p>One arrangement the interactive plan cannot yet tell apart: two stands that are the <strong>same rectangle at the same coordinates</strong>, placed apart only by the transforms of the groups they sit in — which is how a copied group or a re-used symbol exports. Both are read, but on screen the second answers clicks on the first. Draw each stand at its own coordinates, with copies expanded or ungrouped; the check on receipt names any such pair by number.</p>
           <p>What must not change is the frame. Across issues of the same plan, keep the artboard, the origin and the scale identical, so a stand that has not moved is drawn at the same coordinates as before. A re-issue drawn on a shifted or rescaled artboard reports every stand on the plan as having moved.</p>
         </div>
       </div>
@@ -515,7 +516,7 @@ LEX26_StandSchedule_v03.csv</pre>
         <div class="cid">R23</div>
         <div>
           <h3><span class="kw must">Must</span> draw each stand as the current schedule lists it</h3>
-          <p>The schedule supplied under R15 is the authority on what each stand now is, and its <code>note</code> column names every stand whose arrangement has changed since the last drawing. A block listed as <code>merged from 104 + 106</code> is drawn as <strong>one</strong> shape under the surviving number. Cells listed as <code>split from 105</code> are drawn as separate stands under their own numbers, suffixes included.</p>
+          <p>The schedule supplied under R15 is the authority on what each stand now is, and its <code>note</code> column names every stand whose arrangement has changed since the last drawing. A block listed as <code>merged from 104 + 106</code> is drawn as <strong>one</strong> shape under the surviving number. Cells listed as <code>split from 105</code> are drawn as separate stands under their own numbers, exactly as the <code>stand_number</code> column gives them: <code>105</code>, <code>105-2</code>, <code>105-3</code>.</p>
           <p>Where a note reads <code>shown on the plan as …</code>, the stand has been relabelled on the live event and the two numbers differ. The number to draw is the one in the <code>stand_number</code> column; confirm it with us before drawing rather than choosing between them.</p>
           <div class="why"><b>Why</b>A merge or a split is held in the live event, not in the designer's file. Redrawing the previous arrangement does not undo it — it adds duplicate stands over stands that are already sold.</div>
         </div>
@@ -550,7 +551,7 @@ LEX26_StandSchedule_v03.csv</pre>
           <thead><tr><th></th><th>Check</th><th>Pass condition</th></tr></thead>
           <tbody>
             <tr><td class="box">☐</td><td>Revision: numbers stable</td><td>Every stand already on the event keeps its number (R21); new stands come from an unused block (R22)</td></tr>
-            <tr><td class="box">☐</td><td>Revision: schedule honoured</td><td>Merged blocks drawn as one stand, split cells under their own numbers (R23)</td></tr>
+            <tr><td class="box">☐</td><td>Revision: schedule honoured</td><td>Merged blocks drawn as one stand, split cells under their own numbers — <code>105-2</code> (R23)</td></tr>
             <tr><td class="box">☐</td><td>Revision: areas and fills</td><td>Area names letter for letter as the last issue (R24); fills unchanged or declared (R25)</td></tr>
             <tr><td class="box">☐</td><td>Text is live</td><td>A stand number can be selected with the text tool</td></tr>
             <tr><td class="box">☐</td><td>No rasterised drawing content</td><td>Only logos are images</td></tr>

@@ -210,9 +210,9 @@
     <h1>How to draw a floorplan the interactive plan can read</h1>
     <p class="sub">The plan you draw is not printed. It is loaded into software that finds every stand, reads its number, its size and its name, colours it by whether it is sold, and lets visitors click it. This brief is how to draw so that all of that happens on its own — and how to re-issue a plan once a show has started selling.</p>
     <div class="issue">
-      <span><b>Issue</b>1.2</span>
+      <span><b>Issue</b>1.3</span>
       <span><b>Applies to</b>Every new plan and every revision</span>
-      <span><b>Goes with</b>Specification BEC-FP-01 (issue 1.3)</span>
+      <span><b>Goes with</b>Specification BEC-FP-01 (issue 1.4)</span>
       <span><b>Contact</b>chris.cohen@blueprinteventcompany.com</span>
     </div>
   </header>
@@ -293,8 +293,8 @@
         <table>
           <thead><tr><th>Label</th><th>Where</th><th>Write it as</th><th>Notes</th></tr></thead>
           <tbody>
-            <tr><td>Stand number</td><td>Top-left corner</td><td class="k">142 · 1249 · P014 · A12</td><td>Two to five digits, with up to two letters in front and one after if the show uses them. Letters in <strong>capitals</strong>. Nothing else in the text object — no "Stand", no full stop.</td></tr>
-            <tr><td>Size</td><td>Bottom-right corner</td><td class="k">30 m² · 300 ft²</td><td>The number, a space, then <span class="mono">m²</span> or <span class="mono">ft²</span>. <span class="mono">sqm</span>, <span class="mono">sqft</span>, <span class="mono">m2</span> and a bare <span class="mono">m</span> read the same, the ² may be a superscript run inside the same text object, and a decimal is fine. One unit for the whole plan.</td></tr>
+            <tr><td>Stand number</td><td>Top-left corner</td><td class="k">142 · 1249 · P014 · A12 · 105-2</td><td>Two to five digits, with up to two letters in front and one after if the show uses them. A cell of a split stand keeps the number the stand schedule gives it, suffix and all: <span class="mono">105-2</span>. Letters in <strong>capitals</strong>. Nothing else in the text object — no "Stand", no full stop.</td></tr>
+            <tr><td>Size</td><td>Bottom-right corner</td><td class="k">30 m² · 300 ft²</td><td>The number, a space, then <span class="mono">m²</span> or <span class="mono">ft²</span>. <span class="mono">sqm</span>, <span class="mono">sqft</span>, <span class="mono">m2</span> and a bare <span class="mono">m</span> read the same, the ² may be a superscript run inside the same text object, and a decimal is fine with a point or a comma (<span class="mono">30.5 m²</span> or <span class="mono">30,5 m²</span>). One unit for the whole plan.</td></tr>
             <tr><td>Exhibitor name</td><td>Centred</td><td class="k">Acme Lubricants Ltd</td><td>Optional. <strong>One</strong> text object; two lines inside it are fine. Any text that is not a number or a size is taken as the name, and only the first such text object is read — so a second caption inside the stand ("Shell scheme", "Space only") is lost.</td></tr>
           </tbody>
         </table>
@@ -353,7 +353,7 @@
         <div class="do">
           <h4>Do</h4>
           <p>Keep every existing stand number exactly as it was, whether or not the stand moved or changed size.</p>
-          <p>Draw every stand exactly as the schedule lists it. Where the <span class="mono">note</span> column says <span class="mono">merged from 104 + 106</span>, that is now <em>one</em> stand drawn as one shape under the surviving number; where it says <span class="mono">split from 105</span>, the cells are drawn as separate stands under their own numbers (<span class="mono">105a</span>, <span class="mono">105b</span>). Drawing the old arrangement back does not undo ours — it adds a stand on top of it.</p>
+          <p>Draw every stand exactly as the schedule lists it. Where the <span class="mono">note</span> column says <span class="mono">merged from 104 + 106</span>, that is now <em>one</em> stand drawn as one shape under the surviving number; where it says <span class="mono">split from 105</span>, the cells are drawn as separate stands under their own numbers, exactly as the <span class="mono">stand_number</span> column lists them (<span class="mono">105</span>, <span class="mono">105-2</span>, <span class="mono">105-3</span>). Drawing the old arrangement back does not undo ours — it adds a stand on top of it.</p>
           <p>Give new stands new numbers — an extension takes the next block (<span class="mono">501–540</span>), never numbers freed by a removed stand.</p>
           <p>Keep the artboard, the origin and the scale identical to the previous issue, so a stand that did not move is drawn at the same coordinates. A stand is compared to within one drawing unit, so nudging a row to tidy its alignment reports the whole row as moved.</p>
           <p>Put the version in the filename and send a short change note: added, removed, moved, renumbered.</p>
@@ -428,6 +428,7 @@
         </table>
       </div>
       <p>Groups, layers and transforms are fine — the software resolves them. Rotated stands are fine. What is not fine is anything that turns a number into a picture of a number.</p>
+      <p>One thing the interactive plan cannot yet do is tell apart two stands that are the same rectangle at the same coordinates, moved apart only by the groups they sit in — which is what copying a whole group of stands, or re-using a symbol, exports as. Both stands are read, but on screen the second answers clicks on the first. Expand or ungroup copies so each stand sits at its own coordinates; the check on receipt names any pair it finds.</p>
       <p>Keep the file under <strong>8 MB</strong>; anything larger is refused on upload. It is almost always an embedded logo that takes a plan over: place logos at the size they are drawn rather than embedding the print original.</p>
     </section>
 
@@ -449,7 +450,7 @@
             <tr><td class="box">☐</td><td>Numbers unique</td><td>No number appears on two shapes; none reused from a previous issue</td></tr>
             <tr><td class="box">☐</td><td>Revision stable</td><td>Same artboard, origin and scale; sold stands keep their numbers</td></tr>
             <tr><td class="box">☐</td><td>Existing stands untouched</td><td>On an addition: nothing already on the plan moved, resized or renumbered</td></tr>
-            <tr><td class="box">☐</td><td>Schedule honoured</td><td>Merged blocks drawn as one stand; split cells under their own numbers</td></tr>
+            <tr><td class="box">☐</td><td>Schedule honoured</td><td>Merged blocks drawn as one stand; split cells under their own numbers (<span class="mono">105-2</span>)</td></tr>
             <tr><td class="box">☐</td><td>Area names unchanged</td><td>Every lounge, theatre and track reads letter for letter as the last issue</td></tr>
             <tr><td class="box">☐</td><td>Schedule attached</td><td>A CSV of every stand, same version as the drawing</td></tr>
             <tr><td class="box">☐</td><td>Under 8 MB</td><td>Logos placed at drawn size, not embedded at print resolution</td></tr>
