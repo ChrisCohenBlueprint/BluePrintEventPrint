@@ -1959,13 +1959,42 @@ let filterMatches = null;
 
 const filterActive = () => !!(filter.q || filter.country || filter.activity);
 
-/** Every string a stand can be found by, lowercased once per search. */
+/**
+ * Text as the search compares it: lower case, accents off, one apostrophe.
+ *
+ * The comparison used to be letter-for-letter, so "wurth" — how anyone types
+ * it on an English keyboard — missed "Würth", and "cote d'ivoire" missed
+ * "Côte d’Ivoire" because the country list spells it with a typographic
+ * apostrophe and a keyboard types a straight one. Both sides go through here,
+ * so neither the visitor nor the data has to be spelt "right".
+ */
+function fold(s) {
+  return String(s ?? '').normalize('NFKD').replace(/\p{M}+/gu, '')
+    .replace(/[‘’‚‛′ʼ`´]/g, "'")
+    .toLowerCase();
+}
+
+/**
+ * Does one search term hit this (folded) text?
+ *
+ * Two letters are too few to match INSIDE a word: "us" is how a visitor asks
+ * for the United States, and as a substring it lit "Acme Industries" — and
+ * "de" lit "Golden Delta Trading". So a two-letter term has to be a whole word
+ * (a country code is one; so is "UK"). Anything longer still matches inside a
+ * word, which is what a half-typed name needs.
+ */
+function termHits(t, text) {
+  if (t.length !== 2) return text.includes(t);
+  return text.split(/[^\p{L}\p{N}]+/u).includes(t);
+}
+
+/** Every string a stand can be found by, folded once per search. */
 function haystack(n, b) {
   const parts = [n, b.displayNumber || '', publicCompany(b)];
   const c = countryOf(b.country);
   if (c) parts.push(c.name, c.code, ...(c.aliases || []));
   (b.tags || []).forEach(k => { const t = tagByKey(k); if (t) parts.push(t.label); });
-  return parts.filter(Boolean).join(' ␟ ').toLowerCase();
+  return fold(parts.filter(Boolean).join(' ␟ '));
 }
 
 /**
@@ -1973,13 +2002,14 @@ function haystack(n, b) {
  *
  * Free text is split on whitespace and EVERY term must hit — so "germany base
  * oils" narrows rather than widens, which is what someone typing a second word
- * is asking for. A two-letter term also matches a country code exactly, so "de"
- * finds Germany without "de" matching every company with those letters in it.
+ * is asking for. A two-letter term matches only a whole word or the stand's
+ * country code, so "de" finds Germany without matching every company with
+ * those letters in it (see termHits).
  */
 function computeMatches() {
   if (!filterActive()) return null;
 
-  const terms = filter.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = fold(filter.q).split(/\s+/).filter(Boolean);
   const found = new Set();
 
   Object.entries(booths).forEach(([n, b]) => {
@@ -1990,7 +2020,7 @@ function computeMatches() {
     if (terms.length) {
       const hay  = haystack(n, b);
       const code = (b.country || '').toLowerCase();
-      const ok = terms.every(t => hay.includes(t) || (t.length === 2 && t === code));
+      const ok = terms.every(t => t === code || termHits(t, hay));
       if (!ok) return;
     }
     found.add(n);
@@ -2126,7 +2156,9 @@ let suggestions = [];
 let suggestIndex = -1;
 
 function buildSuggestions(q) {
-  const term = q.trim().toLowerCase();
+  // Folded and matched exactly as the filter is (fold, termHits), so the list
+  // never offers something the plan then refuses to light — or the reverse.
+  const term = fold(q.trim());
   if (term.length < 2) return [];
 
   const out = [];
@@ -2138,21 +2170,21 @@ function buildSuggestions(q) {
     if (b.country) counts.country.set(b.country, (counts.country.get(b.country) || 0) + 1);
     (b.tags || []).forEach(k => counts.activity.set(k, (counts.activity.get(k) || 0) + 1));
     const company = publicCompany(b);
-    if (company && company.toLowerCase().includes(term)) companies.push({ n, company });
+    if (company && termHits(term, fold(company))) companies.push({ n, company });
   });
 
   counts.country.forEach((n, code) => {
     const c = countryOf(code);
     if (!c) return;
-    const hit = c.name.toLowerCase().includes(term)
+    const hit = termHits(term, fold(c.name))
              || c.code.toLowerCase() === term
-             || (c.aliases || []).some(a => a.toLowerCase().includes(term));
+             || (c.aliases || []).some(a => termHits(term, fold(a)));
     if (hit) out.push({ kind: 'country', value: code, label: `${c.flag} ${c.name}`, meta: `${n} stand${n === 1 ? '' : 's'}` });
   });
 
   counts.activity.forEach((n, key) => {
     const t = tagByKey(key);
-    if (t && t.label.toLowerCase().includes(term)) {
+    if (t && termHits(term, fold(t.label))) {
       out.push({ kind: 'activity', value: key, label: t.label, color: t.color, meta: `${n} stand${n === 1 ? '' : 's'}` });
     }
   });
@@ -2160,8 +2192,8 @@ function buildSuggestions(q) {
   // Exhibitors: a name that STARTS with what was typed is what was meant more
   // often than one that merely contains it, so those come first.
   companies.sort((a, b) => {
-    const sa = a.company.toLowerCase().startsWith(term) ? 0 : 1;
-    const sb = b.company.toLowerCase().startsWith(term) ? 0 : 1;
+    const sa = fold(a.company).startsWith(term) ? 0 : 1;
+    const sb = fold(b.company).startsWith(term) ? 0 : 1;
     return sa - sb || a.company.localeCompare(b.company, 'en');
   });
   companies.slice(0, 6).forEach(c =>
@@ -2170,7 +2202,7 @@ function buildSuggestions(q) {
   // A stand number typed straight in.
   Object.keys(booths).forEach(n => {
     if (out.length > 20) return;
-    if (String(shownN(n)).toLowerCase() === term || n.toLowerCase() === term) {
+    if (fold(shownN(n)) === term || fold(n) === term) {
       if (!out.some(o => o.kind === 'booth' && o.value === n)) {
         out.push({ kind: 'booth', value: n, label: `Stand ${shownN(n)}`, meta: publicCompany(booths[n]) || STATUS_LABEL[booths[n]?.status] || '' });
       }
