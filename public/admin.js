@@ -2459,13 +2459,20 @@ document.getElementById('split-form')?.addEventListener('submit', (e) => {
 });
 
 // ─── Custom Split (your own numbers + sizes) ──────────────────────────────────
+// A size is kept to the hundredth, and the parts must add up to the stand
+// exactly — to the hundredth, as the server now requires. The box stepped in
+// whole units and a total out by as much as a whole unit was let through, only
+// for the server to refuse it.
+const round2 = (n) => Math.round(n * 100) / 100;
+const sizesMatch = (sum, total) => Math.abs(sum - total) < 0.005;
+
 const csplitRows = document.getElementById('csplit-rows');
 function csplitAddRow() {
   if (!csplitRows || csplitRows.children.length >= 8) return;
   const row = document.createElement('div');
   row.className = 'csplit-row';
   const num = document.createElement('input');  num.className = 'csplit-num';  num.type = 'text';   num.placeholder = 'Number';
-  const size = document.createElement('input'); size.className = 'csplit-size'; size.type = 'number'; size.min = '1'; size.step = '1'; size.placeholder = 'Size';
+  const size = document.createElement('input'); size.className = 'csplit-size'; size.type = 'number'; size.min = '0.01'; size.step = '0.01'; size.placeholder = 'Size';
   const del = document.createElement('button');  del.type = 'button'; del.className = 'csplit-del'; del.title = 'Remove'; del.textContent = '×';
   row.append(num, size, del);
   csplitRows.appendChild(row);
@@ -2477,8 +2484,8 @@ function csplitUpdateTally() {
   let sum = 0; csplitRows.querySelectorAll('.csplit-size').forEach(i => { sum += Number(i.value) || 0; });
   if (!total) { tally.textContent = 'Select a stand to see its total size.'; tally.className = 'csplit-tally'; return; }
   const left = total - sum;
-  tally.textContent = `Total ${total} ${UNIT} · placed ${sum} · left ${left}`;
-  tally.className = 'csplit-tally' + (left === 0 ? ' ok' : (left < 0 ? ' over' : ''));
+  tally.textContent = `Total ${total} ${UNIT} · placed ${round2(sum)} · left ${round2(left)}`;
+  tally.className = 'csplit-tally' + (sizesMatch(sum, total) ? ' ok' : (left < 0 ? ' over' : ''));
 }
 if (csplitRows) {
   document.getElementById('csplit-add').addEventListener('click', () => { csplitAddRow(); csplitUpdateTally(); });
@@ -2501,7 +2508,10 @@ if (csplitRows) {
       });
       if (parts.length < 2) return adminToast('Enter at least two parts, each with a number and a size.', 'error');
       const total = csplitTotal(), sum = parts.reduce((acc, p) => acc + p.sqm, 0);
-      if (Math.abs(sum - total) > 1) return adminToast(`Sizes must add up to ${total} ${UNIT} — you have ${sum}.`, 'error');
+      if (!sizesMatch(sum, total)) {
+        return adminToast(`The parts must add up to exactly ${total} ${UNIT}, the size of the stand — they come to ` +
+          `${round2(sum)} ${UNIT}, ${round2(Math.abs(total - sum))} ${UNIT} ${sum > total ? 'too much' : 'short'}.`, 'error');
+      }
       if (!await confirmDialog(
         `Split stand ${shownN(boothNumber)} (${total} ${UNIT}) into:\n\n` +
         parts.map(p => `    ${p.number} — ${p.sqm} ${UNIT}`).join('\n') +
@@ -3020,10 +3030,18 @@ function updateOverview() {
   const availSqm = avail.reduce((s, b) => s + (b.sqm || 0), 0);
   const soldSqm = sold.reduce((s, b) => s + (b.sqm || 0), 0);
   const heldSqm = held.reduce((s, b) => s + (b.sqm || 0), 0);
-  const earnedRev = sold.reduce((s, b) => s + (b.listPrice || 0), 0);
+  // A booked stand is worth the price agreed for it, where one was agreed, and
+  // its list price only where none was — the way the server's stats() counts
+  // it. Revenue Earned summed list prices whatever the deal said, so a stand
+  // sold at a discount was counted at a price nobody is paying, and this
+  // panel disagreed with the one drawn from the server's figures.
+  const agreed = (b) => (dealOf(b).actualPrice != null ? Number(dealOf(b).actualPrice) || 0 : (b.listPrice || 0));
+  const earnedRev = sold.reduce((s, b) => s + agreed(b), 0);
   const availRev = avail.reduce((s, b) => s + (b.listPrice || 0), 0);
-  const heldRev = held.reduce((s, b) => s + (b.listPrice || 0), 0);
-  const totalRev = all.reduce((s, b) => s + (b.listPrice || 0), 0);
+  const heldRev = held.reduce((s, b) => s + agreed(b), 0);
+  // The floor's value is what its three rows add up to, so the total row and
+  // the rows above it agree.
+  const totalRev = earnedRev + heldRev + availRev;
   const fillPct = totalSqm > 0 ? Math.round(((soldSqm + heldSqm) / totalSqm) * 100) : 0;
   const soldPct = totalSqm > 0 ? Math.round((soldSqm / totalSqm) * 100) : 0;
   const heldPct = totalSqm > 0 ? Math.round((heldSqm / totalSqm) * 100) : 0;
