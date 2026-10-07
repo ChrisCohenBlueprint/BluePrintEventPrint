@@ -1,3 +1,13 @@
+// A link to one lead — /admin/lna#lead=… from a Salesforce record or an email —
+// reaches this page with its #lead on the address, because the browser keeps a
+// fragment through the server's redirect to sign-in. The server's `next` never
+// sees it (fragments are not sent), so it is put back here, or the person signs
+// in and lands on the console's front page instead of the lead they clicked.
+function onward(next) {
+  const frag = /^#lead=[a-f0-9]{24}$/i.test(location.hash) ? location.hash : '';
+  return frag && !String(next).includes('#') ? next + frag : next;
+}
+
 // Admin sign-in: password, then a 2FA step that is either first-time enrolment
 // or a returning-user code check. The server decides which.
 (function () {
@@ -148,7 +158,7 @@
     if (status === 440) return enrolExpired(data.reason === 'too_many_codes' ? data.error : undefined);
     if (!ok) return showError(data.error || 'That code did not match.');
     stopEnrolCountdown();
-    location.href = data.next || '/admin';
+    location.href = onward(data.next || '/admin');
   });
 
   // Starting over is offered rather than left to a reload, and it says what it
@@ -182,7 +192,7 @@
         : 'That sign-in took too long and timed out. Enter your password again.');
     }
     if (!ok) return showError(data.error || 'Incorrect code.');
-    location.href = data.next || '/admin';
+    location.href = onward(data.next || '/admin');
   });
 
   // Toggle to recovery-code entry if the phone is lost.

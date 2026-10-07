@@ -40,6 +40,12 @@ each with its own artwork, stands, settings and proposals.
   and — the valuable part — the visitor's whole browsing history from *before*
   they identified themselves, joined retroactively to the enquiry.
 * Sponsorship catalogue and partner logo strip, with CSV import/export.
+* **Enquiries to Make → Salesforce and Dotdigital.** Every enquiry is POSTed to
+  a Make webhook the moment it arrives (Settings → Enquiries to Make; the owner
+  pastes the address, anyone can send a test). A send Make does not take is
+  retried for about a day, and each lead says whether it got through, with a
+  Resend. The card carries the setup steps and the Salesforce/Dotdigital field
+  mapping; each enquiry links back to itself in the console.
 * Analytics (demand per stand, funnel) and an audit trail of every change.
 * Team management (owner only): create admin and sales accounts, reset a
   colleague's password or 2FA, change tiers.

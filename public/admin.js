@@ -161,8 +161,8 @@ function showAdminSection(sec) {
   if (sec === 'floorplan' && !svgDoc) loadAdminSVG();
   if (sec === 'bookings') renderBookingsTable();
   if (sec === 'tools') { populateToolDropdowns(); loadShows(); loadHistory(); }
-  if (sec === 'settings') loadPlans();
-  if (sec === 'leads') loadLeads();
+  if (sec === 'settings') { loadPlans(); loadMakeCard(); }
+  if (sec === 'leads') { loadLeads(); fetchMakeHook(); }
   if (sec === 'analytics') loadAnalytics();
   if (sec === 'sponsors') loadSponsorsAdmin();
   if (sec === 'team') { loadTeam(); fillRoster(); syncRoleFields(); }
@@ -3474,6 +3474,226 @@ const EVENT_LABEL = {
   'inquiry.submit': 'Sent this enquiry', 'consent.granted': 'Accepted tracking',
 };
 
+// ─── Enquiries to Make (→ Salesforce, Dotdigital) ───────────────────────────
+// Every enquiry is POSTed to a Make webhook as it arrives; the scenario behind
+// it creates the Salesforce lead and the Dotdigital contact. The server retries
+// what Make does not take, and records the outcome on the enquiry — this is
+// where that is set up, and where a lead says whether it got through.
+let makeHook = null;
+
+async function fetchMakeHook() {
+  try { makeHook = await api('/api/integrations/enquiry-webhook'); }
+  catch { makeHook = null; }
+  return makeHook;
+}
+
+const shortWhen = (d) => new Date(d).toLocaleString('en-GB',
+  { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+const MAKE_HELP = `
+  <details class="make-help">
+    <summary>Setting it up in Make</summary>
+    <ol>
+      <li>In Make, create a scenario and add <b>Webhooks › Custom webhook</b>. Add a new webhook, name it (e.g. "Floorplan enquiries"), save, and copy its address.</li>
+      <li>Paste the address above and press <b>Save</b>.</li>
+      <li>On the webhook in Make, press <b>Redetermine data structure</b> — it starts listening — then press <b>Send a test enquiry</b> here. Make now knows every field.</li>
+      <li>Add <b>Salesforce › Create a Record</b>, record type <b>Lead</b>, and map the fields below.</li>
+      <li>Add <b>Dotdigital</b>, adding the contact to the address book you want, and map the fields below.</li>
+      <li>Put a filter straight after the webhook: <code>test</code> <i>Equal to</i> <code>false</code>, so test enquiries never become leads.</li>
+      <li>Turn the scenario on, set to run <b>Immediately</b>.</li>
+    </ol>
+    <table>
+      <tr><th>Salesforce Lead</th><th>From the enquiry</th></tr>
+      <tr><td>First Name</td><td><code>firstName</code></td></tr>
+      <tr><td>Last Name</td><td><code>leadLastName</code> — never empty</td></tr>
+      <tr><td>Company</td><td><code>leadCompany</code> — never empty</td></tr>
+      <tr><td>Email · Phone · Title</td><td><code>email</code> · <code>phone</code> · <code>jobTitle</code></td></tr>
+      <tr><td>Lead Source</td><td><code>leadSource</code></td></tr>
+      <tr><td>Description</td><td><code>description</code> — event, stands with sizes, sponsorship, areas, message, and a link back to the lead here</td></tr>
+    </table>
+    <table>
+      <tr><th>Dotdigital contact</th><th>From the enquiry</th></tr>
+      <tr><td>Email</td><td><code>email</code></td></tr>
+      <tr><td>FIRSTNAME · LASTNAME · FULLNAME</td><td><code>firstName</code> · <code>lastName</code> · <code>name</code></td></tr>
+      <tr><td>COMPANY (if you have the field)</td><td><code>company</code></td></tr>
+    </table>
+    Also there for custom fields or a router per event: <code>eventName</code>, <code>eventId</code>, <code>standList</code>,
+    <code>totalSize</code>, <code>listPriceTotal</code>, <code>currency</code>, <code>sponsorshipNames</code>, <code>areaNames</code>,
+    <code>message</code>, <code>kind</code> (<i>enquiry</i> or <i>waitlist</i>), <code>enquiryId</code> and <code>consoleUrl</code>.
+  </details>`;
+
+async function loadMakeCard() {
+  const card = document.getElementById('make-card');
+  if (!card) return;
+  const h = await fetchMakeHook();
+  card.hidden = false;
+  card.replaceChildren();
+
+  const head = document.createElement('div');
+  head.className = 'plan-head';
+  const name = document.createElement('span');
+  name.className = 'plan-name';
+  name.textContent = 'Enquiries to Make';
+  const badge = document.createElement('span');
+  badge.className = 'plan-badge' + (h && h.connected ? '' : ' is-off');
+  badge.textContent = h && h.connected ? 'Connected' : 'Not connected';
+  head.append(name, badge);
+  card.appendChild(head);
+
+  const about = document.createElement('p');
+  about.className = 'plan-meta';
+  about.textContent = 'Every enquiry, from every event, is sent to Make the moment it arrives, so a Make scenario can create the ' +
+    'Salesforce lead and add the contact to Dotdigital. If Make does not answer it is tried again for about a day, ' +
+    'and each enquiry under Leads says whether it got through.';
+  card.appendChild(about);
+
+  if (!h) {
+    const bad = document.createElement('p');
+    bad.className = 'make-bad';
+    bad.textContent = 'Could not read the Make connection — reload to try again.';
+    card.appendChild(bad);
+    return;
+  }
+
+  // How it is going.
+  const lines = [];
+  if (h.connected) {
+    lines.push(['make-ok', h.lastSentAt ? `Last enquiry sent ${shortWhen(h.lastSentAt)}.` : 'Connected. No enquiry has been sent yet.']);
+    if (h.source === 'env') lines.push(['plan-meta', 'This address is set on the server (NOTIFY_WEBHOOK). Saving one here replaces it.']);
+  }
+  if (h.retrying) lines.push(['make-warn', `${h.retrying} ${h.retrying === 1 ? 'enquiry is' : 'enquiries are'} waiting to be tried again.`]);
+  if (h.gaveUp) lines.push(['make-bad', `${h.gaveUp} ${h.gaveUp === 1 ? 'enquiry' : 'enquiries'} could not be delivered. Open ${h.gaveUp === 1 ? 'it' : 'them'} under Leads and press Resend once Make is fixed.`]);
+  for (const [cls, text] of lines) {
+    const p = document.createElement('p');
+    p.className = cls;
+    p.textContent = text;
+    card.appendChild(p);
+  }
+
+  const row = document.createElement('div');
+  row.className = 'make-row';
+  if (h.editable) {
+    const input = document.createElement('input');
+    input.type = 'url';
+    input.className = 'admin-input';
+    input.placeholder = 'https://hook.eu1.make.com/…';
+    input.value = h.source === 'settings' ? (h.url || '') : '';
+    input.setAttribute('aria-label', 'Make webhook address');
+    const save = document.createElement('button');
+    save.className = 'admin-btn success';
+    save.textContent = 'Save';
+    save.onclick = () => withPending(save, async () => {
+      try {
+        const r = await api('/api/integrations/enquiry-webhook', { method: 'PUT', body: JSON.stringify({ url: input.value }) });
+        adminToast(r.connected ? 'Saved. New enquiries now go to Make.' : 'Disconnected. Enquiries are no longer sent to Make.', 'ok');
+        loadMakeCard();
+      } catch (e) { adminToast(e.message || 'Could not save the address.', 'error'); }
+    });
+    row.append(input, save);
+    if (h.source === 'settings') {
+      const off = document.createElement('button');
+      off.className = 'admin-btn';
+      off.textContent = 'Disconnect';
+      off.onclick = async () => {
+        if (!await confirmDialog('Stop sending enquiries to Make? They will still arrive here under Leads, but Salesforce and Dotdigital will not hear of them until it is connected again.',
+          { title: 'Disconnect Make', confirmLabel: 'Disconnect', danger: true })) return;
+        input.value = '';
+        save.click();
+      };
+      row.appendChild(off);
+    }
+  } else {
+    const note = document.createElement('span');
+    note.className = 'plan-meta';
+    note.textContent = h.connected ? `Sending to ${h.url}. Only the owner account can change where enquiries go.`
+                                   : 'Only the owner account can connect Make.';
+    row.appendChild(note);
+  }
+  if (h.connected) {
+    const test = document.createElement('button');
+    test.className = 'admin-btn';
+    test.innerHTML = '<i data-lucide="send"></i> Send a test enquiry';
+    test.onclick = () => withPending(test, async () => {
+      try {
+        const r = await api('/api/integrations/enquiry-webhook/test', { method: 'POST', body: '{}' });
+        adminToast(`Test enquiry sent to ${r.to}. It is marked test: true, so your filter keeps it out of Salesforce.`, 'ok');
+      } catch (e) { adminToast(e.message || 'The test did not get through.', 'error'); }
+    });
+    row.appendChild(test);
+  }
+  card.appendChild(row);
+
+  const help = document.createElement('div');
+  help.innerHTML = MAKE_HELP;
+  card.appendChild(help);
+  lucide.createIcons();
+}
+
+/** A lead's line about Make, and the button that sends it again. */
+function renderLeadDelivery(box, lead, id) {
+  box.replaceChildren();
+  const d = lead.delivery || null;
+  const connected = !!(makeHook && makeHook.connected);
+  if (!d && !connected) { box.hidden = true; return; }
+  box.hidden = false;
+
+  const label = document.createElement('span');
+  label.className = 'lead-field-label';
+  label.textContent = 'Make';
+  const text = document.createElement('span');
+  if (!d) {
+    text.className = 'plan-meta';
+    text.textContent = 'Not sent — it arrived before Make was connected.';
+  } else if (d.status === 'sent') {
+    text.className = 'make-ok';
+    text.textContent = `Sent ${shortWhen(d.sentAt)}`;
+  } else if (d.status === 'sending') {
+    text.className = 'plan-meta';
+    text.textContent = 'Being sent…';
+  } else if (d.nextAttemptAt) {
+    text.className = 'make-warn';
+    text.textContent = `Not in Make yet — ${d.error || 'no answer'}. Trying again at ${shortWhen(d.nextAttemptAt)}.`;
+  } else {
+    text.className = 'make-bad';
+    text.textContent = `Not delivered — ${d.error || 'no answer'}.`;
+  }
+  box.append(label, text);
+
+  if (!connected) return;
+  const btn = document.createElement('button');
+  btn.className = 'admin-btn';
+  btn.style.cssText = 'font-size:12px;padding:5px 10px';
+  const sent = d && d.status === 'sent';
+  btn.textContent = sent ? 'Send again' : d ? 'Resend' : 'Send to Make';
+  btn.onclick = async () => {
+    if (sent && !await confirmDialog('Make already has this enquiry. Sending it again will create a second Salesforce lead unless your scenario checks for one.',
+      { title: 'Send to Make again', confirmLabel: 'Send again' })) return;
+    await withPending(btn, async () => {
+      try {
+        const r = await api(`/api/inquiries/${encodeURIComponent(id)}/deliver`, { method: 'POST', body: '{}' });
+        lead.delivery = r.delivery;
+        adminToast('Sent to Make.', 'ok');
+      } catch (e) {
+        adminToast(e.message || 'Could not send it to Make.', 'error');
+        try { lead.delivery = (await api(`/api/inquiries/${encodeURIComponent(id)}`)).delivery || lead.delivery; } catch { /* keep what we had */ }
+      }
+      renderLeadDelivery(box, lead, id);
+    });
+  };
+  box.appendChild(btn);
+}
+
+// A link to one lead — the consoleUrl Make puts on the Salesforce record —
+// opens this console on that lead.
+function openLinkedLead() {
+  const m = /^#lead=([a-f0-9]{24})$/i.exec(location.hash || '');
+  if (!m) return;
+  showAdminSection('leads');
+  openLead(m[1]);
+}
+window.addEventListener('hashchange', openLinkedLead);
+setTimeout(openLinkedLead, 0);
+
 async function openLead(id) {
   const panel = document.getElementById('lead-detail');
   panel.textContent = 'Loading…';
@@ -3569,6 +3789,13 @@ async function openLead(id) {
   });
   statusRow.appendChild(btns);
   panel.appendChild(statusRow);
+
+  // Whether this enquiry reached Make — and so Salesforce and Dotdigital.
+  const makeBox = document.createElement('div');
+  makeBox.className = 'lead-make';
+  panel.appendChild(makeBox);
+  if (!makeHook) await fetchMakeHook();
+  renderLeadDelivery(makeBox, lead, id);
 
   // ── Forward to a salesperson ────────────────────────────────────────────────
   const fwd = document.createElement('div');

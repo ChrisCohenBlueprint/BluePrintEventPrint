@@ -188,8 +188,10 @@ async function create({ name, firstName, lastName, email, phone, company, jobTit
   // Fire the outbound notification without blocking the response. Its own error
   // handling ensures a webhook failure never affects the enquiry; the catch is
   // for anything that escapes it.
+  // With its id: the send is recorded on the stored enquiry, so the console can
+  // say whether it reached Make.
   Promise.resolve()
-    .then(() => require('../services/notify').newInquiry(doc))
+    .then(() => require('../services/notify').newInquiry({ ...doc, _id: insertedId }))
     .catch(e => console.warn(`Enquiry ${insertedId}: notification failed:`, e.message));
 
   // Retroactively attach every event this visitor generated before identifying

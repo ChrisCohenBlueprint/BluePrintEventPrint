@@ -397,6 +397,31 @@ body {
   padding: 8px 10px; border-radius: 8px; font-size: 11px; line-height: 1.5; color: var(--text);
   background: rgba(148,163,184,.10); border: 1px solid rgba(148,163,184,.28);
 }
+/* Enquiries to Make: one card under the events, because it serves them all. */
+.make-card {
+  display: flex; flex-direction: column; gap: 10px; margin-top: 20px; max-width: 760px;
+  padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.03);
+}
+.make-card[hidden] { display: none; }
+.make-card .plan-badge.is-off { background: rgba(148,163,184,.16); color: var(--muted); }
+.make-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.make-row .admin-input { flex: 1 1 320px; min-width: 0; }
+.make-ok   { font-size: 12px; color: var(--green); }
+.make-warn { font-size: 12px; color: var(--orange); line-height: 1.5; }
+.make-bad  { font-size: 12px; color: var(--red); line-height: 1.5; }
+.make-help { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.make-help summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.make-help ol { margin: 8px 0 8px 18px; padding: 0; }
+.make-help li { margin-bottom: 4px; }
+.make-help code { font-size: 11px; padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,0.07); color: var(--text); }
+.make-help table { border-collapse: collapse; margin: 6px 0 10px; width: 100%; table-layout: fixed; }
+.make-help th:first-child, .make-help td:first-child { width: 36%; }
+.make-help th, .make-help td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.make-help th { color: var(--text); font-weight: 600; }
+/* A lead's line about Make: sent, waiting to be retried, or not delivered. */
+.lead-make { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; }
+.lead-make .lead-field-label { margin: 0; }
+
 /* The last card: the way to the next event. */
 .plan-card.plan-add { border-style: dashed; background: transparent; justify-content: center; }
 .plan-add-open {

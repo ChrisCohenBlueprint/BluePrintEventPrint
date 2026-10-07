@@ -311,6 +311,8 @@ async function start() {
   // Every show's caches, not just the default — see sockets.refreshAll.
   await sockets.refreshAll();
   sockets.register(io);
+  // Enquiries Make did not take the first time are tried again on a back-off.
+  require('./server/services/notify').startRetryLoop();
 
   server.listen(config.port, () =>
     console.log(`BluePrint EventPrint — port ${config.port}  ·  show ${config.showId}`));

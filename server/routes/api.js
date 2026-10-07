@@ -1249,6 +1249,61 @@ router.post('/inquiries/:id/assign', async (req, res, next) => {
  * ready-to-open email so it can be sent today with no mail server: the browser
  * opens it pre-addressed to the assigned person, copying the manager.
  */
+// ─── Enquiries to Make (→ Salesforce, Dotdigital) ─────────────────────────────
+// One webhook for every event: each enquiry carries its event's id and name, so
+// a single Make scenario can route them. Any admin can see whether it is
+// connected and send a test; only the owner can change where enquiries go,
+// because that address receives every visitor's contact details.
+router.get('/integrations/enquiry-webhook', async (req, res, next) => {
+  try {
+    const notify = require('../services/notify');
+    const s = await notify.status();
+    const owner = req.admin?.role === 'owner';
+    res.json({
+      connected: !!s.url,
+      url: owner ? s.url : notify.masked(s.url),
+      source: s.source, updatedAt: s.updatedAt, updatedBy: s.updatedBy,
+      editable: owner,
+      retrying: s.retrying, gaveUp: s.gaveUp, lastSentAt: s.lastSentAt,
+    });
+  } catch (e) { next(e); }
+});
+
+router.put('/integrations/enquiry-webhook', ownerOnly('change where enquiries are sent'), async (req, res, next) => {
+  try {
+    const notify = require('../services/notify');
+    const r = await notify.setHook(req.body?.url, { actor: req.admin?.user || null });
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    track({ type: 'integration.webhook_set', boothNumber: null, actor: req.admin?.user || 'unknown',
+            meta: { to: r.url ? new URL(r.url).host : null } });
+    res.json({ ok: true, connected: !!r.url });
+  } catch (e) { next(e); }
+});
+
+router.post('/integrations/enquiry-webhook/test', async (req, res, next) => {
+  try {
+    const r = await require('../services/notify').sendTest({ actor: req.admin?.user || null });
+    if (r.reason === 'not_configured') return res.status(400).json({ error: 'No Make address is saved yet.' });
+    if (!r.ok) return res.status(502).json({ error: `The test did not get through — ${r.error}.` });
+    res.json({ ok: true, to: r.to, status: r.status });
+  } catch (e) { next(e); }
+});
+
+// Send one enquiry to Make now — again, or for the first time.
+router.post('/inquiries/:id/deliver', async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
+    // This event's enquiry only, as every other lead route.
+    const lead = await inquiries.get(new ObjectId(req.params.id));
+    if (!lead) return res.status(404).json({ error: 'Lead not found.' });
+    const r = await require('../services/notify').deliver(lead._id, { manual: true });
+    if (r.reason === 'not_configured') return res.status(400).json({ error: 'No Make address is saved yet — add it under Settings.' });
+    if (r.reason === 'busy') return res.status(409).json({ error: 'This enquiry is being sent right now. Give it a moment.' });
+    if (!r.ok) return res.status(502).json({ error: `Not sent — ${r.error}.`, delivery: r.delivery });
+    res.json({ ok: true, delivery: r.delivery });
+  } catch (e) { next(e); }
+});
+
 router.post('/inquiries/:id/send', async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid id' });
