@@ -29,13 +29,17 @@ each with its own artwork, stands, settings and proposals.
   accepts — and retention is enforced by a TTL index, not by policy.
 * Designed to be embedded in the marketing site in an iframe (`?embed=1`).
 
-**Admin console — `/admin`, `/admin/:show`** (role `admin` or `owner`)
+**Admin console — `/admin`, `/admin/:show`** (roles `operations`, `admin`, `owner`)
 * Book, hold (24h, really enforced), release and re-price stands; record the
   negotiated price and internal notes against each one.
 * Merge, split, move and renumber stands when the hall layout changes.
 * Upload an event's floorplan SVG and import its stands straight out of the
   artwork — number, size and status are read from the drawing. The upload is
   scored against `docs/floorplan-artwork-spec.html` as a report, never a gate.
+* **The floorplan belongs to Operations.** Only `operations` and the owner may
+  sell, release a sale, move, merge, split, renumber, remove or re-upload. An
+  `admin` has the rest of the console, and on the plan can only put a stand on
+  hold, extend the hold, and take it off again.
 * Leads: the enquiry pipeline (new → contacted → won/lost), assignment to a rep,
   and — the valuable part — the visitor's whole browsing history from *before*
   they identified themselves, joined retroactively to the enquiry.
@@ -47,8 +51,8 @@ each with its own artwork, stands, settings and proposals.
   Resend. The card carries the setup steps and the Salesforce/Dotdigital field
   mapping; each enquiry links back to itself in the console.
 * Analytics (demand per stand, funnel) and an audit trail of every change.
-* Team management (owner only): create admin and sales accounts, reset a
-  colleague's password or 2FA, change tiers.
+* Team management (owner only): create operations, admin and sales accounts,
+  reset a colleague's password or 2FA, change tiers.
 
 **Sales dashboard — `/sales`** (role `sales`, plus admins and the owner)
 * Remaining sponsorship and available stands only — no company names, no
@@ -58,8 +62,8 @@ each with its own artwork, stands, settings and proposals.
   quotes a stand that sold this morning. See
   [docs/sales-dashboard.md](docs/sales-dashboard.md).
 
-**Accounts.** Real per-person accounts in three tiers — `owner`, `admin`,
-`sales`. Sign-in is password + TOTP (any authenticator app), with one-time
+**Accounts.** Real per-person accounts in four tiers — `owner`, `operations`,
+`admin`, `sales`. Sign-in is password + TOTP (any authenticator app), with one-time
 recovery codes issued at enrolment and a one-time invite code for a new
 account's first login. The session is a signed HttpOnly cookie, 12 hours;
 signing out revokes that session immediately, and changing a password, resetting

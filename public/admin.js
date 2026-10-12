@@ -17,6 +17,28 @@ const { esc, cap, money, api, emitAck, withPending, askSecret, confirmDialog, as
 let currentUser = null;
 let currentRole = null;
 
+// Operations and the owner run the floorplan. Any other console account may
+// only put stands on hold, extend a hold or take one off; the server refuses
+// the rest (PLAN_ROLES in auth.js). body.hold-only hides what the markup draws,
+// and the builders below ask holdOnly() for what they draw themselves. Until
+// the role is known nothing is hidden, as with the owner-only controls.
+const PLAN_EDITORS = ['owner', 'operations'];
+const holdOnly = () => currentRole !== null && !PLAN_EDITORS.includes(currentRole);
+const PLAN_NOTE = 'Only Operations can change the floorplan.';
+
+/** Repaint what depends on the role, once /api/me has said what it is. */
+function applyPlanRole() {
+  const on = holdOnly();
+  if (document.body.classList.contains('hold-only') === on) return;
+  document.body.classList.toggle('hold-only', on);
+  // Tools is all plan changes (and the owner's events), so it is not offered.
+  if (on && document.getElementById('section-tools')?.classList.contains('active')) showAdminSection('floorplan');
+  if (on) clearMultiSelect();
+  if (selectedAdminId) refreshStandPanel();
+  if (document.getElementById('section-bookings')?.classList.contains('active')) renderBookingsTable();
+  if (document.getElementById('section-settings')?.classList.contains('active')) loadPlans();
+}
+
 /**
  * Confirm the session is still ours, and act on it if it is not.
  *
@@ -40,6 +62,7 @@ async function checkSession({ quiet = false } = {}) {
     currentRole = u.role;
     document.getElementById('nav-username').textContent = u.user;
     if (u.home && u.home !== '/admin') { location.href = u.home; return false; }
+    applyPlanRole();
     return true;
   } catch (e) {
     // api() has already navigated away on a 401; anything else is a genuine
@@ -146,6 +169,7 @@ const sectionTitles = {
 };
 
 function showAdminSection(sec) {
+  if (sec === 'tools' && holdOnly()) sec = 'floorplan';   // nothing there they may use
   document.querySelectorAll('.nav-link').forEach(l => {
     const on = l.dataset.section === sec;
     l.classList.toggle('active', on);
@@ -555,6 +579,12 @@ function renderAdminAreaPanel(key) {
   badge.className = `aba-badge ${taken ? 'badge-sold' : 'badge-available'}`;
 
   const body = document.getElementById('ara-body');
+  if (holdOnly()) {
+    const p = document.createElement('p');
+    p.className = 'ara-field-lbl';
+    p.textContent = `${a.sponsor ? `Sponsor: ${a.sponsor}.` : 'No sponsor yet.'} ${PLAN_NOTE}`;
+    return body.replaceChildren(p);
+  }
   body.replaceChildren(areaEditor(a));
 }
 
@@ -710,6 +740,9 @@ function multiEl(id) { return svgDoc.querySelector(`[data-booth="${CSS.escape(id
 
 function toggleMultiSelect(id) {
   if (!id || !booths[id]) return;
+  // Shift-click gathers stands to merge or reset; without plan rights it is an
+  // ordinary click.
+  if (holdOnly()) return selectAdminBooth(id);
   if (splitUI.id) exitSplitMode();                 // one thing at a time on the plan
   // Seed the set with the current single selection so shift-clicking a second
   // stand grows the pair the admin already had focused.
@@ -934,8 +967,8 @@ function savePanelNumber() {
 (function wirePanelNumber() {
   const btn = document.getElementById('aba-id'), input = document.getElementById('aba-id-input'), pencil = document.getElementById('aba-id-edit');
   if (!btn || !input) return;
-  btn.addEventListener('click', () => { if (selectedAdminId) panelNumberEdit(true); });
-  pencil?.addEventListener('click', () => { if (selectedAdminId) panelNumberEdit(true); });
+  btn.addEventListener('click', () => { if (selectedAdminId && !holdOnly()) panelNumberEdit(true); });
+  pencil?.addEventListener('click', () => { if (selectedAdminId && !holdOnly()) panelNumberEdit(true); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); savePanelNumber(); }
     else if (e.key === 'Escape') { e.preventDefault(); panelNumberEdit(false); }
@@ -1375,7 +1408,7 @@ function paintDealState(b) {
   // under it, so what was typed is not locked away mid-word.
   f.price.disabled = !editable && !typed.price;
   f.notes.disabled = !editable && !typed.notes;
-  const why = editable ? '' : 'Only a sold or held stand can carry a deal price or notes.';
+  const why = dealShut(b);
   f.price.title = why; f.notes.title = why;
   if (f.note) {
     const moved = changedHands(b) && (typed.price || typed.notes);
@@ -1396,7 +1429,7 @@ async function saveDealDetails() {
   // The server checks this too. Saying it here as well costs nothing, and
   // does not depend on which side of the race the broadcast landed.
   if (changedHands(b)) return adminToast('This stand has changed hands since you opened it — reopen it before saving.', 'error');
-  if (!dealEditable(b)) return adminToast('Only a sold or held stand can carry a deal price or notes.', 'error');
+  if (!dealEditable(b)) return adminToast(dealShut(b), 'error');
   const typed = dealTyped();
   if (!typed.price && !typed.notes) return adminToast('Nothing has been changed, so there is nothing to save.', 'ok');
 
@@ -1600,9 +1633,13 @@ function bookingRows() {
 
 /** A deal price or note only exists on a sold or held stand — the server
  *  refuses the write on any other, so offering the box was offering a failure. */
-const dealEditable = (b) => b.status === 'sold' || b.status === 'held';
+const dealEditable = (b) => !holdOnly() && (b.status === 'sold' || b.status === 'held');
+/** Why a stand's deal boxes are shut, or '' when they are open. */
+const dealShut = (b) => (dealEditable(b) ? ''
+  : holdOnly() ? `${PLAN_NOTE} Ask them to change a price or notes.`
+  : 'Only a sold or held stand can carry a deal price or notes.');
 
-function dealInput({ type, cls, placeholder, width, field, booth, value, enabled, label }) {
+function dealInput({ type, cls, placeholder, width, field, booth, value, enabled, why, label }) {
   const inp = document.createElement('input');
   inp.type = type;
   inp.className = `admin-input ${cls}`;
@@ -1614,7 +1651,7 @@ function dealInput({ type, cls, placeholder, width, field, booth, value, enabled
   // Remembered so a rejected save can put back exactly what was on screen.
   inp.dataset.prev = value;
   inp.disabled = !enabled;
-  inp.title = enabled ? '' : 'Only a sold or held stand can carry a deal price or notes.';
+  inp.title = why;
   // Every one of these boxes was unlabelled — a screen reader announced eight
   // identical "edit text" fields per row with nothing to tell them apart.
   inp.setAttribute('aria-label', `${label} for stand ${booth}`);
@@ -1644,7 +1681,7 @@ function buildBookingRow(b) {
   const priceTd = cell(tr); priceTd.dataset.cell = 'price';
   priceTd.appendChild(dealInput({
     type: 'number', cls: 'deal-price', placeholder: 'Price…', width: 80,
-    field: 'price', booth: n, value: d.actualPrice ?? '', enabled: dealEditable(b),
+    field: 'price', booth: n, value: d.actualPrice ?? '', enabled: dealEditable(b), why: dealShut(b),
     label: 'Deal price',
   }));
 
@@ -1665,7 +1702,7 @@ function buildBookingRow(b) {
   const notesTd = cell(tr); notesTd.dataset.cell = 'notes';
   notesTd.appendChild(dealInput({
     type: 'text', cls: 'deal-notes', placeholder: 'Notes…', width: 140,
-    field: 'notes', booth: n, value: d.notes ?? '', enabled: dealEditable(b),
+    field: 'notes', booth: n, value: d.notes ?? '', enabled: dealEditable(b), why: dealShut(b),
     label: 'Notes',
   }));
 
@@ -1685,14 +1722,20 @@ function paintCompanyCell(td, company) {
   td.appendChild(dash);
 }
 
+/** What a row's buttons were drawn for: the status, and whether plan rights. */
+const actionKey = (b) => `${b.status}${holdOnly() ? ':hold-only' : ''}`;
+
 function paintActionCell(td, b) {
   const n = b.boothNumber;
   td.replaceChildren();
-  td.dataset.forStatus = b.status;
-  if (b.status !== 'sold')      actionButton(td, 'Book',    'success', 'book',    n);
+  td.dataset.forStatus = actionKey(b);
+  // Without plan rights a row offers holds only: no Book, and Release only
+  // takes a hold off — a sale is Operations' to undo.
+  const limited = holdOnly();
+  if (b.status !== 'sold' && !limited) actionButton(td, 'Book', 'success', 'book', n);
   if (b.status === 'available') actionButton(td, 'Hold',    'warning', 'hold',    n);
   if (b.status === 'held')      actionButton(td, '+24h',    '',        'extend',  n);
-  if (b.status !== 'available') actionButton(td, 'Release', '',        'release', n);
+  if (limited ? b.status === 'held' : b.status !== 'available') actionButton(td, 'Release', '', 'release', n);
   const csv = actionButton(td, '⬇️ CSV', '', 'csv', n);
   csv.style.cssText += ';background:var(--glass-bg);border:1px solid var(--border);';
 }
@@ -1722,14 +1765,14 @@ function patchBookingRow(tr, b) {
   if (company && company.textContent.trim() !== (d.company || '—')) paintCompanyCell(company, d.company);
 
   const actions = q('actions');
-  if (actions && actions.dataset.forStatus !== b.status) paintActionCell(actions, b);
+  if (actions && actions.dataset.forStatus !== actionKey(b)) paintActionCell(actions, b);
 
   // The two editable fields: never overwritten while they are being typed into.
   [['price', d.actualPrice ?? ''], ['notes', d.notes ?? '']].forEach(([field, value]) => {
     const inp = tr.querySelector(`input[data-field="${field}"]`);
     if (!inp) return;
     inp.disabled = !dealEditable(b);
-    inp.title = dealEditable(b) ? '' : 'Only a sold or held stand can carry a deal price or notes.';
+    inp.title = dealShut(b);
     if (document.activeElement === inp) return;
     if (String(inp.value) !== String(value)) inp.value = value;
     inp.dataset.prev = value;
@@ -1860,9 +1903,11 @@ function renderStandActions(n) {
     ? `Convert the hold on stand ${n} into a confirmed sale`
     : `Book stand ${n}`;
 
-  book.hidden    = sold;                 // already there
+  // Without plan rights: hold, and take a hold off — never sell or un-sell.
+  const limited = holdOnly();
+  book.hidden    = sold || limited;      // already there
   hold.hidden    = held || sold;         // a hold needs an available stand
-  release.hidden = !held && !sold;       // nothing to release
+  release.hidden = limited ? !held : (!held && !sold);   // nothing to release
 
   book.onclick    = () => adminAction('book', n);
   hold.onclick    = () => adminAction('hold', n);
@@ -1871,7 +1916,7 @@ function renderStandActions(n) {
   // Drag-to-split, offered only where the server would accept the split.
   const split = document.getElementById('aba-split');
   if (split) {
-    split.hidden = !canSplitOnMap(b);
+    split.hidden = limited || !canSplitOnMap(b);
     split.onclick = () => enterSplitMode(n);
   }
 
@@ -1879,7 +1924,7 @@ function renderStandActions(n) {
   // says which it is, and for a split cell names the parent it will restore.
   const reset = document.getElementById('aba-reset');
   if (reset) {
-    const r = resetTargetOf(b);
+    const r = limited ? null : resetTargetOf(b);
     reset.hidden = !r;
     if (r) {
       reset.textContent = r.kind === 'unmerge' ? '↩️ Un-merge' : r.kind === 'unsplit' ? '↩️ Undo split' : '↩️ Remove cell';
@@ -1893,7 +1938,7 @@ function renderStandActions(n) {
   // nobody's booking on it, not half of a merge or a split.
   const remove = document.getElementById('aba-remove');
   if (remove) {
-    remove.hidden = !canRemoveStand(b);
+    remove.hidden = limited || !canRemoveStand(b);
     remove.onclick = () => removeStandFromPlan(n);
   }
 }
@@ -4579,7 +4624,7 @@ async function loadTeam() {
     const roleCell = document.createElement('td');
     const rolePill = document.createElement('span');
     rolePill.className = 'team-role ' + (a.role || 'admin');
-    rolePill.textContent = { owner: 'Owner', admin: 'Administrator', sales: 'Sales' }[a.role] || a.role || 'Administrator';
+    rolePill.textContent = ROLE_LABEL[a.role || 'admin'] || a.role;
     roleCell.appendChild(rolePill);
     if (a.displayName) {
       const dn = document.createElement('div');
@@ -4609,9 +4654,8 @@ async function loadTeam() {
       // The owner tier is never re-roled, and changing your own would drop you
       // out of the console mid-session — the server rejects both too.
       if (a.role !== 'owner' && a.username !== currentUser) {
-        const to = a.role === 'sales' ? 'admin' : 'sales';
-        actions.appendChild(teamBtn(a.role === 'sales' ? 'Make admin' : 'Make sales',
-          () => changeMemberRole(a.username, to)));
+        ['operations', 'admin', 'sales'].filter(to => to !== (a.role || 'admin')).forEach(to =>
+          actions.appendChild(teamBtn(`Make ${ROLE_SHORT[to]}`, () => changeMemberRole(a.username, to))));
       }
       if (a.role !== 'owner' && a.username !== currentUser && admins.length > 1) {
         actions.appendChild(teamBtn('Remove', () => removeMember(a.username), 'danger'));
@@ -4645,6 +4689,16 @@ document.getElementById('team-gen-pw')?.addEventListener('click', () => {
 });
 
 // ─── Role picker ──────────────────────────────────────────────────────────────
+// What each tier is called on the Team page.
+const ROLE_LABEL = { owner: 'Owner', operations: 'Operations', admin: 'Administrator', sales: 'Sales' };
+const ROLE_SHORT = { operations: 'operations', admin: 'admin', sales: 'sales' };
+const ROLE_NOUN  = { operations: 'Operations member', admin: 'Administrator', sales: 'Sales member' };
+const ROLE_SCOPE = {
+  operations: 'Operations (runs the floorplan)',
+  admin: 'Administrator (console, holds only on the plan)',
+  sales: 'Sales (dashboard only)',
+};
+
 // The sales tier needs a display name and email (they sign the rep's client
 // proposals), so those fields — and the roster shortcut — only appear for it.
 function selectedNewRole() {
@@ -4656,7 +4710,7 @@ function syncRoleFields() {
   ['team-roster-field', 'team-name-field', 'team-email-field'].forEach(id =>
     document.getElementById(id)?.classList.toggle('hidden', !isSales));
   const label = document.getElementById('team-add-label');
-  if (label) label.textContent = isSales ? 'Add sales member' : 'Add administrator';
+  if (label) label.textContent = `Add ${ROLE_NOUN[selectedNewRole()].toLowerCase()}`;
 }
 
 document.querySelectorAll('input[name="team-role"]').forEach(r =>
@@ -4710,7 +4764,7 @@ document.getElementById('team-add-form')?.addEventListener('submit', (e) => {
     const password = document.getElementById('team-password').value;
     const displayName = document.getElementById('team-displayname')?.value.trim() || '';
     const email = document.getElementById('team-email')?.value.trim() || '';
-    const noun = role === 'sales' ? 'Sales member' : 'Administrator';
+    const noun = ROLE_NOUN[role] || 'Administrator';
     try {
       const data = await api('/api/admins', {
         method: 'POST', body: JSON.stringify({ username, password, role, displayName, email }),
@@ -4731,7 +4785,7 @@ document.getElementById('team-add-form')?.addEventListener('submit', (e) => {
 });
 
 async function changeMemberRole(username, role) {
-  const noun = role === 'sales' ? 'Sales (dashboard only)' : 'Administrator (full console)';
+  const noun = ROLE_SCOPE[role] || role;
   if (!await confirmDialog(
     `Change "${username}" to ${noun}?\n\nThey are signed out immediately and must log in again.`,
     { title: 'Change access level', confirmLabel: 'Change it' })) return;
@@ -4739,7 +4793,7 @@ async function changeMemberRole(username, role) {
     await api(`/api/admins/${encodeURIComponent(username)}/role`, {
       method: 'PATCH', body: JSON.stringify({ role }),
     });
-    adminToast(`"${username}" is now ${role}.`, 'ok');
+    adminToast(`"${username}" is now ${ROLE_LABEL[role] || role}.`, 'ok');
     await loadSalesTeam();                 // a new rep joins the Send-to list
     fillRoster();
     loadTeam();
@@ -5340,12 +5394,15 @@ function planCard(row, isCurrent) {
   ver.hidden = typeof row.revisions === 'number' ? row.revisions === 0 : (!row.uploaded && !row.draft);
   if (ver.hidden && typeof row.revisions !== 'number') {
     api('/api/floorplan/revisions', { headers: { 'X-Show': row.slug } })
-      .then(list => { if (Array.isArray(list) && list.length) ver.hidden = false; })
+      .then(list => { if (Array.isArray(list) && list.length && !holdOnly()) ver.hidden = false; })
       .catch(() => { /* nothing to offer, as before */ });
   }
   ver.onclick = () => openRevisions(row);
 
   actions.append(up, dl, imp, ver, col, sch, rm);
+  // Without plan rights the card is for reading: the file and the schedule
+  // download, nothing that uploads, re-reads, recolours, restores or removes.
+  if (holdOnly()) [up, imp, ver, col, rm].forEach(b => { b.hidden = true; });
 
   const parts = [head, preview, meta];
   // A retired event's controls act on THAT event — its plan, its colours, its
@@ -5360,7 +5417,7 @@ function planCard(row, isCurrent) {
     parts.push(note);
   }
   if (specLine) parts.push(specLine);
-  if (row.draft) parts.push(draftPanel(row));
+  if (row.draft && !holdOnly()) parts.push(draftPanel(row));
   // Only where there is something to lose.
   if (row.boothCount > 0 && !row.draft) {
     const warn = document.createElement('div');
@@ -6688,6 +6745,8 @@ function renderBoothCountry(n) {
   loadCountries();
   sel.value = dealOf(booths[n]).country || '';
   sel.dataset.booth = n;
+  sel.disabled = holdOnly();
+  sel.title = holdOnly() ? PLAN_NOTE : '';
 }
 
 document.getElementById('aba-country')?.addEventListener('change', (e) => {
@@ -6735,12 +6794,13 @@ function renderBoothTags(n) {
     currentBox.appendChild(none);
   } else {
     current.forEach(key => currentBox.appendChild(
-      tagChip(tagByKey(key), { onRemove: () => saveBoothTags(n, current.filter(k => k !== key)) })
+      tagChip(tagByKey(key), { onRemove: holdOnly() ? null : () => saveBoothTags(n, current.filter(k => k !== key)) })
     ));
   }
 
   const pick = document.getElementById('aba-tag-pick');
   pick.replaceChildren();
+  if (holdOnly()) return;                 // read, not changed, without plan rights
 
   if (!tagCatalogue.length) {
     const hint = document.createElement('p');

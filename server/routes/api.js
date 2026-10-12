@@ -72,6 +72,17 @@ async function confirmPassword(req, res, what) {
 /** Sentence-case a clause like "the floorplan was not changed". */
 const cap = (s) => (s ? String(s)[0].toUpperCase() + String(s).slice(1) : '');
 
+// Guard for every route that changes the floorplan — its artwork, its stands,
+// its colours or its history. Only Operations and the owner may (see
+// PLAN_ROLES in auth.js); an 'admin' is told so, and the attempt is recorded.
+function planOnly(req, res, next) {
+  if (auth.canEditPlan(req.admin?.role)) return next();
+  try { track({ type: 'security.denied', boothNumber: null, actor: req.admin?.user || 'unknown',
+                meta: { route: `${req.method} ${req.baseUrl}${req.path}`, role: req.admin?.role || null, reason: 'plan' } }); }
+  catch { /* audit best-effort */ }
+  return res.status(403).json({ error: auth.PLAN_REFUSAL });
+}
+
 // ─── Floorplan artwork ───────────────────────────────────────────────────────
 // One plan per show. Uploaded as a RAW body rather than JSON: a 2 MB SVG
 // base64'd into a JSON string would breach the 3 MB body limit the rest of the
@@ -137,7 +148,7 @@ router.get('/floorplan/meta', async (_req, res, next) => {
  * live — a bad file the day before a show no longer reaches visitors on its
  * way to being noticed.
  */
-router.post('/floorplan', rawSvg, async (req, res, next) => {
+router.post('/floorplan', planOnly, rawSvg, async (req, res, next) => {
   try {
     if (!await confirmPassword(req, res, 'the floorplan was not changed')) return;
     const r = await floorplans.createDraft(req.body, {
@@ -187,7 +198,7 @@ router.get('/floorplan/revisions/:id/svg', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.post('/floorplan/revisions/:id/discard', async (req, res, next) => {
+router.post('/floorplan/revisions/:id/discard', planOnly, async (req, res, next) => {
   try {
     const r = await floorplans.discard(req.params.id);
     if (!r.ok) {
@@ -218,7 +229,7 @@ router.post('/floorplan/revisions/:id/discard', async (req, res, next) => {
  * could otherwise each read the OTHER's drawing, and the one refused could put
  * the old plan back over the one that succeeded.
  */
-router.post('/floorplan/revisions/:id/publish', async (req, res, next) => {
+router.post('/floorplan/revisions/:id/publish', planOnly, async (req, res, next) => {
   try {
     if (!await confirmPassword(req, res, 'the plan was not made live')) return;
     const actor = req.admin?.user || null;
@@ -306,7 +317,7 @@ router.get('/palette', async (_req, res, next) => {
  * the app's own), or `use: 'artwork'` to go back to what the plan is drawn in,
  * or `use: 'app'` for the app's own colours throughout.
  */
-router.put('/palette', async (req, res, next) => {
+router.put('/palette', planOnly, async (req, res, next) => {
   try {
     const body = req.body || {};
     let r;
@@ -689,7 +700,7 @@ async function failedAfterImport({ snapshotId, hadStands, actor }) {
     : 'the import could not be finished, and the stands it had already moved could not be put back automatically. Go back to the point before this in the plan\'s history.' } };
 }
 
-router.post('/stands/import', async (req, res, next) => {
+router.post('/stands/import', planOnly, async (req, res, next) => {
   try {
     if (!await confirmPassword(req, res, 'no stands were imported')) return;
     // One plan change at a time on an event — see floorplans.withPlanLock.
@@ -699,7 +710,7 @@ router.post('/stands/import', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.delete('/floorplan', async (req, res, next) => {
+router.delete('/floorplan', planOnly, async (req, res, next) => {
   try {
     if (!await confirmPassword(req, res, 'the floorplan was not removed')) return;
     const gone = await floorplans.remove();
@@ -817,7 +828,7 @@ router.post('/admins', requireOwner, async (req, res, next) => {
     // Only these two tiers can be created here. 'owner' is deliberately not
     // offered — it is the recovery anchor and is set from the bootstrap env, so
     // the API must never be able to mint a second one.
-    const role = req.body?.role === 'sales' ? 'sales' : 'admin';
+    const role = ['sales', 'operations'].includes(req.body?.role) ? req.body.role : 'admin';
     const displayName = String(req.body?.displayName || '').trim();
     const email = String(req.body?.email || '').trim();
 
@@ -844,7 +855,7 @@ router.post('/admins', requireOwner, async (req, res, next) => {
 router.patch('/admins/:username/role', requireOwner, async (req, res, next) => {
   try {
     const role = req.body?.role;
-    if (!['admin', 'sales'].includes(role)) return res.status(400).json({ error: 'Role must be admin or sales.' });
+    if (!['operations', 'admin', 'sales'].includes(role)) return res.status(400).json({ error: 'Role must be operations, admin or sales.' });
     const target = String(req.params.username || '').toLowerCase().trim();
     // Changing your own role could drop you out of the console mid-session.
     if (req.admin?.user === target) return res.status(400).json({ error: 'You cannot change your own role.' });
@@ -1181,7 +1192,7 @@ router.delete('/partners/:id', async (req, res, next) => {
  * saying so is better than hiding the person, which is how the original bug
  * felt from the outside.
  */
-const ROSTER_ROLES = ['sales', 'admin', 'owner'];
+const ROSTER_ROLES = ['sales', 'admin', 'operations', 'owner'];
 
 const memberName = (u) => (u.displayName || '').trim() || u.username;
 
@@ -1672,7 +1683,7 @@ function bookingsInTheWay(conflicts) {
  * and the hall as it stands right now is stored first, so going back is
  * itself something to come back from.
  */
-router.post('/history/:id/restore', async (req, res, next) => {
+router.post('/history/:id/restore', planOnly, async (req, res, next) => {
   try {
     const id = String(req.params.id);
     const apply = req.body?.apply === true;
@@ -1739,7 +1750,7 @@ router.post('/history/:id/restore', async (req, res, next) => {
  * but it is stamped into the audit trail either way, so a restore is never an
  * unattributed change of company.
  */
-router.post('/booths/:boothNumber/restore', async (req, res, next) => {
+router.post('/booths/:boothNumber/restore', planOnly, async (req, res, next) => {
   try {
     const n = String(req.params.boothNumber);
     const snap = req.body?.assignment || {};

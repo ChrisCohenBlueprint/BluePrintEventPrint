@@ -327,6 +327,35 @@ const PLANS = [
         created[0].copyFrom === 'LNA27' && created[0].name === 'Lubricant Expo North America 2028',
         JSON.stringify(created));
 
+  console.log('\nThe same page for an account that may only hold stands');
+  // Operations own the plan (PLAN_ROLES in auth.js). Signed in as a plain
+  // admin, the cards are for reading: nothing on them uploads, re-reads,
+  // recolours, restores or removes, and a waiting draft is not offered.
+  const asAdmin = await br.newPage({ viewport: { width: 1500, height: 1000 } });
+  await asAdmin.route('**/api/me', r => r.fulfill({ status: 200, contentType: 'application/json',
+    body: JSON.stringify({ user: 'sam', role: 'admin', home: '/admin' }) }));
+  await asAdmin.route('**/api/floorplans', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(PLANS) }));
+  await asAdmin.route('**/api/shows', r => r.fulfill({ status: 200, contentType: 'application/json',
+    body: JSON.stringify(PLANS.map(p => ({ slug: p.slug, showId: p.showId, name: p.name, active: p.active !== false }))) }));
+  await asAdmin.goto(`${base}/admin`, { waitUntil: 'networkidle', timeout: 30000 });
+  await asAdmin.waitForFunction(() => document.body.classList.contains('hold-only'), null, { timeout: 5000 }).catch(() => {});
+  await asAdmin.click('.nav-settings');
+  await asAdmin.waitForSelector('.plan-card:not(.plan-add)', { timeout: 10000 });
+  await asAdmin.waitForTimeout(500);
+  const limited = await asAdmin.evaluate(() => ({
+    holdOnly: document.body.classList.contains('hold-only'),
+    buttons: [...document.querySelectorAll('.plan-card:not(.plan-add) .plan-actions > *')]
+      .filter(b => !b.hidden).map(b => b.textContent.trim()),
+    drafts: document.querySelectorAll('.plan-draft').length,
+    tools: getComputedStyle(document.querySelector('.nav-link[data-section="tools"]')).display,
+  }));
+  check('the page knows it may only hold', limited.holdOnly === true);
+  check('every card offers only Download and the stand schedule',
+        limited.buttons.length > 0 && limited.buttons.every(t => t === 'Download' || t === 'Stand schedule'), JSON.stringify(limited.buttons));
+  check('the waiting draft is not offered', limited.drafts === 0, String(limited.drafts));
+  check('and Tools is not in the nav', limited.tools === 'none', limited.tools);
+  await asAdmin.close();
+
   await br.close();
   server.close();
   const f = out.filter(x => !x).length;

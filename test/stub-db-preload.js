@@ -16,7 +16,7 @@ const showId = process.env.SHOW_ID || 'LEX';
 const db = fakeDb({
   booths: [{ showId, boothNumber: '101', status: 'available', sqm: 9, listPrice: 5400, sponsored: true,
              geometry: { x: 0, y: 0, w: 1, h: 1 }, assignment: { company: null, tags: [] } }],
-  users: [{ username: 'chris', role: 'admin', tokenVersion: 0 }],
+  users: [{ username: 'chris', role: 'operations', tokenVersion: 0 }],
 });
 
 const slow = Number(process.env.STUB_SLOW_INSERT_MS) || 0;

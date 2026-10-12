@@ -210,7 +210,7 @@ const hall = (show) => (db.store.booths || []).filter(b => b.showId === show)
   console.log('\nAll or nothing, after the stands have moved');
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.admin = { user: 'chris' }; showContext.runAs('LEX', next); });
+  app.use((req, _res, next) => { req.admin = { user: 'chris', role: 'operations' }; showContext.runAs('LEX', next); });
   app.use('/api', api);
   const server = app.listen(0);
   await new Promise(r => server.once('listening', r));

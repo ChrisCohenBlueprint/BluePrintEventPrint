@@ -34,13 +34,28 @@ with `showContext.runAs`.
 
 ## 2. Accounts and access
 
-Three tiers, in `users`:
+Four tiers, in `users`:
 
 | Tier | Reaches | Notes |
 |---|---|---|
 | `owner` | everything, plus team management | The recovery anchor. Cannot be created, deleted or re-roled through the API. `ADMIN_USER` is force-promoted to owner on every boot. |
-| `admin` | `/admin`, `/api/*`, all admin socket events | Books, holds, releases, prices, imports artwork. |
+| `operations` | `/admin`, `/api/*`, all admin socket events | Runs the floorplan: sells, releases, moves, merges, splits, renumbers, removes, uploads and publishes artwork, colours, rate, history. |
+| `admin` | `/admin`, `/api/*`, holds only on the plan | Leads, sponsors, analytics, the audit log. On the plan: put an available stand on hold, extend it, take a hold off. Cannot sell, un-sell, or change a stand's shape, number, tags or logo. |
 | `sales` | `/sales`, `/api/sales/*` only | Remaining inventory and proposals. No company names, no negotiated prices, no deal notes, no socket mutations. |
+
+**Who may change the plan** is `PLAN_ROLES` in `server/auth.js` (`operations`,
+`owner`). Every socket event that changes the plan is registered with
+`requireAdmin(socket, type, handler, PLAN)` in `server/sockets/index.js`, and
+every REST route that does goes through `planOnly` in `server/routes/api.js`.
+The refusal (`PLAN_REFUSAL`) is acknowledged to the console, recorded as
+`security.denied` with `meta.reason: 'plan'`, and does NOT end the session.
+`booth:hold`, `booth:release` and `admin:setStatus` are not plan events; they
+check the hold-only case themselves (a release of a SOLD stand, or any status
+move that touches a sale, is refused before the password is asked for). The
+role is re-read from the database on every event, so a change of tier reaches
+a console that is already open. The console hides what it may not use
+(`body.hold-only`, `holdOnly()` in `public/admin.js`) — the server is what
+refuses. `test/plan-roles.test.js` is the contract.
 
 Sign-in is two steps: password (scrypt, **async** — see §5), then TOTP. A new
 account also needs its one-time invite code the first time, so an intercepted

@@ -13,10 +13,16 @@ const inquiries = require('../models/inquiries');
 const holdsSvc  = require('../services/holds');
 const { track, socketIp } = require('../services/tracking');
 const inFlight  = require('../lib/in-flight');
-const { socketAuth, requireAdmin: requireAdminAuth, sweepAdminSockets,
+const { socketAuth, requireAdmin: requireAdminAuth, sweepAdminSockets, canEditPlan, PLAN_REFUSAL,
         checkSecretThrottle, registerSecretFailure, clearSecretFailures } = require('../auth');
 
 const ADMIN_ROOM = 'admins';
+
+// Marks an admin event that changes the floorplan: only Operations and the
+// owner may send it (see PLAN_ROLES in auth.js). An 'admin' may still hold,
+// extend and release holds — booth:hold, booth:release and admin:setStatus
+// check that case for themselves.
+const PLAN = { plan: true };
 
 // ─── Per-show state ───────────────────────────────────────────────────────────
 // One deployment can serve several events, so every cache below is held per
@@ -217,8 +223,8 @@ function oversized(value, max) {
 // out of it. The rejection itself is unchanged — refused, warned about and
 // acked exactly as before — only the STORING of it is rate limited per socket,
 // like every other unauthenticated event here.
-function requireAdmin(socket, type, handler) {
-  const guarded = requireAdminAuth(socket, type, handler);
+function requireAdmin(socket, type, handler, opts) {
+  const guarded = requireAdminAuth(socket, type, handler, opts);
   return (payload = {}, ack) => {
     // Mirror the guard's own argument shuffle: socket.emit(event, cb) puts the
     // acknowledgement in the first position.
@@ -666,7 +672,7 @@ function register(io) {
               meta: { from: r.before.status, to: 'sold', company: name } });
       await refresh(); broadcastState(io);
       log(io, `✅ <strong>${escapeHtml(name)}</strong> booked Stand ${escapeHtml(n)}`, 'booking');
-    }));
+    }, PLAN));
 
     socket.on('booth:hold', requireAdmin(socket, 'booth:hold', async ({ boothNumber, company, hours }) => {
       const n  = stand(boothNumber);
@@ -759,14 +765,26 @@ function register(io) {
       // Releasing un-books a stand (destroys the booking). When the recovery-key
       // failsafe is on, require THAT key (not the admin login, so a stolen admin
       // session can't erase bookings); otherwise fall back to the admin password.
+      const n = stand(boothNumber);
+      // Someone who may only hold can take a HOLD off, never a sale: un-booking
+      // an exhibitor is Operations' call. Asked before the password, so they
+      // are not made to type it for an answer that was always no.
+      const holdOnly = !canEditPlan(socket.data.role);
+      if (holdOnly) {
+        const b = await booths.get(n);
+        if (b && b.status === 'sold') return { ok: false, error: PLAN_REFUSAL };
+      }
       const gate = await confirmSecret([password], 'stand not released');
       if (!gate.ok) return gate;
-      const n = stand(boothNumber);
       // Only a release that released something is acked, logged and audited.
       // It used to report success for a stand that does not exist, is already
       // available, or is off the plan — and wrote "released" rows for each.
-      const r = await holdsSvc.release(n, { actor: socket.data.user });
+      // `expect` repeats the check above at the write itself, so a stand sold
+      // in the moment between them is still not released by a hold-only account.
+      const r = await holdsSvc.release(n, { actor: socket.data.user,
+                                            expect: holdOnly ? ['held'] : ['held', 'sold'] });
       if (!r.ok) {
+        if (holdOnly && r.status === 'sold') return { ok: false, error: PLAN_REFUSAL };
         return { ok: false, error: r.reason === 'no_such_booth'
           ? `Stand ${n} not found.`
           : `Stand ${n} is not booked or on hold — there was nothing to release.` };
@@ -801,7 +819,7 @@ function register(io) {
       } });
       await refresh(); broadcastState(io);
       log(io, `📝 Deal updated for Stand ${escapeHtml(n)}`, 'admin');
-    }));
+    }, PLAN));
 
     socket.on('admin:setStatus', requireAdmin(socket, 'admin:setStatus', async ({ boothNumber, status, company, key, password }) => {
       const allowed = ['available', 'held', 'sold'];
@@ -814,6 +832,15 @@ function register(io) {
       // must be refused HERE, before forceHold below writes a hold document and
       // an expiry for it, which it used to do before setStatus said "not found".
       if (!before || before.removed === true) return { ok: false, error: `Stand ${n} not found.` };
+      // Someone who may only hold can move a stand between available and held,
+      // and rename who a hold is for. Selling, and anything that touches a sold
+      // stand, is Operations'. forceHold below would otherwise turn a SOLD stand
+      // into a hold.
+      if (!canEditPlan(socket.data.role)) {
+        const holdMove = (before.status === 'available' && status === 'held') ||
+                         (before.status === 'held' && (status === 'held' || status === 'available'));
+        if (!holdMove) return { ok: false, error: PLAN_REFUSAL };
+      }
       // Blank company on a status change used to wipe an existing exhibitor, so
       // an empty field keeps the one already there. A SALE still has to end up
       // naming somebody — see booth:book.
@@ -888,7 +915,7 @@ function register(io) {
       await refresh(); broadcastState(io);
       log(io, `↕ <strong>${escapeHtml(r.company || 'Booking')}</strong> moved from Stand ${escapeHtml(f)} (${r.fromSqm} m²) to Stand ${escapeHtml(t)} (${r.toSqm} m²)`, 'booking');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     // Merge two stands into one. The admin client emitted this for a long time
     // with no server handler at all, so the button did nothing.
@@ -916,7 +943,7 @@ function register(io) {
       io.to(adminRoom(config.showId)).emit('booth:consolidated', { primary: p, secondary: s });
       broadcastState(io);
       log(io, `🔗 Stand ${escapeHtml(s)} merged into ${escapeHtml(p)}`, 'admin');
-    }));
+    }, PLAN));
 
     // Merge a whole shift-selected block of adjacent stands into one.
     socket.on('booth:consolidate-many', requireAdmin(socket, 'booth:consolidate-many', async ({ boothNumbers }) => {
@@ -951,7 +978,7 @@ function register(io) {
       broadcastState(io);
       log(io, `🔗 ${r.absorbed.length + 1} stands merged into ${escapeHtml(r.primary.boothNumber)}`, 'admin');
       return { ok: true, primary: r.primary.boothNumber, absorbed: r.absorbed };
-    }));
+    }, PLAN));
 
     // Divide one stand into equal parts — the inverse of consolidate, and the
     // manual fix for stands the artwork drew as a single block.
@@ -978,7 +1005,7 @@ function register(io) {
       const sizes = firstSqm != null ? ` (${r.sizes.join(' + ')} m²)` : '';
       log(io, `✂️ Stand ${escapeHtml(n)} split into ${r.created.length + 1}${sizes} — added ${r.created.map(escapeHtml).join(', ')}`, 'admin');
       return { ok: true, created: r.created };
-    }));
+    }, PLAN));
 
     // Custom split: re-carve a stand into cells with the admin's own numbers and
     // sizes (parts = [{ number, sqm }]). Works on a merged block too.
@@ -1004,7 +1031,7 @@ function register(io) {
       await refresh(); broadcastState(io);
       log(io, `✂️ Stand ${escapeHtml(n)} custom-split into ${r.created.length + 1}`, 'admin');
       return { ok: true, created: r.created };
-    }));
+    }, PLAN));
 
     // Undo a merge or split. Asked of a split cell, it undoes the split that cell
     // belongs to; only a true leftover cell, whose floor its parent already
@@ -1049,7 +1076,7 @@ function register(io) {
       const which = r.parent && r.type === 'unsplit' ? `${escapeHtml(r.parent)} (asked of ${escapeHtml(n)})` : escapeHtml(n);
       log(io, `↩️ Stand ${which} reset — ${escapeHtml(detail)}`, 'admin');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     // Take a stand off the plan entirely — the plan says there is a stand here
     // and there isn't. The rectangle becomes hall floor; the stand keeps its
@@ -1069,7 +1096,7 @@ function register(io) {
       await refresh(); broadcastState(io);
       log(io, `🗑️ Stand ${escapeHtml(n)} removed from the plan — Tools → Removed stands puts it back`, 'admin');
       return { ok: true, boothNumber: n };
-    }));
+    }, PLAN));
 
     // Put a removed stand back, exactly as it was.
     socket.on('booth:restore-stand', requireAdmin(socket, 'booth:restore-stand', async ({ boothNumber }) => {
@@ -1085,7 +1112,7 @@ function register(io) {
       await refresh(); broadcastState(io);
       log(io, `↩️ Stand ${escapeHtml(n)} put back on the plan`, 'admin');
       return { ok: true, boothNumber: n };
-    }));
+    }, PLAN));
 
     // Set (or clear) a stand's shown number — a display label only; the internal
     // identity (boothNumber) is unchanged, so nothing else needs to move.
@@ -1105,7 +1132,7 @@ function register(io) {
         ? `#️⃣ Stand ${escapeHtml(n)} shown number cleared — back to ${escapeHtml(n)}`
         : `#️⃣ Stand ${escapeHtml(n)} now shown as ${escapeHtml(r.value)}`, 'admin');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     // ── Tags ──────────────────────────────────────────────────────────────
     // The catalogue an admin curates in Tools, and the (max 3) tags each booked
@@ -1123,7 +1150,7 @@ function register(io) {
       await refreshTags(); broadcastTags(io);
       log(io, `🏷️ Tag added — ${escapeHtml(r.tag.label)}`, 'admin');
       return { ok: true, tag: r.tag, catalogue: showState().tagCache };
-    }));
+    }, PLAN));
 
     // Rename / recolour. The stored key never changes, so every stand already
     // carrying this tag simply starts rendering the new label.
@@ -1139,7 +1166,7 @@ function register(io) {
       await refreshTags(); broadcastTags(io);
       log(io, `🏷️ Tag updated — ${escapeHtml(r.tag.label)}`, 'admin');
       return { ok: true, tag: r.tag, catalogue: showState().tagCache };
-    }));
+    }, PLAN));
 
     // Delete. The tag is pulled off every stand FIRST, so no stand is ever left
     // holding a key with nothing to resolve it against.
@@ -1152,7 +1179,7 @@ function register(io) {
       await refresh(); broadcastState(io);
       log(io, `🏷️ Tag deleted — removed from ${cleared} stand${cleared === 1 ? '' : 's'}`, 'admin');
       return { ok: true, cleared, catalogue: showState().tagCache };
-    }));
+    }, PLAN));
 
     // Set the tags on one booked stand. Replaces the whole set, so the UI can
     // send exactly what the chips show.
@@ -1176,7 +1203,7 @@ function register(io) {
         ? `🏷️ Stand ${escapeHtml(n)} tagged — ${escapeHtml(names.join(', '))}`
         : `🏷️ Stand ${escapeHtml(n)} tags cleared`, 'admin');
       return { ok: true, tags: r.tags };
-    }));
+    }, PLAN));
 
     // Set the exhibitor's country on one booked stand. Unlike the tags this is
     // a single value from a built-in list, so there is nothing to curate — the
@@ -1197,7 +1224,7 @@ function register(io) {
         ? `🌍 Stand ${escapeHtml(n)} country set — ${escapeHtml(r.name)}`
         : `🌍 Stand ${escapeHtml(n)} country cleared`, 'admin');
       return { ok: true, country: r.country, name: r.name };
-    }));
+    }, PLAN));
 
     // Set the floorplan (title) sponsor: name + brand colour. Broadcast to every
     // client so the legend swatch and any sponsored-booth fills update live.
@@ -1208,7 +1235,7 @@ function register(io) {
         ? `🎨 Floorplan sponsor set — ${escapeHtml(saved.name || 'unnamed')} (${escapeHtml(saved.color)})`
         : `🎨 Floorplan sponsor cleared`, 'admin');
       return { ok: true, ...saved };
-    }));
+    }, PLAN));
 
     // Flag/unflag a stand as the sponsor's, so it fills with the brand colour.
     socket.on('booth:set-sponsored', requireAdmin(socket, 'booth:set-sponsored', async ({ boothNumber, sponsored }) => {
@@ -1219,7 +1246,7 @@ function register(io) {
       log(io, r.sponsored ? `🎨 Stand ${escapeHtml(n)} marked as sponsor booth`
                           : `🎨 Stand ${escapeHtml(n)} unmarked as sponsor booth`, 'admin');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     // The sponsor's logo, drawn inside that stand on the plan. Separate from the
     // flag above so a stand can be marked as sponsored before the artwork
@@ -1240,7 +1267,7 @@ function register(io) {
       log(io, r.logo ? `🖼️ Stand ${escapeHtml(n)} sponsor logo set`
                      : `🖼️ Stand ${escapeHtml(n)} sponsor logo removed`, 'admin');
       return { ok: true, logo: r.logo };
-    }));
+    }, PLAN));
 
     // ── Plan areas ────────────────────────────────────────────────────────
     // A sponsor's logo on one of the plan's named areas, and a correction to an
@@ -1261,7 +1288,7 @@ function register(io) {
       log(io, r.logo ? `🖼️ ${escapeHtml(name)} sponsor logo set`
                      : `🖼️ ${escapeHtml(name)} sponsor logo removed`, 'admin');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     socket.on('area:set-package', requireAdmin(socket, 'area:set-package', async ({ key, sponsorKey }) => {
       const r = await planAreas.setPackage(String(key || ''), sponsorKey, { actor: socket.data.user });
@@ -1271,7 +1298,7 @@ function register(io) {
       log(io, a?.package ? `🔗 ${escapeHtml(a.label)} sells as ${escapeHtml(a.package.name)}`
                          : `🔗 ${escapeHtml(a?.label || r.key)} unlinked from its package`, 'admin');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     socket.on('area:set-sponsor', requireAdmin(socket, 'area:set-sponsor', async ({ key, sponsor, status }) => {
       const r = await planAreas.setSponsor(String(key || ''), { sponsor, status }, { actor: socket.data.user });
@@ -1285,7 +1312,7 @@ function register(io) {
       log(io, r.sponsor ? `🏛️ ${escapeHtml(name)} sponsored by <strong>${escapeHtml(r.sponsor)}</strong>`
                         : `🏛️ ${escapeHtml(name)} is available to sponsor`, 'admin');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     socket.on('area:set-label', requireAdmin(socket, 'area:set-label', async ({ key, label }) => {
       const r = await planAreas.setLabel(String(key || ''), label, { actor: socket.data.user });
@@ -1293,7 +1320,7 @@ function register(io) {
       await refreshAreas(); broadcastAreas(io);
       log(io, `🏛️ Plan area renamed — ${escapeHtml(r.label)}`, 'admin');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     // Change the €/unit rate. Password-gated (re-enter the admin's own login
     // password), because it reprices every stand's list price across the board.
@@ -1307,7 +1334,7 @@ function register(io) {
       io.to(adminRoom(config.showId)).emit('settings', { ratePerSqm: saved.ratePerSqm });
       log(io, `💶 Rate set to €${saved.ratePerSqm}/unit — ${rep.repriced || 0} stands repriced`, 'admin');
       return { ok: true, ratePerSqm: saved.ratePerSqm, repriced: rep.repriced };
-    }));
+    }, PLAN));
 
     // Switch the area unit (m² ↔ ft²). A display label only — no numbers change.
     // Which symbol this show's prices print with. Not password-gated like the
@@ -1322,14 +1349,14 @@ function register(io) {
         currencySymbol: st.currencySymbol, ratePerSqm: st.ratePerSqm });
       log(io, `💱 Prices now shown in ${escapeHtml(r.currency)}`, 'admin');
       return { ok: true, ...r };
-    }));
+    }, PLAN));
 
     socket.on('settings:set-unit', requireAdmin(socket, 'settings:set-unit', async ({ unit }) => {
       const saved = await settings.setUnit(unit);
       io.to(pubRoom(config.showId)).emit('settings', { unit: saved.unit });   // public: label only
       log(io, `📐 Area unit set to ${saved.unit === 'ft' ? 'ft²' : 'm²'}`, 'admin');
       return { ok: true, unit: saved.unit };
-    }));
+    }, PLAN));
 
     // demo:reset is gone. It wiped all 272 booths and was reachable from any
     // anonymous browser console.

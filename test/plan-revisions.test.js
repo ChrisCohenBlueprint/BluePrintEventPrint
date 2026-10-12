@@ -90,7 +90,7 @@ const tick = () => new Promise(r => setTimeout(r, 3));
 
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.admin = { user: 'chris' }; showContext.runAs(SHOW, next); });
+  app.use((req, _res, next) => { req.admin = { user: 'chris', role: 'operations' }; showContext.runAs(SHOW, next); });
   app.use('/api', api);
   const server = app.listen(0);
   await new Promise(r => server.once('listening', r));

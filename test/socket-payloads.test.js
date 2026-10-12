@@ -24,7 +24,7 @@ const image = (chars) => 'data:image/png;base64,' + 'A'.repeat(chars);
   let srv;
   try {
     srv = await start();
-    const cookie = `${auth.COOKIE}=${auth.signToken({ user: 'chris', role: 'admin', v: 0, exp: Date.now() + 3600e3 })}`;
+    const cookie = `${auth.COOKIE}=${auth.signToken({ user: 'chris', role: 'operations', v: 0, exp: Date.now() + 3600e3 })}`;
 
     console.log('\nAn admin\'s logo reaches the server, whatever its size');
     const admin = await srv.client({ cookie });

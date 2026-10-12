@@ -337,7 +337,9 @@ function buildApp() {
     res.json(r);
   });
 
-  app.get('/api/me', (_q, res) => res.json({ user: 'preview', role: 'owner' }));
+  // PREVIEW_ROLE=admin shows the console as an account that may only hold.
+  const role = ['admin', 'operations', 'sales'].includes(process.env.PREVIEW_ROLE) ? process.env.PREVIEW_ROLE : 'owner';
+  app.get('/api/me', (_q, res) => res.json({ user: 'preview', role }));
   app.get('/api/shows', (_q, res) => res.json([{ id: SHOW, slug: 'lex', name: 'LEX — sandbox', current: true }]));
   app.get('/api/holds', (_q, res) => res.json([]));
   app.get('/api/palette', (_q, res) => res.json({ palette: null }));

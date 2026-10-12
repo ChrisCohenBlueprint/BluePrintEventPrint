@@ -5,8 +5,21 @@ const { getDb } = require('./db');
 
 const COOKIE = 'bp_admin';
 
-// Both roles may use the admin surfaces; only 'owner' may manage team accounts.
-const ADMIN_ROLES = ['admin', 'owner'];
+// Every role here may use the admin console; only 'owner' may manage team
+// accounts.
+const ADMIN_ROLES = ['admin', 'operations', 'owner'];
+
+// Who may change the floorplan itself: its stands' shape, size, number and
+// status, the artwork, and the plan's history.
+//
+// Operations own the plan. Their sold stands, splits and numbering have to
+// agree with the technical plan used for mark-out on site, and when anyone with
+// a console could merge or split a stand, the plan in the system drifted from
+// it. An 'admin' still opens the console, but on the plan they can only put a
+// stand on hold, extend a hold, or take one off again.
+const PLAN_ROLES = ['operations', 'owner'];
+const canEditPlan = (role) => PLAN_ROLES.includes(role);
+const PLAN_REFUSAL = 'Only Operations can change the floorplan. Your account can put stands on hold.';
 
 // The sales tier: a sub-admin who signs in with the same password + 2FA flow but
 // only ever reaches /sales. They see remaining inventory and build client
@@ -14,7 +27,7 @@ const ADMIN_ROLES = ['admin', 'owner'];
 // compromised rep account cannot alter the floorplan or read the deal notes.
 const SALES_ROLES = ['sales'];
 
-// Everyone holding a real account. The sales dashboard admits all three — an
+// Everyone holding a real account. The sales dashboard admits every role — an
 // owner checking what a rep sees is legitimate — while the admin surfaces stay
 // ADMIN_ROLES-only.
 const ALL_ROLES = [...ADMIN_ROLES, ...SALES_ROLES];
@@ -373,7 +386,11 @@ async function sweepAdminSockets(io) {
 
 // Wraps a handler so it only runs for authenticated admins. Rejected attempts
 // are recorded — an attacker probing admin events is worth knowing about.
-function requireAdmin(socket, type, handler) {
+//
+// `plan: true` marks an event that changes the floorplan, which only
+// PLAN_ROLES may send. The role is the one recheckSocket has just read from the
+// database, so a change of role applies to a console that is already open.
+function requireAdmin(socket, type, handler, { plan = false } = {}) {
   const showContext = require('./show-context');
   const inFlight = require('./lib/in-flight');
   // Everything below runs inside this socket's show, so the ~120
@@ -426,6 +443,17 @@ function requireAdmin(socket, type, handler) {
       console.error(`✗ ${type} refused: the session could not be checked`);
       socket.emit('error:action', { event: type, message: 'That action could not be completed.' });
       return reply({ ok: false, error: 'That action could not be completed.' });
+    }
+
+    // Signed in, but not someone who may change the plan. The session is fine,
+    // so it is not dropped and no error:auth is sent — that would send the
+    // console to the sign-in page. The refusal is recorded, so an attempt is
+    // attributable.
+    if (plan && !canEditPlan(socket.data.role)) {
+      const { track } = require('./services/tracking');
+      track({ type: 'security.denied', meta: { event: type, role: socket.data.role, reason: 'plan' }, socket });
+      if (typeof ack === 'function') return reply({ ok: false, error: PLAN_REFUSAL });
+      return socket.emit('error:action', { event: type, message: PLAN_REFUSAL });
     }
 
     // Async handler rejections would otherwise surface as an unhandled promise
@@ -569,5 +597,5 @@ module.exports = {
   revokeToken, revokeSession, isRevoked,
   checkSecretThrottle, registerSecretFailure, clearSecretFailures,
   signPending, verifyPending, consumePending, missPending, PENDING_MAX_MISSES,
-  ADMIN_ROLES, SALES_ROLES, ALL_ROLES, homeFor,
+  ADMIN_ROLES, SALES_ROLES, ALL_ROLES, PLAN_ROLES, canEditPlan, PLAN_REFUSAL, homeFor,
 };

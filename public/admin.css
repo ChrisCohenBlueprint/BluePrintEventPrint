@@ -1136,6 +1136,7 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 }
 .team-role.owner { background: rgba(252,223,109,0.15); color: var(--yellow); }
 .team-role.admin { background: rgba(99,102,241,0.15);  color: #a5b4fc; }
+.team-role.operations { background: rgba(249,115,22,0.15); color: #fdba74; }
 .team-role.sales { background: rgba(16,185,129,0.15);  color: var(--green); }
 .team-dn { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
@@ -1334,3 +1335,16 @@ a.lead-field-value:hover { color: #60abbf; text-decoration: underline; }
 .stand-report-wipe:disabled { opacity: .35; cursor: not-allowed; }
 .import-refusal { border-color: rgba(248,113,113,.35); }
 .import-refusal .spec-report-note { color: var(--text); max-width: 80ch; }
+
+/* ── Hold-only accounts ─────────────────────────────────────────────────────
+   Only Operations and the owner change the floorplan (PLAN_ROLES in auth.js).
+   For everyone else the console hides what the markup draws of the plan's
+   controls; admin.js hides what it draws itself. The server refuses either way. */
+body.hold-only .nav-link[data-section="tools"],
+body.hold-only .aba-id-pencil,
+body.hold-only #aba-save-deal,
+body.hold-only .aba-sponsor-section,
+body.hold-only #section-bookings > .settings-card,
+body.hold-only #section-sponsors #fp-sponsor-form,
+body.hold-only #section-sponsors .fp-sponsor-booths { display: none; }
+body.hold-only .aba-id-btn { cursor: default; }

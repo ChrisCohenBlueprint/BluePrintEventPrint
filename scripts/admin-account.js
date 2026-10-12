@@ -7,13 +7,14 @@
  *
  *   node scripts/admin-account.js list
  *   node scripts/admin-account.js create <username> <password> [role]  create / reset password
- *   node scripts/admin-account.js role <username> <admin|sales>        change access level
+ *   node scripts/admin-account.js role <username> <operations|admin|sales>  change access level
  *   node scripts/admin-account.js reset-2fa <username>                 clear 2FA (re-enrols next login)
  *   node scripts/admin-account.js delete <username>
  *
- * `role` is admin (default) or sales. A sales account can only reach /sales:
- * remaining sponsorship, available stands and the client proposals built from
- * them — never the admin console.
+ * `role` is operations, admin (default) or sales. Operations run the
+ * floorplan. An admin opens the console but on the plan can only hold stands.
+ * A sales account can only reach /sales: remaining sponsorship, available
+ * stands and the client proposals built from them — never the admin console.
  *
  * It does what the Team tab does, through the same model functions, so the
  * two cannot drift apart:
@@ -56,13 +57,13 @@ async function main(argv = process.argv.slice(2)) {
       case 'list': {
         const rows = await db.collection('users').find({}).project({ username: 1, role: 1, totpEnrolled: 1 }).toArray();
         if (!rows.length) console.log('No accounts.');
-        rows.forEach(u => console.log(`  ${u.username.padEnd(16)} ${String(u.role || 'admin').padEnd(6)}  2FA: ${u.totpEnrolled ? 'enrolled' : 'not set up'}`));
+        rows.forEach(u => console.log(`  ${u.username.padEnd(16)} ${String(u.role || 'admin').padEnd(10)}  2FA: ${u.totpEnrolled ? 'enrolled' : 'not set up'}`));
         break;
       }
 
       case 'create': {
-        if (!a || !b) throw new Error('usage: create <username> <password> [admin|sales]');
-        const role = c === 'sales' ? 'sales' : 'admin';
+        if (!a || !b) throw new Error('usage: create <username> <password> [operations|admin|sales]');
+        const role = ['sales', 'operations'].includes(c) ? c : 'admin';
         const existing = await users.findByUsername(a);
         if (existing) {
           // A reset, not a creation: setPassword bumps tokenVersion, so every
@@ -80,7 +81,7 @@ async function main(argv = process.argv.slice(2)) {
       }
 
       case 'role': {
-        if (!a || !['admin', 'sales'].includes(b)) throw new Error('usage: role <username> <admin|sales>');
+        if (!a || !['operations', 'admin', 'sales'].includes(b)) throw new Error('usage: role <username> <operations|admin|sales>');
         const ok = await users.setRole(a, b);
         console.log(ok
           ? `✅ "${a}" is now ${b}. Any live session for the account has been revoked.`
@@ -109,8 +110,8 @@ async function main(argv = process.argv.slice(2)) {
       default:
         console.log('Commands:');
         console.log('  list');
-        console.log('  create <user> <pass> [admin|sales]   create, or reset an existing password');
-        console.log('  role <user> <admin|sales>');
+        console.log('  create <user> <pass> [operations|admin|sales]   create, or reset an existing password');
+        console.log('  role <user> <operations|admin|sales>');
         console.log('  reset-2fa <user>');
         console.log('  delete <user>');
     }

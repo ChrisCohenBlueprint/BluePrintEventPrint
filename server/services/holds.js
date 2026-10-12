@@ -123,15 +123,17 @@ async function forceHold(boothNumber, { company = 'Pending', durationMs = config
  * The result was ignored, so every one of those was acked as a release, logged
  * as "released" and written into the audit trail.
  */
-async function release(boothNumber, { actor = null } = {}) {
+async function release(boothNumber, { actor = null, expect = ['held', 'sold'] } = {}) {
   // The hold document goes first: should the process stop between the two
   // writes, a held stand with no document is what the sweep releases anyway,
   // which is the outcome asked for.
   await drop(boothNumber);
   // Release frees a held OR sold stand back to available (blanking the exhibitor
   // and clearing the deal). The admin action is password-gated in the socket
-  // handler, so an accidental click can't silently drop a sale.
-  const r = await booths.setStatus(boothNumber, 'available', { company: null, actor, expect: ['held', 'sold'] });
+  // handler, so an accidental click can't silently drop a sale. `expect` is
+  // narrowed to ['held'] for an account that may only hold; a sold stand it
+  // refuses loses nothing by the drop above, as a sale keeps no hold document.
+  const r = await booths.setStatus(boothNumber, 'available', { company: null, actor, expect });
   if (!r) return { ok: false, reason: 'no_such_booth' };
   if (!r.changed) return { ok: false, reason: 'not_booked', status: r.before.status };
   track({ type: 'hold.release', boothNumber, meta: {}, actor });

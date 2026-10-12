@@ -77,7 +77,7 @@ const emit = (event, payload) => new Promise(res => handlers[event](payload, res
 const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg);
 
 (async () => {
-  const admin = await users.upsert({ username: 'chris', password: 'pw', role: 'admin' });
+  const admin = await users.upsert({ username: 'chris', password: 'pw', role: 'operations' });
   ADMIN_ROWS = db.store.users.map(u => ({ ...u }));
   let cookie = '';
   auth.setSessionCookie({ setHeader: (_k, v) => { cookie = String(v).split(';')[0]; } }, admin);
@@ -294,7 +294,7 @@ const logged = () => emitted.filter(e => e[1] === 'log:entry').map(e => e[2].msg
                 tags: [{ showId: SHOW, key: 'oils', label: 'Oils' }, { showId: SHOW, key: 'additives', label: 'Additives' }] });
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.admin = { user: 'chris' }; showContext.runAs(SHOW, next); });
+  app.use((req, _res, next) => { req.admin = { user: 'chris', role: 'operations' }; showContext.runAs(SHOW, next); });
   app.use('/api', api);
   const server = app.listen(0);
   await new Promise(r => server.once('listening', r));

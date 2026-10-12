@@ -5,9 +5,11 @@ const totp = require('../services/totp');
 
 const col = () => getDb().collection('users');
 
-// The three account tiers. 'sales' is the sub-admin used by the reps: same
-// password + 2FA sign-in, but it only unlocks /sales.
-const ROLES = ['owner', 'admin', 'sales'];
+// The account tiers. 'operations' run the floorplan; 'admin' opens the console
+// but on the plan can only hold stands (see PLAN_ROLES in auth.js). 'sales' is
+// the sub-admin used by the reps: same password + 2FA sign-in, but it only
+// unlocks /sales.
+const ROLES = ['owner', 'operations', 'admin', 'sales'];
 const cleanRole = (r) => (ROLES.includes(String(r || '').toLowerCase().trim())
   ? String(r).toLowerCase().trim() : 'admin');
 

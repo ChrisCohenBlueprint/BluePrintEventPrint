@@ -899,10 +899,17 @@
               <label>Access level</label>
               <div class="role-picker">
                 <label class="role-opt">
+                  <input type="radio" name="team-role" value="operations">
+                  <span>
+                    <strong>Operations</strong>
+                    <small>Runs the floorplan — uploads plans, splits, merges, numbers and sells stands. The only tier that can change the plan.</small>
+                  </span>
+                </label>
+                <label class="role-opt">
                   <input type="radio" name="team-role" value="admin" checked>
                   <span>
                     <strong>Administrator</strong>
-                    <small>Full console — floorplan, bookings, leads, sponsors.</small>
+                    <small>Console — bookings, leads, sponsors, analytics. On the floorplan they can only put stands on hold.</small>
                   </span>
                 </label>
                 <label class="role-opt">
