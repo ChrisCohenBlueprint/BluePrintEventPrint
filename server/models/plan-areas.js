@@ -2,6 +2,7 @@ const { getDb } = require('../db');
 const config    = require('../config');
 const catalogue = require('../data/plan-areas');
 const { safeImage } = require('../lib/safe-url');
+const { extractStands } = require('../lib/extract-stands');
 
 /**
  * What an admin has done to the plan's named areas — who sponsors each one,
@@ -62,6 +63,10 @@ async function isValid(key) {
 const slug = (v) => String(v == null ? '' : v).toLowerCase().trim()
   .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
 
+// The same shape, within the jitter an export can add. An area is found on the
+// plan by its rectangle, so this is also how an area is known across imports.
+const sameBox = (g, h) => !!(g && h) && ['x', 'y', 'w', 'h'].every(k => Math.abs((g[k] || 0) - (h[k] || 0)) < 2);
+
 /**
  * Store the sponsorable areas an import read out of this show's plan.
  *
@@ -99,7 +104,6 @@ async function replaceFromArtwork(areas, { actor = null } = {}) {
     if (!known.some(k => k.key === c.key)) known.push({ key: c.key, geometry: c.geometry, row: byKey.get(c.key) || null, shipped: c });
   }
   const worked = (r) => !!(r && (r.sponsor || r.logo || r.sponsorKey || r.label || r.status === 'taken'));
-  const sameBox = (g, h) => ['x', 'y', 'w', 'h'].every(k => Math.abs((g[k] || 0) - (h[k] || 0)) < 2);
 
   for (const a of list) {
     const printed = (a.exhibitor && a.exhibitor.trim()) || `Area ${a.number}`;
@@ -134,6 +138,34 @@ async function replaceFromArtwork(areas, { actor = null } = {}) {
     { $unset: { geometry: '', fromArtwork: '' }, $set: { updatedAt: new Date(), updatedBy: actor } });
 
   return { ok: true, areas: seen.length, keys: seen, retired: stale.modifiedCount };
+}
+
+/**
+ * Bring an event's areas into line with the plan it is showing, without an
+ * import. Run at boot for every event that has a plan.
+ *
+ * The areas are a reading of the live drawing, and a reading made by an older
+ * version of this file can be wrong in a way nobody will re-import to fix:
+ * Europe's lounges were read under keys that dropped two of them, a deploy
+ * corrected the reading, and the lounges stayed unclickable because the rows
+ * were still the old reading. Compared by shape, as the page binds them. When
+ * every shape the plan draws has an area in that place and nothing stale is
+ * listed, nothing is written — so a boot costs one extraction per event.
+ *
+ * A drawing in which no area can be read is not evidence that there are none
+ * (the fills may simply be unreadable), so it changes nothing.
+ */
+async function reconcileWithArtwork(svg, { actor = 'deploy' } = {}) {
+  if (!svg) return { ok: false, reason: 'no_artwork' };
+  const drawn = extractStands(svg).stands.filter(s => s.sponsored && s.geometry);
+  if (!drawn.length) return { ok: true, changed: false, reason: 'no_areas_drawn' };
+  const stored = (await col().find({ showId: config.showId }).toArray())
+    .filter(r => r.fromArtwork && r.geometry);
+  const agree = drawn.length === stored.length &&
+                drawn.every(d => stored.some(r => sameBox(r.geometry, d.geometry)));
+  if (agree) return { ok: true, changed: false, areas: stored.length };
+  const r = await replaceFromArtwork(drawn, { actor });
+  return { ...r, changed: true, before: stored.length };
 }
 
 /**
@@ -281,4 +313,4 @@ async function applyPackageSoldOut(sponsorKey, soldOut, { actor = null } = {}) {
 }
 
 module.exports = { col, ensureIndexes, all, isValid, setLogo, setLabel, setSponsor, setPackage,
-                   applyPackageSoldOut, replaceFromArtwork, STATUSES, MAX_LOGO };
+                   applyPackageSoldOut, replaceFromArtwork, reconcileWithArtwork, STATUSES, MAX_LOGO };

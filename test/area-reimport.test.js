@@ -73,6 +73,29 @@ const V02 = [
   check('Shell is back on the West lounge', again.some(a => a.key === 'networking-lounge-west' && a.sponsor === 'Shell'));
   check('one area per shape', new Set(again.map(a => JSON.stringify(a.geometry))).size === 8);
 
+  // The live site after the fix deployed: the rows were still the old reading,
+  // and nobody re-imports a plan to mend a lounge. Boot does it.
+  console.log('\nAt boot, an event\'s areas are brought into line with the plan it shows');
+  db = fakeDb({ planAreas: [] });
+  await run(() => planAreas.setSponsor('networking-lounge-west', { sponsor: 'Shell', status: 'taken' }, { actor: 'chris' }));
+  for (const a of V02) {
+    const key = a.exhibitor ? a.exhibitor.toLowerCase().replace(/[^a-z0-9]+/g, '-') : `area-${a.number}`;
+    if (db.store.planAreas.some(r => r.key === key && r.geometry)) continue;
+    db.store.planAreas.push({ showId: EUROPE, key, geometry: a.geometry, artworkLabel: a.exhibitor || `Area ${a.number}`, fromArtwork: true });
+  }
+  const svg = require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'LEX27_Floorplan_v02.svg'), 'utf8');
+  let rr = await run(() => planAreas.reconcileWithArtwork(svg));
+  check('the old reading is replaced', rr.ok && rr.changed === true && rr.before === 5, JSON.stringify(rr));
+  const booted = await run(() => planAreas.all());
+  check('eight areas, from the real drawing', booted.length === 8, booted.map(a => a.key).join(', '));
+  check('Shell is on the West lounge', booted.some(a => a.key === 'networking-lounge-west' && a.sponsor === 'Shell'));
+  check('and the East lounge is listed', booted.some(a => a.key === 'networking-lounge-east'));
+  rr = await run(() => planAreas.reconcileWithArtwork(svg));
+  check('the next boot writes nothing', rr.ok && rr.changed === false && rr.areas === 8, JSON.stringify(rr));
+  rr = await run(() => planAreas.reconcileWithArtwork('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect x="0" y="0" width="5" height="5" fill="#fff"/></svg>'));
+  check('a drawing with no readable areas changes nothing', rr.changed === false && (await run(() => planAreas.all())).length === 8,
+        JSON.stringify(rr));
+
   const f = out.filter(x => !x).length;
   console.log(`\n${f ? `${f} FAILED` : 'ALL PASSED'} (${out.length} checks)`);
   process.exit(f ? 1 : 0);

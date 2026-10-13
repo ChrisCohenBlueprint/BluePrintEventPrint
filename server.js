@@ -23,6 +23,7 @@ const tags         = require('./server/models/tags');
 const planAreas    = require('./server/models/plan-areas');
 const showsModel   = require('./server/models/shows');
 const floorplansModel = require('./server/models/floorplans');
+const showContext  = require('./server/show-context');
 const menus        = require('./server/models/menus');
 const booths       = require('./server/models/booths');
 const sponsors     = require('./server/models/sponsors');
@@ -60,6 +61,22 @@ async function start() {
   // editable alongside any new ones rather than living only in config.
   await showsModel.ensureSeeded();
   await planAreas.ensureIndexes();
+  // Each event's lounges and theatres, as its live plan draws them. The areas
+  // are a reading of the drawing, and a reading made by an older build can be
+  // wrong in a way nobody re-imports a plan to mend — Europe's lounges stayed
+  // unclickable for an afternoon after the reader was fixed, because the rows
+  // were still the old reading. Writes only where the shapes disagree, keeps
+  // every sponsor, and never stops the site coming up.
+  for (const show of showsModel.list()) {
+    try {
+      await showContext.runAs(show.showId, async () => {
+        const plan = await floorplansModel.get();
+        if (!plan || !plan.svg) return;
+        const r = await planAreas.reconcileWithArtwork(plan.svg, { actor: 'deploy' });
+        if (r && r.changed) console.log(`↻  ${show.showId}: areas re-read from the live plan — ${r.areas} now, ${r.before} before`);
+      });
+    } catch (e) { console.warn(`⚠  ${show.showId} areas not reconciled: ${e.message}`); }
+  }
   // These three guarantee uniqueness rather than just speed, so a missing one is
   // a correctness hole, not a slow query: two live holds on one stand, two
   // stands sharing a display number, or a duplicate sponsorship package. They
