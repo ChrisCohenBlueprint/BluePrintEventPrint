@@ -70,6 +70,8 @@ const slug = (v) => String(v == null ? '' : v).toLowerCase().trim()
  * sold under — is on the same row and is deliberately not in the $set, so
  * re-importing a plan moves the areas and keeps the sponsorships.
  *
+ * An area the plan still draws in the same place keeps its key — see below.
+ *
  * Areas the new plan no longer draws lose their geometry marker rather than
  * their row: a sponsor's logo is not ours to delete because a designer moved a
  * lounge, and a row with no geometry simply stops being listed.
@@ -80,10 +82,43 @@ async function replaceFromArtwork(areas, { actor = null } = {}) {
   const seen = [];
   let order = 0;
 
+  // An area keeps the key it already has wherever the plan still draws it,
+  // because the key is what its sponsor, logo and package hang on. Keying by
+  // printed label alone did two things to Europe's re-issued plan: three
+  // shapes print NETWORKING LOUNGE and two CONFERENCE, so only the first of
+  // each was stored and the rest went unclickable; and every area changed key
+  // (networking-lounge-west → networking-lounge), leaving whatever was sold on
+  // the old one behind. Matched by position, as the plan binds them.
+  const rows = await col().find({ showId }).toArray();
+  const byKey = new Map(rows.map(r => [r.key, r]));
+  const known = [];
+  for (const r of rows) if (r.geometry) known.push({ key: r.key, geometry: r.geometry, row: r });
+  // The shipped catalogue is the event's areas until its plan is imported —
+  // its keys are the ones an admin's work sits on.
+  for (const c of catalogue.AREAS) {
+    if (!known.some(k => k.key === c.key)) known.push({ key: c.key, geometry: c.geometry, row: byKey.get(c.key) || null, shipped: c });
+  }
+  const worked = (r) => !!(r && (r.sponsor || r.logo || r.sponsorKey || r.label || r.status === 'taken'));
+  const sameBox = (g, h) => ['x', 'y', 'w', 'h'].every(k => Math.abs((g[k] || 0) - (h[k] || 0)) < 2);
+
   for (const a of list) {
-    const label = (a.exhibitor && a.exhibitor.trim()) || `Area ${a.number}`;
-    const key = slug(label) || `area-${slug(a.number) || order}`;
-    if (seen.includes(key)) continue;          // two shapes, one name — the first is the area
+    const printed = (a.exhibitor && a.exhibitor.trim()) || `Area ${a.number}`;
+    // Where this shape was already an area: one an admin has worked on first,
+    // then a shipped key, then any.
+    const here = known.filter(k => !seen.includes(k.key) && sameBox(k.geometry, a.geometry))
+      .sort((p, q) => (worked(q.row) - worked(p.row)) || (!!q.shipped - !!p.shipped) ||
+                      (!!catalogue.isValid(q.key) - !!catalogue.isValid(p.key)));
+    let key = here.length ? here[0].key : null;
+    // A shipped key's own name ("Networking Lounge (West)") tells three lounges
+    // apart where the plan prints the same words on each.
+    const label = key && catalogue.isValid(key) ? catalogue.get(key).label : printed;
+    if (!key) {
+      key = slug(printed) || `area-${slug(a.number) || order}`;
+      if (seen.includes(key) || (byKey.has(key) && known.some(k => k.key === key && !sameBox(k.geometry, a.geometry)))) {
+        key = `${key}-${slug(a.number) || order}`;
+      }
+      if (seen.includes(key)) continue;          // the same shape twice — the first is the area
+    }
     seen.push(key);
     await col().updateOne(
       { showId, key },
