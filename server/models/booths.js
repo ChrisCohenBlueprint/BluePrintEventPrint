@@ -2795,6 +2795,32 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
                                   importedBy: actor || importActor }));
   const prevByNumber = new Map(existing.map(b => [b.boothNumber, b]));
 
+  // A stand renumbered here (Tools → Renumber) is drawn under the number it
+  // SHOWS. Matching on identity alone read that as a new stand: 926-2, sold
+  // and shown as 825, met a drawing that prints 825, and an available 825 was
+  // created on the same floor — the same number twice, one of them sellable.
+  // The drawn number is the renumbered stand, so it is read as that stand. Not
+  // when the stand's own number is drawn too: then the drawing has both.
+  const renumbered = [];
+  if (!replace) {
+    const drawn = new Set(docs.map(d => d.boothNumber));
+    const shownAs = new Map();
+    for (const b of existing) {
+      if (b.displayNumber && b.displayNumber !== b.boothNumber && !drawn.has(b.boothNumber)) {
+        shownAs.set(displayKey(b.displayNumber), b);
+      }
+    }
+    for (const d of docs) {
+      if (prevByNumber.has(d.boothNumber)) continue;
+      const b = shownAs.get(displayKey(d.boothNumber));
+      if (!b) continue;
+      renumbered.push({ boothNumber: d.boothNumber, stand: b.boothNumber });
+      d.boothNumber = b.boothNumber;
+      d.svgElementId = b.svgElementId || d.svgElementId;
+      shownAs.delete(displayKey(b.displayNumber));   // one drawn shape per stand
+    }
+  }
+
   // A plan with no readable areas — a re-issue whose printed figures failed to
   // calibrate — gives every stand an area of nothing. That is the reader not
   // knowing, not the stand having shrunk, so a size and price already known
@@ -2966,7 +2992,13 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
            released: released.length, orphaned, preserved: reshaped.concat(untouched),
            createdNumbers: created, reshapedNumbers: reshaped, untouchedNumbers: untouched,
            // { boothNumber, into }: drawn by the plan, but inside merged block `into`.
-           absorbed, removed, kept };
+           absorbed, removed, kept,
+           // { boothNumber, stand }: drawn under the number stand `stand` shows.
+           renumbered,
+           // Sold and held stands in the hall once the plan is on — the figure
+           // that says no booking went. The drawing's own colours (`sold`,
+           // `held` above) say nothing about the hall on a re-issue.
+           committedAfter: await countCommitted(showId) };
 }
 
 /**

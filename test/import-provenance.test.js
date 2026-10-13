@@ -98,6 +98,33 @@ const PLAN = (over = {}) => [
   const hall = db.store.booths.filter(b => !b.removed).reduce((s, b) => s + b.sqm, 0);
   check('so the hall holds 36 m², not 45', hall === 36, `${hall} m²`);
 
+  // Europe, 13 Oct 2026: 926 was split, 926-2 sold and renumbered 825, and the
+  // re-issued drawing printed 926 and 825. The update created an available 825
+  // on Setral's floor.
+  console.log('\nA stand renumbered here is the stand the drawing prints that number on');
+  fresh();
+  await run(() => booths.importFromArtwork(PLAN(), { actor: 'chris' }));
+  await run(() => booths.split('102', { parts: 2, actor: 'chris' }));
+  await run(() => booths.setStatus('102-2', 'sold', { company: 'Setral', actor: 'chris', expect: ['available'] }));
+  r = await run(() => booths.setDisplayNumber('102-2', '825', { actor: 'chris' }));
+  check('102-2 shows as 825', r.ok && now('102-2').displayNumber === '825', JSON.stringify(r.reason));
+  const REISSUE = [...PLAN().filter(s => s.number !== '102'),
+    { number: '102', area: 4.5, areaSource: 'printed', geometry: { x: 40, y: 0, w: 20, h: 40 }, exhibitor: null, status: 'available' },
+    { number: '825', area: 4.5, areaSource: 'printed', geometry: { x: 60, y: 0, w: 20, h: 40 }, exhibitor: null, status: 'available' }];
+  r = await run(() => booths.importFromArtwork(REISSUE, { actor: 'chris', keep: true }));
+  check('the update lands', r.ok, JSON.stringify(r.reason));
+  check('without creating a second 825', !now('825'), JSON.stringify(now('825')));
+  check('Setral keeps 825', now('102-2').status === 'sold' && now('102-2').assignment.company === 'Setral');
+  check('and the result says which stand 825 is',
+        (r.renumbered || []).some(x => x.boothNumber === '825' && x.stand === '102-2'), JSON.stringify(r.renumbered));
+  check('nor reports it as no longer drawn', !(r.kept || []).some(k => k.boothNumber === '102-2'), JSON.stringify(r.kept));
+  check('and counts the bookings in the hall, not the drawing\'s colours', r.committedAfter === 1, String(r.committedAfter));
+  const { diffStands } = require('../server/lib/plan-diff');
+  const d = diffStands(REISSUE, db.store.booths);
+  check('the check before going live says the same',
+        !d.added.some(a => a.boothNumber === '825') && d.renumbered.some(x => x.stand === '102-2') &&
+        !d.missing.some(m => m.boothNumber === '102-2'), JSON.stringify(d.summary));
+
   console.log('\nA stand taken off the plan is not a booking');
   fresh();
   await run(() => booths.importFromArtwork(PLAN({ 101: { status: 'available', exhibitor: null },

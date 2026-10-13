@@ -5910,7 +5910,9 @@ async function previewStands(row, { revision = null } = {}) {
     (p.existing
       ? `This event has ${p.existing} stands now: against this plan, ${ds.added || 0} new, ${ds.moved || 0} moved, ` +
         `${ds.resized || 0} resized, ${ds.unchanged || 0} unchanged, ` +
-        (ds.absorbed ? `${ds.absorbed} inside merged blocks, ` : '') + `${ds.missing || 0} no longer drawn` +
+        (ds.absorbed ? `${ds.absorbed} inside merged blocks, ` : '') +
+        (ds.renumbered ? `${ds.renumbered} drawn under the number they were renumbered to, ` : '') +
+        `${ds.missing || 0} no longer drawn` +
         (ds.committedMissing ? ` — ${ds.committedMissing} of them sold or on hold` : '') + '. '
       : '') +
     'Exhibitor names become ours: drawn in our own type, searchable, and editable here.';
@@ -5924,8 +5926,9 @@ async function previewStands(row, { revision = null } = {}) {
     dropped.textContent = 'Not drawn on this plan but sold or on hold here: ' +
       d.missing.filter(m => m.committed)
         .map(m => `${m.boothNumber}${m.company ? ` (${m.company})` : ''}`).join(', ') +
-      '. They are kept exactly as they are, but will not appear on the map until the drawing puts them back. ' +
-      'If they have been renumbered, renumber them here (Tools → Renumber) before updating.';
+      '. They are kept exactly as they are, and stay on the map where they were — over whatever the new drawing puts there. ' +
+      'If the drawing has given one a new number, renumber it here (Tools → Renumber) to that number before making the plan live, ' +
+      'and the drawing\'s shape is read as that stand.';
   }
 
   const list = (rows, f) => rows.slice(0, 40).map(f).join(', ') + (rows.length > 40 ? ` … and ${rows.length - 40} more` : '');
@@ -5933,6 +5936,7 @@ async function previewStands(row, { revision = null } = {}) {
   // new stands, and not stands to add — the update keeps the block whole. A
   // server from before the diff reported them sends no such list.
   const absorbed = (d && d.absorbed) || [];
+  const renumbered = (d && d.renumbered) || [];
   const pre = document.createElement('pre');
   pre.className = 'spec-report-body';
   pre.textContent = [
@@ -5940,11 +5944,12 @@ async function previewStands(row, { revision = null } = {}) {
       'What this drawing changes:',
       ...(d.added.length   ? [`  new        ${list(d.added, a => a.boothNumber)}`] : []),
       ...(absorbed.length  ? [`  inside merged blocks  ${list(absorbed, a => `${a.boothNumber} (in ${a.into})`)}`] : []),
+      ...(renumbered.length ? [`  renumbered here  ${list(renumbered, a => `${a.boothNumber} (is ${a.stand})`)}`] : []),
       ...(d.moved.length   ? [`  moved      ${list(d.moved, a => a.boothNumber)}`] : []),
       ...(d.resized.length ? [`  resized    ${list(d.resized, a => `${a.boothNumber} (${a.from ?? '?'}→${a.to ?? '?'} ${unit})`)}`] : []),
       ...(d.missing.length ? [`  not drawn  ${list(d.missing, a => `${a.boothNumber}${a.committed ? ' *' : ''}`)}` +
                               (d.missing.some(m => m.committed) ? '   (* sold or on hold — kept)' : '   (empty stands are removed by Update)')] : []),
-      ...(!d.added.length && !absorbed.length && !d.moved.length && !d.resized.length && !d.missing.length
+      ...(!d.added.length && !absorbed.length && !renumbered.length && !d.moved.length && !d.resized.length && !d.missing.length
         ? ['  nothing — every stand is where it was'] : []),
       '',
     ] : []),
@@ -6080,9 +6085,13 @@ async function importStands(row, preview, box, { mode = 'upsert', revision = nul
   }
 
   adminToast(
-    (revision ? `${revision.label} is ${offAir(row) ? `now the plan for ${where}, which is still off the air` : `live on ${where}`}. ${r.imported} stands placed on it — `
+    (revision ? `${revision.label} is ${offAir(row) ? `now the plan for ${where}, which is still off the air` : `live on ${where}`}. ${r.imported} stands drawn on it — `
               : `${where}: ${r.imported} stands ${r.mode === 'replace' ? 'replaced' : 'updated from the plan'} — `) +
-    `${r.available} available, ${r.sold} sold, ${r.held || 0} on hold` +
+    // On an update the drawing's colours say nothing about the hall: every
+    // booking is kept, so the figure that matters is how many there now are.
+    (r.mode === 'update' && r.committedAfter != null
+      ? `${r.committedAfter} sold or on hold in the hall`
+      : `${r.available} available, ${r.sold} sold, ${r.held || 0} on hold`) +
     (r.created ? `, ${r.created} new` : '') +
     (r.removed && r.removed.length ? `, ${r.removed.length} empty stands no longer drawn removed` : '') +
     (r.areasImported ? `, ${r.areasImported} sponsorable areas read from this plan` : '') +
@@ -6091,10 +6100,11 @@ async function importStands(row, preview, box, { mode = 'upsert', revision = nul
   // What the drawing dropped that could not be removed stays on the page, by
   // number and company, until it is read — a toast is not the place for it.
   if (r.kept && r.kept.length) {
-    showImportRefusal(where,
+    showImportRefusal(where, { title: `${where} — kept, not drawn` },
       'Updated. These stands are not drawn on the new plan but carry a booking or hand-work, so they were kept: ' +
       r.kept.map(k => `${k.boothNumber} (${k.status}${k.company ? `, ${k.company}` : ''})`).join(', ') +
-      '. They will not appear on the map until the drawing includes them again — or renumber them here if the plan has renumbered them.');
+      '. They stay on the map where they were, over whatever the new drawing puts there — remove the empty ones that are no longer wanted, ' +
+      'or renumber one here to the number the drawing gives it and make the plan live again.');
   }
   await loadPlans();
   // A plan just made live may be drawn in different colours; the picker opens
@@ -6110,7 +6120,8 @@ async function importStands(row, preview, box, { mode = 'upsert', revision = nul
  * way — bookings, hand-work, or artwork the reader cannot interpret — and what
  * to do about it, which is a paragraph, not a toast.
  */
-function showImportRefusal(where, message) {
+function showImportRefusal(where, opts, message) {
+  if (typeof opts === 'string') { message = opts; opts = {}; }
   document.getElementById('import-refusal')?.remove();
   const boxEl = document.createElement('div');
   boxEl.id = 'import-refusal';
@@ -6118,7 +6129,7 @@ function showImportRefusal(where, message) {
 
   const head = document.createElement('div');
   head.className = 'spec-report-head';
-  head.append(Object.assign(document.createElement('strong'), { textContent: `${where} — import refused` }));
+  head.append(Object.assign(document.createElement('strong'), { textContent: opts.title || `${where} — import refused` }));
   const close = document.createElement('button');
   close.type = 'button'; close.className = 'admin-btn'; close.textContent = 'Close';
   close.onclick = () => boxEl.remove();
