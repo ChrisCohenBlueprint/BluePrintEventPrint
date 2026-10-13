@@ -1156,17 +1156,24 @@
     var caches = cachesFor(svgDoc);
     if (caches.glyphs) return caches.glyphs;
     var out = [];
-    var glyphs = svgDoc.querySelectorAll('path, polygon');
+    // Outlined lettering is paths and polygons; a plan with live text prints
+    // its names as <text>. Only the artwork's own text counts — the numbers
+    // and names this file paints are not lettering to make room for.
+    var glyphs = svgDoc.querySelectorAll('path, polygon, text');
     for (var i = 0; i < glyphs.length; i++) {
       var el = glyphs[i];
+      if (el.tagName && el.tagName.toLowerCase() === 'text' && !isArtworkText(el)) continue;
       // Measure at natural size. The transform is lifted only for the instant
       // of the measurement and put straight back: this loop walks EVERY glyph
       // on the plan, so stripping them outright would undo the scaling already
       // applied to the other areas' names and leave only the last one shrunk.
-      var tf = el.hasAttribute('data-label-scaled') ? el.getAttribute('transform') : null;
-      if (tf) el.removeAttribute('transform');
+      // Live text usually carries a transform of its own (Illustrator places
+      // each <text> with a translate), so "natural" is that transform, not none.
+      var scaled = el.hasAttribute('data-label-scaled');
+      var tf = scaled ? el.getAttribute('transform') : null;
+      if (scaled) restoreOwnTransform(el);
       var b = visualBox(el);
-      if (tf) el.setAttribute('transform', tf);
+      if (scaled) el.setAttribute('transform', tf);
       if (!b || !(b.w > 0) || !(b.h > 0)) continue;
       b.el = el;
       out.push(b);
@@ -1306,8 +1313,9 @@
 
     if (scale === 1) {
       for (var r = 0; r < name.els.length; r++) {
-        name.els[r].removeAttribute('transform');
+        restoreOwnTransform(name.els[r]);
         name.els[r].removeAttribute('data-label-scaled');
+        name.els[r].removeAttribute('data-label-tf');
       }
       return null;
     }
@@ -1317,10 +1325,39 @@
     var tf = 'translate(' + t.cx + ',' + t.y + ') scale(' + scale + ') ' +
              'translate(' + (-t.cx) + ',' + (-name.box.y) + ')';
     for (var i = 0; i < name.els.length; i++) {
-      name.els[i].setAttribute('transform', tf);
-      name.els[i].setAttribute('data-label-scaled', '1');
+      var el = name.els[i];
+      // The lettering's own transform stays underneath ours. Outlined glyphs
+      // have none; live text is placed by one, and writing over it put the
+      // name at the drawing's origin — or, where the name was not found at
+      // all, left it full size across the logo (Europe's lounges, Oct 2026).
+      if (!el.hasAttribute('data-label-scaled') && el.hasAttribute('transform')) {
+        el.setAttribute('data-label-tf', el.getAttribute('transform'));
+      }
+      var own = el.getAttribute('data-label-tf');
+      el.setAttribute('transform', own ? tf + ' ' + own : tf);
+      el.setAttribute('data-label-scaled', '1');
     }
     return t;
+  }
+
+  /**
+   * Put lettering back as the artwork placed it, with or without a transform
+   * of its own. Only lettering this file moved: an area that never had a logo
+   * has its name "restored" on every catalogue, and stripping a transform we
+   * never set threw a live-text name to the drawing's origin.
+   */
+  function restoreOwnTransform(el) {
+    if (!el.hasAttribute('data-label-scaled')) return;
+    var own = el.getAttribute('data-label-tf');
+    if (own) el.setAttribute('transform', own);
+    else el.removeAttribute('transform');
+  }
+
+  /** The artwork's own <text>, as opposed to a number or name this file painted. */
+  function isArtworkText(el) {
+    var id = el.getAttribute('id') || '';
+    if (id.indexOf('text-booth-') === 0 || id.indexOf('admin-text-') === 0) return false;
+    return !el.hasAttribute('data-split-label') && !el.hasAttribute('data-split-size');
   }
 
   /**
