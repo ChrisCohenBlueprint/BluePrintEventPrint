@@ -2690,8 +2690,9 @@ const countHandwork = (showId = config.showId) =>
  *     single booking. Always an upsert. A stand that is sold, held by a person
  *     or carrying hand-work keeps everything but its shape, size and list
  *     price, which are re-read from the plan; a stand the plan no longer draws
- *     is removed only if nothing but a previous import ever touched it, and is
- *     otherwise left in place and REPORTED by number, status and company so
+ *     is removed only if nobody has touched it — no booking, no hold, no note,
+ *     no hand-work, whoever first wrote it — and is otherwise left in place
+ *     and REPORTED by number, status and company so
  *     the person who uploaded the plan can see what the drawing dropped. It
  *     does not bypass the unreadable-fills refusal: a plan whose colours cannot
  *     be read is no safer for being a re-issue.
@@ -2801,6 +2802,18 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   // created on the same floor — the same number twice, one of them sellable.
   // The drawn number is the renumbered stand, so it is read as that stand. Not
   // when the stand's own number is drawn too: then the drawing has both.
+  // A stand nobody has touched: nothing on it but a shape and, at most, a
+  // previous import's reading — no booking, no person's hold, no note, no
+  // hand-work. The one kind of stand an update may remove when the drawing
+  // drops it, and the one kind a renumbered stand's drawn number may be read
+  // over. Whoever first wrote the stand does not come into it: the stands
+  // Europe was seeded from carry no import mark and were kept for that alone.
+  const personHolds = new Set(await db.collection('holds')
+    .distinct('boothNumber', { showId, source: { $ne: IMPORT_SOURCE } }));
+  const nobodyTouched = (b) => !isCommitted(b) && !hasHandwork(b) && !isComposite(b) &&
+                           !personHolds.has(b.boothNumber) &&
+                           !String((b.assignment && b.assignment.notes) || '').trim();
+
   const renumbered = [];
   if (!replace) {
     const drawn = new Set(docs.map(d => d.boothNumber));
@@ -2811,10 +2824,17 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
       }
     }
     for (const d of docs) {
-      if (prevByNumber.has(d.boothNumber)) continue;
       const b = shownAs.get(displayKey(d.boothNumber));
       if (!b) continue;
-      renumbered.push({ boothNumber: d.boothNumber, stand: b.boothNumber });
+      // The number may ALSO be a stand of its own: an update that did not know
+      // about renumbering created one (an available 825 on Setral's floor,
+      // Europe, 13 Oct 2026). The person's renumbering is the claim that
+      // counts, so the stand under the bare number is read over if nobody has
+      // touched it — it then falls out of the drawing and is removed below.
+      // If somebody has, both claims stand and the drawing is read as it is.
+      const twin = prevByNumber.get(d.boothNumber);
+      if (twin && !nobodyTouched(twin)) continue;
+      renumbered.push({ boothNumber: d.boothNumber, stand: b.boothNumber, ...(twin ? { over: twin.boothNumber } : {}) });
       d.boothNumber = b.boothNumber;
       d.svgElementId = b.svgElementId || d.svgElementId;
       shownAs.delete(displayKey(b.displayNumber));   // one drawn shape per stand
@@ -2873,8 +2893,6 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   }
 
   // ── Upsert ──────────────────────────────────────────────────────────────────
-  const personHolds = new Set(await db.collection('holds')
-    .distinct('boothNumber', { showId, source: { $ne: IMPORT_SOURCE } }));
   // Numbers that live inside a merged block. The plan the block was merged
   // from may still draw them — a designer's file that predates the merge, or
   // one that never had it — and creating them again put a stand back on top of
@@ -2960,8 +2978,8 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   const orphaned = orphans.map(b => b.boothNumber);
 
   // A re-issued plan is the one case where a stand that has vanished from the
-  // drawing is removed — and only a stand that has nothing on it but what a
-  // previous import wrote. An empty stand the new hall does not draw is not
+  // drawing is removed — and only a stand nobody has touched (`nobodyTouched`,
+  // above). An empty stand the new hall does not draw is not
   // inventory; left behind it would be counted as available and be unclickable
   // on the plan, which is exactly the phantom-stand fault the artwork spec
   // exists to prevent. Anything a person touched — a sale, a hold, a merge, a
@@ -2971,9 +2989,7 @@ async function importFromArtwork(stands, { actor = null, force = false, replace 
   const kept = [];
   if (keep) {
     for (const b of orphans) {
-      const ours = b.source === IMPORT_SOURCE && !isCommitted(b) && !hasHandwork(b) &&
-                   !isComposite(b) && !personHolds.has(b.boothNumber);
-      if (ours) removed.push(b.boothNumber);
+      if (nobodyTouched(b)) removed.push(b.boothNumber);
       else kept.push({ boothNumber: b.boothNumber, status: b.status,
                        company: (b.assignment && b.assignment.company) || null });
     }

@@ -46,14 +46,27 @@ function diffStands(fromPlan, existing) {
       shown.set(key(b.displayNumber), String(b.boothNumber));
     }
   }
+  // A stand nobody has touched — the same question importFromArtwork asks
+  // before reading a renumbered stand's number over it or removing it.
+  const touched = (b) => {
+    const a = b.assignment || {};
+    return !['available', undefined, null].includes(b.status) || !!(a.company || a.actualPrice || a.contactId) ||
+           !!String(a.notes || '').trim() || (Array.isArray(a.tags) && a.tags.length > 0) || !!a.country ||
+           !!(b.displayNumber || b.sponsorLogo || b.mergeSnapshot || b.splitSnapshot || b.splitFrom ||
+              (Array.isArray(b.mergedFrom) && b.mergedFrom.length) || b.removed === true);
+  };
 
   const added = [], absorbed = [], renumbered = [], moved = [], resized = [], unchanged = [], missing = [];
+  // Stands under a bare number that a renumbered stand's drawn number is read
+  // over: they fall out of the drawing, and are listed with what it drops.
+  const readOver = new Set();
 
   for (const [n, s] of plan) {
     const b = have.get(n);
     if (!b && inside.has(n)) { absorbed.push({ boothNumber: n, into: inside.get(n) }); continue; }
-    if (!b && shown.has(key(n))) {
-      renumbered.push({ boothNumber: n, stand: shown.get(key(n)) });
+    if (shown.has(key(n)) && (!b || !touched(b))) {
+      renumbered.push({ boothNumber: n, stand: shown.get(key(n)), ...(b ? { over: n } : {}) });
+      if (b) readOver.add(n);
       shown.delete(key(n));
       continue;
     }
@@ -70,7 +83,7 @@ function diffStands(fromPlan, existing) {
 
   const drawnAs = new Set(renumbered.map(r => r.stand));
   for (const [n, b] of have) {
-    if (plan.has(n) || drawnAs.has(n)) continue;
+    if ((plan.has(n) && !readOver.has(n)) || drawnAs.has(n)) continue;
     missing.push({ boothNumber: n, status: b.status,
                    company: (b.assignment && b.assignment.company) || null,
                    // What an update would do with it — see importFromArtwork's `keep`.

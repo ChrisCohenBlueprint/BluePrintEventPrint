@@ -125,6 +125,26 @@ const PLAN = (over = {}) => [
         !d.added.some(a => a.boothNumber === '825') && d.renumbered.some(x => x.stand === '102-2') &&
         !d.missing.some(m => m.boothNumber === '102-2'), JSON.stringify(d.summary));
 
+  // Europe as it stood after that update ran WITHOUT this: an available 825
+  // of the import's own, on the same floor as the sold 102-2 that shows 825.
+  console.log('\nA stand the earlier update created under a renumbered stand\'s number is read over and goes');
+  db.store.booths.push({ showId: SHOW, boothNumber: '825', status: 'available', source: booths.IMPORT_SOURCE,
+    geometry: { x: 60, y: 0, w: 20, h: 40 }, sqm: 4.5, listPrice: 2700, assignment: EMPTY(), createdAt: new Date(), updatedAt: new Date() });
+  const d2 = diffStands(REISSUE, db.store.booths);
+  check('the check names it', d2.renumbered.some(x => x.boothNumber === '825' && x.stand === '102-2' && x.over === '825') &&
+        d2.missing.some(m => m.boothNumber === '825' && !m.committed) && !d2.unchanged.some(u => u.boothNumber === '825'),
+        JSON.stringify({ renumbered: d2.renumbered, missing: d2.missing.map(m => m.boothNumber) }));
+  r = await run(() => booths.importFromArtwork(REISSUE, { actor: 'chris', keep: true }));
+  check('the update removes it', r.ok && r.removed.includes('825') && !now('825'), JSON.stringify({ removed: r.removed, reason: r.reason }));
+  check('Setral still has 825', now('102-2').status === 'sold' && now('102-2').displayNumber === '825');
+  // …unless somebody has done something with the stand under the bare number.
+  db.store.booths.push({ showId: SHOW, boothNumber: '825', status: 'available', source: booths.IMPORT_SOURCE,
+    geometry: { x: 60, y: 0, w: 20, h: 40 }, sqm: 4.5, listPrice: 2700, assignment: { ...EMPTY(), notes: 'Laura: keep' }, createdAt: new Date(), updatedAt: new Date() });
+  r = await run(() => booths.importFromArtwork(REISSUE, { actor: 'chris', keep: true }));
+  check('a stand with a note on it is not read over', r.ok && !!now('825') && !(r.renumbered || []).some(x => x.over === '825'),
+        JSON.stringify(r.renumbered));
+  db.store.booths = db.store.booths.filter(b => b.boothNumber !== '825');
+
   console.log('\nA stand taken off the plan is not a booking');
   fresh();
   await run(() => booths.importFromArtwork(PLAN({ 101: { status: 'available', exhibitor: null },

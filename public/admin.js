@@ -5944,7 +5944,7 @@ async function previewStands(row, { revision = null } = {}) {
       'What this drawing changes:',
       ...(d.added.length   ? [`  new        ${list(d.added, a => a.boothNumber)}`] : []),
       ...(absorbed.length  ? [`  inside merged blocks  ${list(absorbed, a => `${a.boothNumber} (in ${a.into})`)}`] : []),
-      ...(renumbered.length ? [`  renumbered here  ${list(renumbered, a => `${a.boothNumber} (is ${a.stand})`)}`] : []),
+      ...(renumbered.length ? [`  renumbered here  ${list(renumbered, a => `${a.boothNumber} (is ${a.stand}${a.over ? `; the empty stand numbered ${a.over} goes` : ''})`)}`] : []),
       ...(d.moved.length   ? [`  moved      ${list(d.moved, a => a.boothNumber)}`] : []),
       ...(d.resized.length ? [`  resized    ${list(d.resized, a => `${a.boothNumber} (${a.from ?? '?'}→${a.to ?? '?'} ${unit})`)}`] : []),
       ...(d.missing.length ? [`  not drawn  ${list(d.missing, a => `${a.boothNumber}${a.committed ? ' *' : ''}`)}` +

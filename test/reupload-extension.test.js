@@ -41,6 +41,12 @@ const stored = () => [
     assignment: { company: 'Dropped But Sold GmbH', contactId: 'c2', actualPrice: 40000, notes: '', tags: [], country: null } }),
   first('105', geom(9, 1), { status: 'held' }),                     // held by a person (a hold row below)
   first('106', geom(11, 1), { sponsorLogo: 'data:image/png;base64,AAAA' }),  // hand-work, drawing drops it
+  // Not an import's: seeded with the event (no source), as Europe's first
+  // 265 stands were. Empty and untouched, so the drawing dropping it removes
+  // it all the same — ten of these stayed on Europe's map over real stands.
+  first('107', geom(13, 1), { source: null }),
+  // …but a note is a person's work, whoever wrote the stand.
+  first('108', geom(15, 1), { source: null, assignment: { company: null, contactId: null, actualPrice: null, notes: 'pillar here', tags: [], country: null } }),
 ];
 const holds = () => [{ showId: SHOW, boothNumber: '105', company: 'Holder Inc', source: null }];
 
@@ -63,7 +69,7 @@ const byNumber = (n) => db.store.booths.find(b => b.showId === SHOW && b.boothNu
   check('the new stands are listed', d.summary.added === 3 && d.added.map(a => a.boothNumber).join() === '201,202,203');
   check('moved stands are listed', d.summary.moved === 2 && d.moved.map(a => a.boothNumber).join() === '101,102');
   check('a resized stand is listed with both sizes', d.summary.resized === 1 && d.resized[0].from === 100 && d.resized[0].to === 200);
-  check('stands the drawing drops are listed', d.summary.missing === 3 && d.missing.map(m => m.boothNumber).join() === '103,104,106');
+  check('stands the drawing drops are listed', d.summary.missing === 5 && d.missing.map(m => m.boothNumber).join() === '103,104,106,107,108');
   check('and the SOLD one among them is flagged', d.summary.committedMissing === 1 &&
         d.missing.find(m => m.boothNumber === '104').committed === true &&
         d.missing.find(m => m.boothNumber === '104').company === 'Dropped But Sold GmbH');
@@ -107,8 +113,10 @@ const byNumber = (n) => db.store.booths.find(b => b.showId === SHOW && b.boothNu
   check('an empty stand nobody touched is removed — it is not inventory any more', !byNumber('103') && r.removed.includes('103'), JSON.stringify(r.removed));
   check('a SOLD stand the drawing dropped is kept', !!byNumber('104') && byNumber('104').assignment.company === 'Dropped But Sold GmbH');
   check('a stand with hand-work the drawing dropped is kept', !!byNumber('106'));
-  check('and both are reported by number, status and company',
-        r.kept.length === 2 && r.kept.some(k => k.boothNumber === '104' && k.status === 'sold' && k.company === 'Dropped But Sold GmbH')
+  check('a seeded empty stand the drawing dropped is removed too — who wrote it does not matter', !byNumber('107') && r.removed.includes('107'), JSON.stringify(r.removed));
+  check('a seeded stand with a note on it is kept', !!byNumber('108') && r.kept.some(k => k.boothNumber === '108'));
+  check('and the kept ones are reported by number, status and company',
+        r.kept.length === 3 && r.kept.some(k => k.boothNumber === '104' && k.status === 'sold' && k.company === 'Dropped But Sold GmbH')
         && r.kept.some(k => k.boothNumber === '106'), JSON.stringify(r.kept));
   check('nothing was deleted wholesale', !db.calls.some(c => c[0] === 'deleteMany' && c[1] === 'booths' && !c[2].boothNumber));
 
