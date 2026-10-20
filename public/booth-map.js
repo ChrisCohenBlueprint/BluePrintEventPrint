@@ -129,6 +129,12 @@
     return best;
   }
 
+  /** The width an element's stroke is drawn at; the SVG default where the plan says nothing. */
+  function strokeOf(el) {
+    try { var w = parseFloat(global.getComputedStyle(el).strokeWidth); return w > 0 && w < 20 ? w : 1; }
+    catch (e) { return 1; }
+  }
+
   /** `box` with `hole` cut out of it: up to four rectangles, none of them over `hole`. */
   function cutOut(box, hole) {
     var x1 = Math.max(box.x, hole.x), y1 = Math.max(box.y, hole.y);
@@ -627,15 +633,6 @@
         unplaced.push(b);
         return;
       }
-      var overlay = document.createElementNS(SVG_NS, 'rect');
-      overlay.setAttribute('x', ox);
-      overlay.setAttribute('y', oy);
-      overlay.setAttribute('width', ow);
-      overlay.setAttribute('height', oh);
-      overlay.setAttribute('data-booth', b.boothNumber);
-      overlay.setAttribute('data-overlay', '1');
-      overlay.setAttribute('fill', 'transparent');
-
       // Is this cell part of a split stand — either a secondary (has splitFrom)
       // or the primary the secondaries point back at?
       var isPrimarySplit = Object.prototype.hasOwnProperty.call(splitAxisByPrimary, b.boothNumber);
@@ -646,6 +643,37 @@
       // and figures, so the dividing lines and the old numbers stayed, and the
       // block looked as if the consolidation had simply not happened.
       var isMerged = b.merged === true || (Array.isArray(b.mergedFrom) && b.mergedFrom.length > 0);
+
+      // A stand lying on another's rectangle — a hold on part of it, a
+      // duplicate under another number — is filled opaque by its status, and
+      // where its edge lies on the host's edge that fill covers the inner
+      // half of the host's stroke: 773 lost its right and bottom lines to the
+      // released 771 and P014 lying on it, and its left edge read heavier
+      // than its right. Each side flush with the host's is pulled in by half
+      // a stroke, so the host's outline keeps one weight all the way round.
+      // Pulled in from the HOST's edge, not the overlay's own: a stand from
+      // an older drawing can overhang its host by a quarter of a unit, and
+      // measured from there a quarter of the stroke stayed covered. Split
+      // cells and merged blocks are left alone: they mask the host's
+      // lettering and draw their own box.
+      if (host && !b.splitFrom && !isPrimarySplit && !isMerged) {
+        var hd = drawnAt(hostIdx), half = strokeOf(host) / 2, flush = 1.5;
+        var rx = ox + ow, by = oy + oh;
+        if (Math.abs(ox - hd.x) <= flush) ox = hd.x + half;
+        if (Math.abs(oy - hd.y) <= flush) oy = hd.y + half;
+        if (Math.abs(rx - (hd.x + hd.w)) <= flush) rx = hd.x + hd.w - half;
+        if (Math.abs(by - (hd.y + hd.h)) <= flush) by = hd.y + hd.h - half;
+        ow = Math.max(0, rx - ox);
+        oh = Math.max(0, by - oy);
+      }
+      var overlay = document.createElementNS(SVG_NS, 'rect');
+      overlay.setAttribute('x', ox);
+      overlay.setAttribute('y', oy);
+      overlay.setAttribute('width', ow);
+      overlay.setAttribute('height', oh);
+      overlay.setAttribute('data-booth', b.boothNumber);
+      overlay.setAttribute('data-overlay', '1');
+      overlay.setAttribute('fill', 'transparent');
       var isSplitCell = !!b.splitFrom || isPrimarySplit || isMerged;
       var splitAxis = b.splitAxis || splitAxisByPrimary[b.boothNumber] || 'vertical';
       // A split overlay doubles as the mask hiding the artwork's stale baked
