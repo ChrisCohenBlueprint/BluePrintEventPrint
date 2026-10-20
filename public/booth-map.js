@@ -826,11 +826,18 @@
       // few stands big that contains it? A hall-sized background rectangle
       // contains everything and says nothing, so the container has to be of
       // the order of a stand.
+      var isLive = function (g) {
+        for (var lj = 0; lj < liveBoxes.length; lj++) if (sameGeom(liveBoxes[lj], g, EDGE_TOL)) return true;
+        return false;
+      };
       var drawnInside = function (d) {
         for (var ci = 0; ci < artwork.length; ci++) {
           var cg = geoms[ci] ? drawnAt(ci) : null;
           if (!cg || !(cg.w > 0) || !(cg.h > 0) || isDead(cg)) continue;
           if (cg.w * cg.h > d.w * d.h * 8) continue;
+          // A live stand's own rectangle is that stand, not a block the removed
+          // one is drawn in: 1051 lay inside 1150, and nothing of 1051 is drawn.
+          if (isLive(cg)) continue;
           if (d.x >= cg.x - EDGE_TOL && d.y >= cg.y - EDGE_TOL &&
               d.x + d.w <= cg.x + cg.w + EDGE_TOL && d.y + d.h <= cg.y + cg.h + EDGE_TOL) return true;
         }
@@ -882,8 +889,13 @@
           for (var pi = 0; pi < pieces.length; pi++) next = next.concat(cutOut(pieces[pi], liveBoxes[li]));
           pieces = next;
         }
+        // A piece thinner than the tolerance is paint over somebody's line, not
+        // floor: 1051's box ended a hair outside 1150's, the slivers took half
+        // of 1150's stroke, and the edges below redrew it a hair off true.
+        var painted = 0;
         pieces.forEach(function (pc) {
-          if (!(pc.w > 0.25) || !(pc.h > 0.25)) return;
+          if (!(pc.w > EDGE_TOL) || !(pc.h > EDGE_TOL)) return;
+          painted++;
           var mask = document.createElementNS(SVG_NS, 'rect');
           mask.setAttribute('x', pc.x);
           mask.setAttribute('y', pc.y);
@@ -895,6 +907,8 @@
           mask.style.pointerEvents = 'none';
           svgDoc.appendChild(mask);
         });
+        // Nothing painted, nothing to put back.
+        if (!painted) return;
 
         // …and its neighbours' walls back on top of it.
         sharedEdges(d, survivors, EDGE_TOL, strokeW / 2).forEach(function (e) {
