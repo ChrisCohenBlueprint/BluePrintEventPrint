@@ -41,7 +41,11 @@ const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.PORT || 3111);
-const SVG = path.join(ROOT, 'public', 'LEX27_Floorplan_Consolidated.svg');
+// PREVIEW_SVG=path/to/plan.svg rehearses a hall on another drawing — the one
+// about to be uploaded, say. Its hall is kept apart from the default one's.
+const SVG = process.env.PREVIEW_SVG
+  ? path.resolve(process.env.PREVIEW_SVG)
+  : path.join(ROOT, 'public', 'LEX27_Floorplan_Consolidated.svg');
 const SHOW = 'LEX';
 
 // The stand-in database goes in before the model is required — booths.js
@@ -53,7 +57,7 @@ require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
 
 const showContext = require(path.join(ROOT, 'server', 'show-context'));
 const booths = require(path.join(ROOT, 'server', 'models', 'booths'));
-const { readRects } = require(path.join(ROOT, 'server', 'lib', 'extract-stands'));
+const { readRects, extractStands } = require(path.join(ROOT, 'server', 'lib', 'extract-stands'));
 
 const run = (fn) => showContext.runAs(SHOW, fn);
 
@@ -69,6 +73,22 @@ const UNITS_PER_SQM = 180;   // measured off this plan's own printed figures
 const RATE = 660;
 function seedStands() {
   const svg = fs.readFileSync(SVG, 'utf8');
+  // A plan the reader can read is seeded as an import would seed it: the
+  // printed numbers and sizes, the written boxes. (The shipped Europe plan
+  // has no readable lettering, so it falls through to the rectangles below.)
+  const read = extractStands(svg).stands.filter(s => !s.sponsored && s.geometry);
+  if (read.length) {
+    return read.map(s => {
+      const sqm = s.area || Math.max(1, Math.round(s.geometry.w * s.geometry.h / UNITS_PER_SQM));
+      return {
+        showId: SHOW, boothNumber: String(s.number), status: 'available',
+        sqm, sqmSource: s.areaSource === 'printed' ? 'printed' : 'derived', listPrice: sqm * RATE,
+        geometry: s.geometry,
+        assignment: { company: null, contactId: null, actualPrice: null, notes: '', tags: [], country: null },
+        clicks: 0, createdAt: new Date(), updatedAt: new Date(),
+      };
+    });
+  }
   // Both of this plan's stand fills — the white ones and the yellow ones.
   const rects = readRects(svg).filter(r => (r.cls === 'cls-10' || r.cls === 'cls-7') && r.w > 0 && r.h > 0);
   return rects.map((r, i) => {
@@ -100,7 +120,14 @@ function seedStands() {
  * against a split, newest first) and a string would sort the same but compare
  * as a different type.
  */
-const STATE_FILE = path.join(__dirname, '.preview-state.json');
+const STATE_FILE = path.join(__dirname, process.env.PREVIEW_SVG
+  ? `.preview-state-${path.basename(SVG, '.svg')}.json` : '.preview-state.json');
+
+// The drawing, as the model reads it. Splits and merges are carved on the
+// stand's FOOTPRINT, which the model finds by matching the written box to the
+// live plan's rectangles (booths.footprintOf); with no plan stored it would
+// read the shipped file and, on another drawing, find nothing to match.
+const planRow = () => ({ showId: SHOW, svg: fs.readFileSync(SVG, 'utf8'), version: `preview:${path.basename(SVG)}` });
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const reviveDates = (v) => {
   if (typeof v === 'string') return ISO.test(v) ? new Date(v) : v;
@@ -129,6 +156,7 @@ function load() {
     Object.entries(store).forEach(([name, rows]) => {
       db.store[name] = rows;
     });
+    db.store.floorplans = [planRow()];
     return true;
   } catch (e) {
     console.error('Could not read the saved hall, starting fresh —', e.message);
@@ -136,7 +164,7 @@ function load() {
   }
 }
 
-function reseed() { db = fakeDb({ booths: seedStands() }); save(); }
+function reseed() { db = fakeDb({ booths: seedStands(), floorplans: [planRow()] }); save(); }
 
 /**
  * The socket events the console fires, and the model call behind each.

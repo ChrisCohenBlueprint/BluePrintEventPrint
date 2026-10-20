@@ -738,6 +738,27 @@ const multiSel = new Set();
 
 function multiEl(id) { return svgDoc.querySelector(`[data-booth="${CSS.escape(id)}"]`); }
 
+/**
+ * A stand's box as DRAWN, in the plan's own units.
+ *
+ * A stand's stored geometry is its rectangle as written, and Illustrator
+ * writes a rotated stand as a rectangle plus a transform — so for the 99
+ * rotated stands on Europe's plan the written box is the stand turned on its
+ * side about another origin. Read off the screen and mapped back through the
+ * plan's own transform, this is where the stand actually is, whatever element
+ * draws it and however that element is nested.
+ */
+function drawnBoxOf(el) {
+  if (!el || !svgDoc || !svgDoc.getScreenCTM) return null;
+  const r = el.getBoundingClientRect();
+  const m = svgDoc.getScreenCTM();
+  if (!m || !(r.width > 0) || !(r.height > 0)) return null;
+  const inv = m.inverse();
+  const at = (x, y) => { const p = svgDoc.createSVGPoint(); p.x = x; p.y = y; return p.matrixTransform(inv); };
+  const a = at(r.left, r.top), b = at(r.right, r.bottom);
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+}
+
 function toggleMultiSelect(id) {
   if (!id || !booths[id]) return;
   // Shift-click gathers stands to merge or reset; without plan rights it is an
@@ -1006,7 +1027,12 @@ function enterSplitMode(id) {
   if (!svgDoc || !canSplitOnMap(b)) return;
   if (splitUI.id) exitSplitMode();
   clearMultiSelect();
-  const g = b.geometry;
+  // The preview, the divider and the default direction all follow the stand
+  // AS DRAWN — the server carves that same footprint (booths.footprintOf). On
+  // a rotated stand the written geometry put the preview across the
+  // neighbours and chose the direction from a box turned on its side: a tall
+  // stand defaulted to left/right and was carved into two slivers.
+  const g = drawnBoxOf(multiEl(id)) || b.geometry;
   splitUI.id = id;
   splitUI.g = g;
   splitUI.total = Math.round(b.sqm);
