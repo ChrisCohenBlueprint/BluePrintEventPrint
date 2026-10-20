@@ -129,6 +129,19 @@
     return best;
   }
 
+  /** `box` with `hole` cut out of it: up to four rectangles, none of them over `hole`. */
+  function cutOut(box, hole) {
+    var x1 = Math.max(box.x, hole.x), y1 = Math.max(box.y, hole.y);
+    var x2 = Math.min(box.x + box.w, hole.x + hole.w), y2 = Math.min(box.y + box.h, hole.y + hole.h);
+    if (x2 <= x1 || y2 <= y1) return [box];
+    var out = [];
+    if (y1 > box.y)         out.push({ x: box.x, y: box.y, w: box.w, h: y1 - box.y });
+    if (y2 < box.y + box.h) out.push({ x: box.x, y: y2, w: box.w, h: box.y + box.h - y2 });
+    if (x1 > box.x)         out.push({ x: box.x, y: y1, w: x1 - box.x, h: y2 - y1 });
+    if (x2 < box.x + box.w) out.push({ x: x2, y: y1, w: box.x + box.w - x2, h: y2 - y1 });
+    return out;
+  }
+
   /**
    * Overlapping spans on one line, merged into the fewest spans that cover them.
    *
@@ -563,12 +576,19 @@
 
       // Prefer an artwork rectangle of the same size and place — that booth can
       // use the artwork itself, leaving printed text untouched above it.
-      var exactIdx = -1, hostIdx = -1;
+      var exactIdx = -1, hostIdx = -1, hostArea = Infinity;
       for (var i = 0; i < artwork.length; i++) {
         var ag = geoms[i];
         if (!ag) continue;
         if (exactIdx === -1 && sameGeom(ag, g)) { exactIdx = i; }
-        if (hostIdx === -1 && contains(ag, c)) { hostIdx = i; }
+        // The host is the SMALLEST shape containing the centre that is at
+        // least the stand's own size — the stand it sits in, not the hall.
+        // The first in document order was the hall's background on Europe's
+        // re-issued plan, so the overlay went in just after that: beneath
+        // every stand drawn later, and the held 1051 inside 1150 showed as
+        // nothing but its hold's name on a white stand.
+        var area = ag.w * ag.h;
+        if (contains(ag, c) && area < hostArea && area >= g.w * g.h * 0.9) { hostIdx = i; hostArea = area; }
       }
 
       if (exactIdx > -1 && !artwork[exactIdx].hasAttribute('data-booth')) {
@@ -785,9 +805,14 @@
       // Rectangles that ARE the removed stands are left out: their lines are
       // exactly what is going.
       var survivors = [];
+      var liveBoxes = [];   // the stands that remain, on their own: paint never goes over these
       booths.forEach(function (b) {
         var g = drawnGeom[b.boothNumber] || b.geometry;
-        if (g && g.w > 0 && g.h > 0) survivors.push(drawnGeom[b.boothNumber] ? g : drawnBoxOf(g));
+        if (g && g.w > 0 && g.h > 0) {
+          var lb = drawnGeom[b.boothNumber] ? g : drawnBoxOf(g);
+          survivors.push(lb);
+          liveBoxes.push(lb);
+        }
       });
       var isDead = function (g) {
         for (var di = 0; di < deadBoxes.length; di++) if (sameGeom(deadBoxes[di], g, EDGE_TOL)) return true;
@@ -797,6 +822,20 @@
         var ag = geoms[ri] ? drawnAt(ri) : null;
         if (ag && ag.w > 0 && ag.h > 0 && !isDead(ag)) survivors.push(ag);
       }
+      // Is this box drawn as part of some rectangle of the plan — a block a
+      // few stands big that contains it? A hall-sized background rectangle
+      // contains everything and says nothing, so the container has to be of
+      // the order of a stand.
+      var drawnInside = function (d) {
+        for (var ci = 0; ci < artwork.length; ci++) {
+          var cg = geoms[ci] ? drawnAt(ci) : null;
+          if (!cg || !(cg.w > 0) || !(cg.h > 0) || isDead(cg)) continue;
+          if (cg.w * cg.h > d.w * d.h * 8) continue;
+          if (d.x >= cg.x - EDGE_TOL && d.y >= cg.y - EDGE_TOL &&
+              d.x + d.w <= cg.x + cg.w + EDGE_TOL && d.y + d.h <= cg.y + cg.h + EDGE_TOL) return true;
+        }
+        return false;
+      };
 
       deadBoxes.forEach(function (d, gi) {
         var num = gone[gi] && gone[gi].boothNumber;
@@ -817,6 +856,14 @@
           hidden = true;
         }
 
+        // A stand the drawing does not draw at all needs no hole: there is no
+        // rectangle to hide and no lettering to cover. Europe's re-issued plan
+        // stopped drawing 751; it was then taken off the plan, and the floor
+        // painted over its OLD box covered a third of 850 — a stand for sale —
+        // and a strip of aisle. A stand drawn as part of a block (no element
+        // of its own, but inside one) is still drawn, and still needs the paint.
+        if (!hidden && !drawnInside(d)) return;
+
         // The floor, over the stand's own footprint. Still needed with the
         // rectangle hidden: the plan letters its number and its size INSIDE the
         // stand, as separate shapes, and those have to go too. Where the
@@ -825,16 +872,29 @@
         // is stretched by a stroke's width to cover the outline as well, and
         // the hairline above is the price.
         var pad = hidden ? 0 : strokeW * 0.75 + 0.1;
-        var mask = document.createElementNS(SVG_NS, 'rect');
-        mask.setAttribute('x', d.x - pad);
-        mask.setAttribute('y', d.y - pad);
-        mask.setAttribute('width',  d.w + pad * 2);
-        mask.setAttribute('height', d.h + pad * 2);
-        mask.setAttribute('data-removed-mask', num == null ? '' : num);
-        if (mask.classList) mask.classList.add('booth-removed-floor');
-        mask.setAttribute('fill', floorFill(d));
-        mask.style.pointerEvents = 'none';
-        svgDoc.appendChild(mask);
+        var floor = floorFill(d);
+        // …and never over a stand that is still for sale. A removed stand's
+        // box can overlap a live one — a drawing redrawn around it, a block it
+        // once shared — so the paint is cut around every live stand it meets.
+        var pieces = [{ x: d.x - pad, y: d.y - pad, w: d.w + pad * 2, h: d.h + pad * 2 }];
+        for (var li = 0; li < liveBoxes.length; li++) {
+          var next = [];
+          for (var pi = 0; pi < pieces.length; pi++) next = next.concat(cutOut(pieces[pi], liveBoxes[li]));
+          pieces = next;
+        }
+        pieces.forEach(function (pc) {
+          if (!(pc.w > 0.25) || !(pc.h > 0.25)) return;
+          var mask = document.createElementNS(SVG_NS, 'rect');
+          mask.setAttribute('x', pc.x);
+          mask.setAttribute('y', pc.y);
+          mask.setAttribute('width',  pc.w);
+          mask.setAttribute('height', pc.h);
+          mask.setAttribute('data-removed-mask', num == null ? '' : num);
+          if (mask.classList) mask.classList.add('booth-removed-floor');
+          mask.setAttribute('fill', floor);
+          mask.style.pointerEvents = 'none';
+          svgDoc.appendChild(mask);
+        });
 
         // …and its neighbours' walls back on top of it.
         sharedEdges(d, survivors, EDGE_TOL, strokeW / 2).forEach(function (e) {
