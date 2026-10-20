@@ -303,6 +303,7 @@
   <rect class="cls-4" x="252.42" y="476.01" width="67.43" height="67.61" transform="translate(795.96 223.68) rotate(90)"/>
   <rect class="cls-4" x="239.07" y="341.37" width="107.72" height="80.96" transform="translate(674.78 88.92) rotate(90)"/>
   <rect class="cls-4" x="171.83" y="518.29" width="40.39" height="54.63" transform="translate(384.0623 1091.2082) rotate(-180)"/>
+  <rect class="cls-4" x="171.83" y="572.92" width="40.39" height="37.93"/>
   <rect class="cls-4" x="171.83" y="463.58" width="40.39" height="54.63" transform="translate(384.06 981.8) rotate(-180)"/>
   <rect class="cls-4" x="171.83" y="408.95" width="40.39" height="54.63" transform="translate(384.06 872.53) rotate(-180)"/>
   <rect class="cls-4" x="171.83" y="354.32" width="40.39" height="54.63" transform="translate(384.06 763.27) rotate(-180)"/>
@@ -558,6 +559,7 @@
   <text class="cls-16" transform="translate(174.45 419.63)"><tspan x="0" y="0">1259</tspan></text>
   <text class="cls-16" transform="translate(174.45 474.49)"><tspan x="0" y="0">1255</tspan></text>
   <text class="cls-16" transform="translate(174.45 528.35)"><tspan x="0" y="0">1253</tspan></text>
+  <text class="cls-16" transform="translate(174.45 583.2)"><tspan x="0" y="0">1249</tspan></text>
   <text class="cls-16" transform="translate(255.24 486.95)"><tspan x="0" y="0">1256</tspan></text>
   <text class="cls-16" transform="translate(255.24 338.84)"><tspan x="0" y="0">1264</tspan></text>
   <text class="cls-8" transform="translate(376.42 338.84)"><tspan x="0" y="0">1164</tspan></text>
@@ -824,6 +826,7 @@
   <text class="cls-15" transform="translate(195.58 514.88)"><tspan x="0" y="0">12m²</tspan></text>
   <text class="cls-15" transform="translate(195.58 568.74)"><tspan x="0" y="0">12m²</tspan></text>
   <text class="cls-15" transform="translate(198.58 649.53)"><tspan x="0" y="0">9m²</tspan></text>
+  <text class="cls-15" transform="translate(198.58 606.65)"><tspan x="0" y="0">8m²</tspan></text>
   <text class="cls-15" transform="translate(303.5 649.53)"><tspan x="0" y="0">25m²</tspan></text>
   <text class="cls-15" transform="translate(303.3 541.81)"><tspan x="0" y="0">25m²</tspan></text>
   <text class="cls-15" transform="translate(316.76 434.09)"><tspan x="0" y="0">48m²</tspan></text>
@@ -1055,7 +1058,7 @@
   <text class="cls-15" transform="translate(1468.3251 1053.1931)"><tspan x="0" y="0">18m²</tspan></text>
   <text class="cls-16" transform="translate(364.44 595.92)"><tspan x="0" y="0">1150</tspan></text>
   <text class="cls-16" transform="translate(255.61 595.92)"><tspan x="0" y="0">1252</tspan></text>
-  <text class="cls-16" transform="translate(174.82 622.09)"><tspan x="0" y="0">1249</tspan></text>
+  <text class="cls-16" transform="translate(174.82 622.09)"><tspan x="0" y="0">1247</tspan></text>
   <text class="cls-15" transform="translate(952.41 594.35)"><tspan x="0" y="0">9m²</tspan></text>
   <text class="cls-15" transform="translate(1003.3513 594.3464)"><tspan x="0" y="0">12m²</tspan></text>
   <text class="cls-15" transform="translate(1003.4562 649.6248)"><tspan x="0" y="0">28m²</tspan></text>

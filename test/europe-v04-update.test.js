@@ -8,7 +8,8 @@
  * 825 on the floor of 926-2, sold to Setral and renumbered 825 by hand. Every
  * one of those sat over a real stand on the public map, clickable.
  *
- * This runs the corrected drawing (v03) over that state and asserts what the
+ * This runs the corrected drawing (v04: 1249 the strip above, 1247 the square
+ * below it, the stray 857 gone) over that state and asserts what the
  * update removes, what it keeps, and that the check shown beforehand says the
  * same. The fixtures are the files themselves.
  */
@@ -77,21 +78,22 @@ const PLACEHOLDERS = ['P014', 'P046', 'P076', 'P095', 'P096', 'P098', 'P126', 'P
     assignment: EMPTY(), clicks: 0, createdAt: new Date(), updatedAt: new Date(), updatedBy: 'import', importedBy: 'chris' });
   const before = db.store.booths.length;
 
-  console.log('\nThe check before v03 goes live');
-  const v03 = read('LEX27_Floorplan_v03.svg');
-  const d = diffStands(v03, db.store.booths);
+  console.log('\nThe check before v04 goes live');
+  const v04 = read('LEX27_Floorplan_v04.svg');
+  const d = diffStands(v04, db.store.booths);
   check('825 is listed as Setral\'s, with the empty 825 going', d.renumbered.some(x => x.boothNumber === '825' && x.stand === '926-2' && x.over === '825'),
         JSON.stringify(d.renumbered));
   check('the empty 825 and the placeholders are among what the drawing drops, none of them flagged as booked',
         ['825', '751', ...PLACEHOLDERS].every(n => d.missing.some(m => m.boothNumber === n && !m.committed)),
         d.missing.filter(m => !m.committed).map(m => m.boothNumber).join(' '));
   check('the Unavailable holds are flagged as kept', ['761', '771', '1051'].every(n => d.missing.some(m => m.boothNumber === n && m.committed)));
-  check('1249 is listed as resized from the guessed 17 to its 9', d.resized.some(x => x.boothNumber === '1249' && x.to === 9),
+  check('1249 is listed as resized from the guessed 17 to the 8 m² strip', d.resized.some(x => x.boothNumber === '1249' && x.to === 8),
         JSON.stringify(d.resized.filter(x => x.boothNumber === '1249')));
-  check('nothing new', d.added.length === 0, d.added.map(a => a.boothNumber).join(' '));
+  check('1247, the square below it, is the one new stand', d.added.length === 1 && d.added[0].boothNumber === '1247' && d.added[0].area === 9,
+        JSON.stringify(d.added));
 
-  console.log('\nv03 goes live with bookings kept');
-  r = await run(() => booths.importFromArtwork(v03, { actor: 'chris', keep: true }));
+  console.log('\nv04 goes live with bookings kept');
+  r = await run(() => booths.importFromArtwork(v04, { actor: 'chris', keep: true }));
   check('it lands', r.ok, JSON.stringify(r.reason));
   const expected = ['825', '751', ...PLACEHOLDERS].sort();
   check('exactly the eleven leftover stands are removed', JSON.stringify([...r.removed].sort()) === JSON.stringify(expected), JSON.stringify(r.removed));
@@ -99,8 +101,10 @@ const PLACEHOLDERS = ['P014', 'P046', 'P076', 'P095', 'P096', 'P098', 'P126', 'P
   check('Setral keeps 825', now('926-2').status === 'sold' && now('926-2').displayNumber === '825' && now('926-2').assignment.company === 'Setral Specialty Lubricants');
   check('926, the other half, is untouched', now('926') && now('926').splitSnapshot && now('926').sqm === 16);
   check('the Unavailable holds stand', ['761', '771', '1051'].every(n => now(n).status === 'held'));
-  check('1249 is 9 m² at the matching price', now('1249').sqm === 9 && now('1249').listPrice === 9 * 660, `${now('1249').sqm} m², ${now('1249').listPrice}`);
-  check('the hall is eleven stands lighter and no more', db.store.booths.length === before - 11, `${before} → ${db.store.booths.length}`);
+  check('1249 is 8 m² at the matching price', now('1249').sqm === 8 && now('1249').listPrice === 8 * 660, `${now('1249').sqm} m², ${now('1249').listPrice}`);
+  check('1247 is a new 9 m² stand, for sale', now('1247') && now('1247').sqm === 9 && now('1247').status === 'available' && r.created === 1,
+        JSON.stringify(now('1247') && { sqm: now('1247').sqm, status: now('1247').status, created: r.created }));
+  check('eleven stands gone, one new, and no more', db.store.booths.length === before - 10, `${before} → ${db.store.booths.length}`);
   check('a snapshot was taken first', r.snapshot === true && db.store.booths_snapshots.some(s => s.header === true));
 
   const f = out.filter(x => !x).length;
